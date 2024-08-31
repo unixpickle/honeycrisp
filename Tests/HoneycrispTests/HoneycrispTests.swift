@@ -22,8 +22,16 @@ final class HoneycrispTests: XCTestCase {
   func testAdd() async throws {
     let x = Tensor(data: [1.0, 2.0, 0.0], shape: [3], dtype: .float32)
     let y = Tensor(data: [-1.0, 2.0, -3.0], shape: [3], dtype: .float32)
-    let f = try await (x + y).floats()
+    var f = try await (x + y).floats()
     XCTAssertEqual(f, [0.0, 4.0, -3.0])
+
+    let z = x + 3
+    f = try await z.floats()
+    XCTAssertEqual(f, [4.0, 5.0, 3.0])
+
+    let w = x + 1.5
+    f = try await w.floats()
+    XCTAssertEqual(f, [2.5, 3.5, 1.5])
   }
   // func testMSEGrad() throws {
   //   let x = Tensor(data: [1.0, 2.0, 3.0], shape: [3])

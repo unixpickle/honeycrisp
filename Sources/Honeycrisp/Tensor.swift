@@ -206,27 +206,27 @@ public class Tensor {
     }
   }
 
-  // public static func * (lhs: Tensor, rhs: Float) -> Tensor {
-  //   let newData = Array(lhs.data.map({ x in x * rhs }))
-  //   if !lhs.needsGrad {
-  //     return Tensor(data: newData, shape: lhs.shape)
-  //   } else {
-  //     let lhsHandle = lhs.saveForBackward()
-  //     return Tensor(data: newData, shape: lhs.shape) { grad in
-  //       lhsHandle.backward(grad * rhs)
-  //     }
-  //   }
-  // }
+  public static func + <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+    let backend = Backend.defaultBackend
+    let newData = Task {
+      let lhsData = try await backend.waitForData(await lhs.data)
+      return try await backend.execute { handle in
+        try handle.binaryOp(
+          lhsData, rhs, op: .add, count: lhs.shape.product(),
+          dtype: lhs.dtype)
+      }
+    }
+    if !lhs.needsGrad {
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+    } else {
+      let lhsHandle = lhs.saveForBackward()
+      return Tensor(dataTask: newData, shape: lhs.shape, backwardImpl: lhsHandle.backward)
+    }
+  }
 
-  // public static func + (lhs: Tensor, rhs: Float) -> Tensor {
-  //   let newData = Array(lhs.data.map({ x in x + rhs }))
-  //   if !lhs.needsGrad {
-  //     return Tensor(data: newData, shape: lhs.shape)
-  //   } else {
-  //     let lhsHandle = lhs.saveForBackward()
-  //     return Tensor(data: newData, shape: lhs.shape, backwardImpl: lhsHandle.backward)
-  //   }
-  // }
+  public static func + <T: TensorElement>(lhs: T, rhs: Tensor) -> Tensor {
+    rhs + lhs
+  }
 
   public static func + (lhs: Tensor, rhs: Tensor) -> Tensor {
     assert(
@@ -255,6 +255,22 @@ public class Tensor {
       }
     }
   }
+
+  // public static func * (lhs: Tensor, rhs: Float) -> Tensor {
+  //   let newData = Array(lhs.data.map({ x in x * rhs }))
+  //   if !lhs.needsGrad {
+  //     return Tensor(data: newData, shape: lhs.shape)
+  //   } else {
+  //     let lhsHandle = lhs.saveForBackward()
+  //     return Tensor(data: newData, shape: lhs.shape) { grad in
+  //       lhsHandle.backward(grad * rhs)
+  //     }
+  //   }
+  // }
+
+  // public static func * (lhs: Float, rhs: Tensor) -> Tensor {
+  //   return rhs * lhs
+  // }
 
   // public static func * (lhs: Tensor, rhs: Tensor) -> Tensor {
   //   assert(
@@ -292,10 +308,6 @@ public class Tensor {
 
   // public static func + (lhs: Float, rhs: Tensor) -> Tensor {
   //   return rhs + lhs
-  // }
-
-  // public static func * (lhs: Float, rhs: Tensor) -> Tensor {
-  //   return rhs * lhs
   // }
 
   // public static func / (lhs: Tensor, rhs: Tensor) -> Tensor {

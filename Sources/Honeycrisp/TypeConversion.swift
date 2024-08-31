@@ -31,6 +31,19 @@ extension Double: TensorElement {
   }
 }
 
+extension Int: TensorElement {
+  public static var isFloatLossy: Bool { false }
+  public static var dtype: Tensor.DType { .int64 }
+
+  public func toFloat() -> Float {
+    return Float(self)
+  }
+
+  public func toInt64() -> Int64 {
+    return Int64(self)
+  }
+}
+
 extension Float: TensorElement {
   public static var isFloatLossy: Bool { false }
   public static var dtype: Tensor.DType { .float32 }

@@ -15,6 +15,16 @@ public protocol BackendHandle {
   func binaryOp(_ a: Tensor.Data, _ b: Tensor.Data, op: BinaryOp, count: Int, dtype: Tensor.DType)
     throws
     -> Tensor.Data
+  func binaryOp<T: TensorElement>(
+    _ a: Tensor.Data, _ b: T, op: BinaryOp, count: Int, dtype: Tensor.DType
+  )
+    throws
+    -> Tensor.Data
+  func binaryOp<T: TensorElement>(
+    _ a: T, _ b: Tensor.Data, op: BinaryOp, count: Int, dtype: Tensor.DType
+  )
+    throws
+    -> Tensor.Data
   func cast(_ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType)
     throws
     -> Tensor.Data
@@ -90,6 +100,48 @@ open class CPUBackend: Backend {
         return try apply(Int64(0))
       } else {
         return try apply(Float(0))
+      }
+    }
+
+    public func binaryOp<T: TensorElement>(
+      _ a: Tensor.Data, _ b: T, op: BinaryOp, count: Int, dtype: Tensor.DType
+    )
+      throws
+      -> Tensor.Data
+    {
+      func apply<T1: TensorElement>(_ b: T1) throws -> Tensor.Data {
+        var aData = [T1](repeating: T1(0.0), count: count)
+        try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
+        let cData = op.apply(aData, b)
+        let buffer = try allocate(length: count * dtype.byteSize)
+        try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+        return Tensor.Data(backend: backend, buffer: buffer)
+      }
+      if dtype == .int64 {
+        return try apply(b.toInt64())
+      } else {
+        return try apply(b.toFloat())
+      }
+    }
+
+    public func binaryOp<T: TensorElement>(
+      _ a: T, _ b: Tensor.Data, op: BinaryOp, count: Int, dtype: Tensor.DType
+    )
+      throws
+      -> Tensor.Data
+    {
+      func apply<T1: TensorElement>(_ a: T1) throws -> Tensor.Data {
+        var bData = [T1](repeating: T1(0.0), count: count)
+        try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
+        let cData = op.apply(a, bData)
+        let buffer = try allocate(length: count * dtype.byteSize)
+        try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+        return Tensor.Data(backend: backend, buffer: buffer)
+      }
+      if dtype == .int64 {
+        return try apply(a.toInt64())
+      } else {
+        return try apply(a.toFloat())
       }
     }
 
