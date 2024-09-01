@@ -129,7 +129,7 @@ public class Tensor {
     constant: T, shape: [Int], dtype: DType? = nil, backend: Backend? = nil
   ) {
     self.init(
-      data: [T](repeating: T(0.0), count: shape.product()), shape: shape, dtype: dtype,
+      data: [T](repeating: constant, count: shape.product()), shape: shape, dtype: dtype,
       backend: backend)
   }
 
@@ -256,71 +256,105 @@ public class Tensor {
     }
   }
 
-  // public static func * (lhs: Tensor, rhs: Float) -> Tensor {
-  //   let newData = Array(lhs.data.map({ x in x * rhs }))
-  //   if !lhs.needsGrad {
-  //     return Tensor(data: newData, shape: lhs.shape)
-  //   } else {
-  //     let lhsHandle = lhs.saveForBackward()
-  //     return Tensor(data: newData, shape: lhs.shape) { grad in
-  //       lhsHandle.backward(grad * rhs)
-  //     }
-  //   }
-  // }
+  public static func * <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+    let backend = Backend.defaultBackend
+    let newData = Task {
+      let lhsData = try await backend.waitForData(await lhs.data)
+      return try await backend.execute { handle in
+        try handle.binaryOp(
+          lhsData, rhs, op: .mul, count: lhs.shape.product(),
+          dtype: lhs.dtype)
+      }
+    }
+    if !lhs.needsGrad {
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+    } else {
+      let lhsHandle = lhs.saveForBackward()
+      return Tensor(dataTask: newData, shape: lhs.shape) { grad in
+        try lhsHandle.backward(grad * rhs)
+      }
+    }
+  }
 
-  // public static func * (lhs: Float, rhs: Tensor) -> Tensor {
-  //   return rhs * lhs
-  // }
+  public static func * <T: TensorElement>(lhs: T, rhs: Tensor) -> Tensor {
+    return rhs * lhs
+  }
 
-  // public static func * (lhs: Tensor, rhs: Tensor) -> Tensor {
-  //   assert(
-  //     lhs.shape == rhs.shape,
-  //     "shape mismatch for * operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
-  //   )
-  //   let newData = Array(zip(lhs.data, rhs.data).map({ x in x.0 * x.1 }))
-  //   if !lhs.needsGrad && !rhs.needsGrad {
-  //     return Tensor(data: newData, shape: lhs.shape)
-  //   } else {
-  //     let lhsHandle = lhs.saveForBackward()
-  //     let rhsHandle = rhs.saveForBackward()
-  //     return Tensor(data: newData, shape: lhs.shape) { grad in
-  //       lhsHandle.backward(grad * rhs.noGrad())
-  //       rhsHandle.backward(grad * lhs.noGrad())
-  //     }
-  //   }
-  // }
+  public static func * (lhs: Tensor, rhs: Tensor) -> Tensor {
+    assert(
+      lhs.shape == rhs.shape,
+      "shape mismatch for * operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
+    )
+    assert(
+      lhs.dtype == rhs.dtype, "dtypes for * operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+    let backend = Backend.defaultBackend
+    let newData = Task {
+      let (lhsData, rhsData) = try await backend.waitForData(await lhs.data, await rhs.data)
+      return try await backend.execute { handle in
+        try handle.binaryOp(
+          lhsData, rhsData, op: .mul, count: lhs.shape.product(),
+          dtype: lhs.dtype)
+      }
+    }
+    if !lhs.needsGrad && !rhs.needsGrad {
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+    } else {
+      let lhsHandle = lhs.saveForBackward()
+      let rhsHandle = rhs.saveForBackward()
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
+        try lhsHandle.backward(grad * rhs.noGrad())
+        try rhsHandle.backward(grad * lhs.noGrad())
+      }
+    }
+  }
 
-  // public static func - (lhs: Tensor, rhs: Tensor) -> Tensor {
-  //   return lhs + -1 * rhs
-  // }
+  prefix public static func - (t: Tensor) -> Tensor {
+    return t * -1
+  }
 
-  // public static func - (lhs: Tensor, rhs: Float) -> Tensor {
-  //   return lhs + -rhs
-  // }
+  public static func - (lhs: Tensor, rhs: Tensor) -> Tensor {
+    return lhs + -1 * rhs
+  }
 
-  // prefix public static func - (t: Tensor) -> Tensor {
-  //   return t * -1
-  // }
+  public static func - <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+    return lhs + -rhs
+  }
 
-  // public static func - (lhs: Float, rhs: Tensor) -> Tensor {
-  //   return lhs + -rhs
-  // }
+  public static func - <T: TensorElement>(lhs: T, rhs: Tensor) -> Tensor {
+    return lhs + -rhs
+  }
 
-  // public static func + (lhs: Float, rhs: Tensor) -> Tensor {
-  //   return rhs + lhs
-  // }
+  public func pow<T: TensorElement>(_ exponent: T) -> Tensor {
+    let backend = Backend.defaultBackend
+    let newData = Task {
+      let lhsData = try await backend.waitForData(await data)
+      return try await backend.execute { handle in
+        try handle.pow(
+          lhsData, exponent, count: self.shape.product(),
+          dtype: self.dtype)
+      }
+    }
+    if !needsGrad {
+      return Tensor(dataTask: newData, shape: shape, dtype: dtype)
+    } else {
+      let lhsHandle = saveForBackward()
+      return Tensor(dataTask: newData, shape: shape) { grad in
+        try lhsHandle.backward(grad * exponent * self.pow(exponent - T(1.0)))
+      }
+    }
+  }
 
-  // public static func / (lhs: Tensor, rhs: Tensor) -> Tensor {
-  //   return lhs * rhs.pow(-1)
-  // }
+  public static func / (lhs: Tensor, rhs: Tensor) -> Tensor {
+    return lhs * rhs.pow(-1)
+  }
 
-  // public static func / (lhs: Float, rhs: Tensor) -> Tensor {
-  //   return lhs * rhs.pow(-1)
-  // }
+  public static func / <T: TensorElement>(lhs: T, rhs: Tensor) -> Tensor {
+    return lhs * rhs.pow(-1)
+  }
 
-  // public static func / (lhs: Tensor, rhs: Float) -> Tensor {
-  //   return lhs * (1 / rhs)
-  // }
+  public static func / <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+    return lhs * (T(1.0) / rhs)
+  }
 
   // public static func == (lhs: Tensor, rhs: Float) -> Tensor {
   //   return Tensor(data: Array(lhs.data.map { x in x == rhs ? 1.0 : 0.0 }), shape: lhs.shape)

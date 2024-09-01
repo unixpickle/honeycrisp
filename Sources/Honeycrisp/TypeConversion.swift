@@ -1,6 +1,7 @@
 // Borrowed from https://forums.developer.apple.com/forums/thread/93282
 
 import Accelerate
+import Foundation
 
 enum ConversionError: Error {
   case vImageError(String)
@@ -15,7 +16,13 @@ public protocol TensorElement {
   func toFloat() -> Float
   func toInt64() -> Int64
 
+  func pow<T: TensorElement>(_ exponent: T) -> Self
+
   static func + (lhs: Self, rhs: Self) -> Self
+  static func * (lhs: Self, rhs: Self) -> Self
+  prefix static func - (t: Self) -> Self
+  static func - (lhs: Self, rhs: Self) -> Self
+  static func / (lhs: Self, rhs: Self) -> Self
 }
 
 extension Double: TensorElement {
@@ -28,6 +35,10 @@ extension Double: TensorElement {
 
   public func toInt64() -> Int64 {
     return Int64(self)
+  }
+
+  public func pow<T: TensorElement>(_ exponent: T) -> Double {
+    return Foundation.pow(self, Double(exponent.toFloat()))
   }
 }
 
@@ -42,6 +53,10 @@ extension Int: TensorElement {
   public func toInt64() -> Int64 {
     return Int64(self)
   }
+
+  public func pow<T: TensorElement>(_ exponent: T) -> Int {
+    return Int(Foundation.pow(Double(self), Double(exponent.toFloat())))
+  }
 }
 
 extension Float: TensorElement {
@@ -54,6 +69,10 @@ extension Float: TensorElement {
 
   public func toInt64() -> Int64 {
     return Int64(self)
+  }
+
+  public func pow<T: TensorElement>(_ exponent: T) -> Float {
+    return Foundation.pow(self, exponent.toFloat())
   }
 }
 
@@ -77,8 +96,31 @@ extension Bool: TensorElement {
     return self ? 1 : 0
   }
 
+  public func pow<T: TensorElement>(_ exponent: T) -> Bool {
+    self
+  }
+
   public static func + (lhs: Self, rhs: Self) -> Self {
     lhs || rhs
+  }
+
+  public static func * (lhs: Self, rhs: Self) -> Self {
+    lhs && rhs
+  }
+
+  // These are kind of a hack: modulo arithmetic
+
+  public prefix static func - (t: Self) -> Self {
+    t
+  }
+
+  public static func - (lhs: Self, rhs: Self) -> Self {
+    rhs != lhs
+  }
+
+  public static func / (lhs: Self, rhs: Self) -> Self {
+    // Total hack -- we should not be allowed to divide by zero!
+    lhs
   }
 }
 
@@ -92,6 +134,10 @@ extension Int64: TensorElement {
 
   public func toInt64() -> Int64 {
     return self
+  }
+
+  public func pow<T: TensorElement>(_ exponent: T) -> Int64 {
+    return Int64(Foundation.pow(Double(self), Double(exponent.toFloat())))
   }
 }
 

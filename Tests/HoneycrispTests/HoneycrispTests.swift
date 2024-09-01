@@ -33,15 +33,36 @@ final class HoneycrispTests: XCTestCase {
     f = try await w.floats()
     XCTAssertEqual(f, [2.5, 3.5, 1.5])
   }
-  // func testMSEGrad() throws {
-  //   let x = Tensor(data: [1.0, 2.0, 3.0], shape: [3])
-  //   let y = Tensor(data: [2.0, 0.0, -3.0], shape: [3])
-  //   var xGrad: Tensor?
-  //   let diff = x.onGrad({ grad in xGrad = grad }) - y
-  //   let sqDiff = diff * diff
-  //   sqDiff.backward(grad: Tensor(onesLike: x))
-  //   XCTAssertEqual(xGrad!.data, [-2, 4, 12])
-  // }
+
+  func testMulGrad() async throws {
+    let x = Tensor(data: [1.0, 2.0, 0.0], shape: [3], dtype: .float32)
+    let y = Tensor(data: [-1.0, 2.0, -3.0], shape: [3], dtype: .float32)
+
+    var xGrad: Tensor?
+    var yGrad: Tensor?
+    let xWithGrad = x.onGrad { grad in xGrad = grad }
+    let yWithGrad = y.onGrad { grad in yGrad = grad }
+    let product = (xWithGrad * 2) * yWithGrad
+    let productFloats = try await product.floats()
+    XCTAssertEqual(productFloats, [-2.0, 8.0, -0.0])
+    try product.backward()
+
+    let xGradFloats = try await xGrad!.floats()
+    let yGradFloats = try await yGrad!.floats()
+    XCTAssertEqual(xGradFloats, [-2.0, 4.0, -6.0])
+    XCTAssertEqual(yGradFloats, [2.0, 4.0, 0.0])
+  }
+
+  func testMSEGrad() async throws {
+    let x = Tensor(data: [1.0, 2.0, 3.0], shape: [3])
+    let y = Tensor(data: [2.0, 0.0, -3.0], shape: [3])
+    var xGrad: Tensor?
+    let diff = x.onGrad({ grad in xGrad = grad }) - y
+    let sqDiff = diff * diff
+    try sqDiff.backward(Tensor(onesLike: x))
+    let xGradFloats = try await xGrad!.floats()
+    XCTAssertEqual(xGradFloats, [-2, 4, 12])
+  }
 
   // func testMatrixMatrixProduct() throws {
   //   let x = Tensor(ones: [64, 128])

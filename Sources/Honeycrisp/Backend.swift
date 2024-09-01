@@ -28,7 +28,11 @@ public protocol BackendHandle {
   func cast(_ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType)
     throws
     -> Tensor.Data
-
+  func pow<T: TensorElement>(
+    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+  )
+    throws
+    -> Tensor.Data
 }
 
 open class Backend {
@@ -157,6 +161,27 @@ open class CPUBackend: Backend {
         return Tensor.Data(backend: backend, buffer: buffer)
       }
       if inType == .int64 {
+        return try apply(Int64(0))
+      } else {
+        return try apply(Float(0))
+      }
+    }
+
+    public func pow<T: TensorElement>(
+      _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+    )
+      throws
+      -> Tensor.Data
+    {
+      func apply<T1: TensorElement>(_ x: T1) throws -> Tensor.Data {
+        var arr = [T1](repeating: x, count: count)
+        try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
+        let cData = arr.map { $0.pow(x) }
+        let buffer = try allocate(length: count * dtype.byteSize)
+        try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+        return Tensor.Data(backend: backend, buffer: buffer)
+      }
+      if dtype == .int64 {
         return try apply(Int64(0))
       } else {
         return try apply(Float(0))
