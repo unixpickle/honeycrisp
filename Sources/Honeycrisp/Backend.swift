@@ -12,23 +12,35 @@ public protocol BackendHandle {
   var commandQueue: MTLCommandQueue? { get }
 
   func allocate(length: Int) throws -> MTLBuffer
-  func binaryOp(_ a: Tensor.Data, _ b: Tensor.Data, op: BinaryOp, count: Int, dtype: Tensor.DType)
-    throws
-    -> Tensor.Data
-  func binaryOp<T: TensorElement>(
-    _ a: Tensor.Data, _ b: T, op: BinaryOp, count: Int, dtype: Tensor.DType
+  func binaryOp(
+    _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     throws
     -> Tensor.Data
-  func binaryOp<T: TensorElement>(
-    _ a: T, _ b: Tensor.Data, op: BinaryOp, count: Int, dtype: Tensor.DType
+  func binaryOp<T: NumericTensorElement>(
+    _ a: Tensor.Data, _ b: T, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+  )
+    throws
+    -> Tensor.Data
+  func binaryOp<T: NumericTensorElement>(
+    _ a: T, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+  )
+    throws
+    -> Tensor.Data
+  func equals(
+    _ a: Tensor.Data, _ b: Tensor.Data, count: Int, dtype: Tensor.DType
+  )
+    throws
+    -> Tensor.Data
+  func equals<T: TensorElement>(
+    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
   )
     throws
     -> Tensor.Data
   func cast(_ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType)
     throws
     -> Tensor.Data
-  func pow<T: TensorElement>(
+  func pow<T: NumericTensorElement>(
     _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
   )
     throws
@@ -79,18 +91,18 @@ open class CPUBackend: Backend {
     }
 
     public func allocate(length: Int) throws -> MTLBuffer {
-      guard let result = device.makeBuffer(length: length) else {
+      guard let result = device.makeBuffer(length: length, options: [.storageModeShared]) else {
         throw BackendError.allocationFailed(length)
       }
       return result
     }
 
     public func binaryOp(
-      _ a: Tensor.Data, _ b: Tensor.Data, op: BinaryOp, count: Int, dtype: Tensor.DType
+      _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
     ) throws
       -> Tensor.Data
     {
-      func apply<T: TensorElement>(_ x: T) throws -> Tensor.Data {
+      func apply<T: NumericTensorElement>(_ x: T) throws -> Tensor.Data {
         var aData = [T](repeating: x, count: count)
         var bData = [T](repeating: x, count: count)
         try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
@@ -107,13 +119,13 @@ open class CPUBackend: Backend {
       }
     }
 
-    public func binaryOp<T: TensorElement>(
-      _ a: Tensor.Data, _ b: T, op: BinaryOp, count: Int, dtype: Tensor.DType
+    public func binaryOp<T: NumericTensorElement>(
+      _ a: Tensor.Data, _ b: T, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
     )
       throws
       -> Tensor.Data
     {
-      func apply<T1: TensorElement>(_ b: T1) throws -> Tensor.Data {
+      func apply<T1: NumericTensorElement>(_ b: T1) throws -> Tensor.Data {
         var aData = [T1](repeating: T1(0.0), count: count)
         try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
         let cData = op.apply(aData, b)
@@ -128,13 +140,13 @@ open class CPUBackend: Backend {
       }
     }
 
-    public func binaryOp<T: TensorElement>(
-      _ a: T, _ b: Tensor.Data, op: BinaryOp, count: Int, dtype: Tensor.DType
+    public func binaryOp<T: NumericTensorElement>(
+      _ a: T, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
     )
       throws
       -> Tensor.Data
     {
-      func apply<T1: TensorElement>(_ a: T1) throws -> Tensor.Data {
+      func apply<T1: NumericTensorElement>(_ a: T1) throws -> Tensor.Data {
         var bData = [T1](repeating: T1(0.0), count: count)
         try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
         let cData = op.apply(a, bData)
@@ -146,6 +158,50 @@ open class CPUBackend: Backend {
         return try apply(a.toInt64())
       } else {
         return try apply(a.toFloat())
+      }
+    }
+
+    public func equals(
+      _ a: Tensor.Data, _ b: Tensor.Data, count: Int, dtype: Tensor.DType
+    )
+      throws
+      -> Tensor.Data
+    {
+      func apply<T1: NumericTensorElement>(_ x: T1) throws -> Tensor.Data {
+        var aData = [T1](repeating: x, count: count)
+        var bData = [T1](repeating: x, count: count)
+        try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
+        try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
+        let cData = zip(aData, bData).map { $0 == $1 }
+        let buffer = try allocate(length: count * Tensor.DType.bool.byteSize)
+        try arrayToPointer(cData, output: buffer.contents(), dtype: .bool)
+        return Tensor.Data(backend: backend, buffer: buffer)
+      }
+      if dtype == .int64 {
+        return try apply(Int64(0))
+      } else {
+        return try apply(Float(0))
+      }
+    }
+
+    public func equals<T: TensorElement>(
+      _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+    )
+      throws
+      -> Tensor.Data
+    {
+      func apply<T1: NumericTensorElement>(_ b: T1) throws -> Tensor.Data {
+        var aData = [T1](repeating: T1(0.0), count: count)
+        try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
+        let cData = aData.map { $0 == b }
+        let buffer = try allocate(length: count * Tensor.DType.bool.byteSize)
+        try arrayToPointer(cData, output: buffer.contents(), dtype: .bool)
+        return Tensor.Data(backend: backend, buffer: buffer)
+      }
+      if dtype == .int64 {
+        return try apply(b.toInt64())
+      } else {
+        return try apply(b.toFloat())
       }
     }
 
@@ -167,13 +223,13 @@ open class CPUBackend: Backend {
       }
     }
 
-    public func pow<T: TensorElement>(
+    public func pow<T: NumericTensorElement>(
       _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
     )
       throws
       -> Tensor.Data
     {
-      func apply<T1: TensorElement>(_ x: T1) throws -> Tensor.Data {
+      func apply<T1: NumericTensorElement>(_ x: T1) throws -> Tensor.Data {
         var arr = [T1](repeating: x, count: count)
         try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
         let cData = arr.map { $0.pow(x) }

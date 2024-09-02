@@ -16,6 +16,10 @@ public protocol TensorElement {
   func toFloat() -> Float
   func toInt64() -> Int64
 
+  static func == (lhs: Self, rhs: Self) -> Bool
+}
+
+public protocol NumericTensorElement: TensorElement {
   func pow<T: TensorElement>(_ exponent: T) -> Self
 
   static func + (lhs: Self, rhs: Self) -> Self
@@ -25,7 +29,7 @@ public protocol TensorElement {
   static func / (lhs: Self, rhs: Self) -> Self
 }
 
-extension Double: TensorElement {
+extension Double: NumericTensorElement {
   public static var isFloatLossy: Bool { false }
   public static var dtype: Tensor.DType { .float32 }
 
@@ -42,7 +46,7 @@ extension Double: TensorElement {
   }
 }
 
-extension Int: TensorElement {
+extension Int: NumericTensorElement {
   public static var isFloatLossy: Bool { false }
   public static var dtype: Tensor.DType { .int64 }
 
@@ -59,7 +63,7 @@ extension Int: TensorElement {
   }
 }
 
-extension Float: TensorElement {
+extension Float: NumericTensorElement {
   public static var isFloatLossy: Bool { false }
   public static var dtype: Tensor.DType { .float32 }
 
@@ -95,36 +99,9 @@ extension Bool: TensorElement {
   public func toInt64() -> Int64 {
     return self ? 1 : 0
   }
-
-  public func pow<T: TensorElement>(_ exponent: T) -> Bool {
-    self
-  }
-
-  public static func + (lhs: Self, rhs: Self) -> Self {
-    lhs || rhs
-  }
-
-  public static func * (lhs: Self, rhs: Self) -> Self {
-    lhs && rhs
-  }
-
-  // These are kind of a hack: modulo arithmetic
-
-  public prefix static func - (t: Self) -> Self {
-    t
-  }
-
-  public static func - (lhs: Self, rhs: Self) -> Self {
-    rhs != lhs
-  }
-
-  public static func / (lhs: Self, rhs: Self) -> Self {
-    // Total hack -- we should not be allowed to divide by zero!
-    lhs
-  }
 }
 
-extension Int64: TensorElement {
+extension Int64: NumericTensorElement {
   public static var isFloatLossy: Bool { true }
   public static var dtype: Tensor.DType { .int64 }
 

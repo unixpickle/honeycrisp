@@ -1,8 +1,8 @@
-public enum BinaryOp {
+public enum NumericBinaryOp {
   case add
   case mul
 
-  func apply<T: TensorElement>(_ a: [T], _ b: [T]) -> [T] {
+  public func apply<T: NumericTensorElement>(_ a: [T], _ b: [T]) -> [T] {
     switch self {
     case .add:
       return Array(zip(a, b).map { $0 + $1 })
@@ -11,7 +11,7 @@ public enum BinaryOp {
     }
   }
 
-  func apply<T: TensorElement>(_ a: [T], _ b: T) -> [T] {
+  public func apply<T: NumericTensorElement>(_ a: [T], _ b: T) -> [T] {
     switch self {
     case .add:
       return a.map { $0 + b }
@@ -20,7 +20,7 @@ public enum BinaryOp {
     }
   }
 
-  func apply<T: TensorElement>(_ a: T, _ b: [T]) -> [T] {
+  public func apply<T: NumericTensorElement>(_ a: T, _ b: [T]) -> [T] {
     switch self {
     case .add:
       return b.map { $0 + a }

@@ -64,6 +64,13 @@ final class HoneycrispTests: XCTestCase {
     XCTAssertEqual(xGradFloats, [-2, 4, 12])
   }
 
+  func testEquals() async throws {
+    let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0], shape: [5])
+    let y = Tensor(data: [1, 2, 2, -2, -3], shape: [5]).cast(as: x)
+    let eqData = try await (x == y).floats()
+    XCTAssertEqual(eqData, [1, 1, 0, 1, 0])
+  }
+
   // func testMatrixMatrixProduct() throws {
   //   let x = Tensor(ones: [64, 128])
   //   let y = Tensor(ones: [128, 32])

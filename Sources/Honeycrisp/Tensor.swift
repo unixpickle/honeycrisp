@@ -8,6 +8,14 @@ public class Tensor {
     case float16
     case float32
 
+    var supportsGrad: Bool {
+      self == .float16 || self == .float32
+    }
+
+    var isNumeric: Bool {
+      self != .bool
+    }
+
     var byteSize: Int {
       switch self {
       case .int64:
@@ -91,6 +99,9 @@ public class Tensor {
     backwardImpl: ((Tensor) throws -> Void)? = nil
   ) {
     let dtype = dtype ?? T.dtype
+    if !dtype.supportsGrad {
+      assert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
+    }
     assert(data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
     let backend = backend ?? Backend.defaultBackend
     self.dataTask = Task {
@@ -184,19 +195,22 @@ public class Tensor {
     }
   }
 
-  public func cast(_ newType: DType, backend: Backend? = nil) -> Tensor {
-    let backend = backend ?? Backend.defaultBackend
+  public func cast(as t: Tensor, backend: Backend? = nil) -> Tensor {
+    cast(t.dtype, backend: backend)
+  }
 
+  public func cast(_ newType: DType, backend: Backend? = nil) -> Tensor {
     if newType == dtype {
       return self
     }
+    let backend = backend ?? Backend.defaultBackend
     let newData = Task {
       let innerData = try await backend.waitForData(await data)
       return try await backend.execute { handle in
         try handle.cast(innerData, count: shape.product(), inType: dtype, outType: newType)
       }
     }
-    if !needsGrad {
+    if !needsGrad || !newType.supportsGrad {
       return Tensor(dataTask: newData, shape: shape, dtype: newType)
     } else {
       let handle = self.saveForBackward()
@@ -206,7 +220,8 @@ public class Tensor {
     }
   }
 
-  public static func + <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+  public static func + <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+    assert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
     let backend = Backend.defaultBackend
     let newData = Task {
       let lhsData = try await backend.waitForData(await lhs.data)
@@ -224,7 +239,7 @@ public class Tensor {
     }
   }
 
-  public static func + <T: TensorElement>(lhs: T, rhs: Tensor) -> Tensor {
+  public static func + <T: NumericTensorElement>(lhs: T, rhs: Tensor) -> Tensor {
     rhs + lhs
   }
 
@@ -233,6 +248,7 @@ public class Tensor {
       lhs.shape == rhs.shape,
       "shape mismatch for + operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
     )
+    assert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
     assert(
       lhs.dtype == rhs.dtype, "dtypes for + operator do not match: \(lhs.dtype) and \(rhs.dtype)")
     let backend = Backend.defaultBackend
@@ -256,7 +272,7 @@ public class Tensor {
     }
   }
 
-  public static func * <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+  public static func * <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
     let backend = Backend.defaultBackend
     let newData = Task {
       let lhsData = try await backend.waitForData(await lhs.data)
@@ -276,7 +292,7 @@ public class Tensor {
     }
   }
 
-  public static func * <T: TensorElement>(lhs: T, rhs: Tensor) -> Tensor {
+  public static func * <T: NumericTensorElement>(lhs: T, rhs: Tensor) -> Tensor {
     return rhs * lhs
   }
 
@@ -285,6 +301,7 @@ public class Tensor {
       lhs.shape == rhs.shape,
       "shape mismatch for * operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
     )
+    assert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with * operator")
     assert(
       lhs.dtype == rhs.dtype, "dtypes for * operator do not match: \(lhs.dtype) and \(rhs.dtype)")
     let backend = Backend.defaultBackend
@@ -309,6 +326,7 @@ public class Tensor {
   }
 
   prefix public static func - (t: Tensor) -> Tensor {
+    assert(t.dtype.isNumeric, "dtype \(t.dtype) cannot be used with - operator")
     return t * -1
   }
 
@@ -316,15 +334,16 @@ public class Tensor {
     return lhs + -1 * rhs
   }
 
-  public static func - <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+  public static func - <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
     return lhs + -rhs
   }
 
-  public static func - <T: TensorElement>(lhs: T, rhs: Tensor) -> Tensor {
+  public static func - <T: NumericTensorElement>(lhs: T, rhs: Tensor) -> Tensor {
     return lhs + -rhs
   }
 
-  public func pow<T: TensorElement>(_ exponent: T) -> Tensor {
+  public func pow<T: NumericTensorElement>(_ exponent: T) -> Tensor {
+    assert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
     let backend = Backend.defaultBackend
     let newData = Task {
       let lhsData = try await backend.waitForData(await data)
@@ -348,29 +367,45 @@ public class Tensor {
     return lhs * rhs.pow(-1)
   }
 
-  public static func / <T: TensorElement>(lhs: T, rhs: Tensor) -> Tensor {
+  public static func / <T: NumericTensorElement>(lhs: T, rhs: Tensor) -> Tensor {
     return lhs * rhs.pow(-1)
   }
 
-  public static func / <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+  public static func / <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
     return lhs * (T(1.0) / rhs)
   }
 
-  // public static func == (lhs: Tensor, rhs: Float) -> Tensor {
-  //   return Tensor(data: Array(lhs.data.map { x in x == rhs ? 1.0 : 0.0 }), shape: lhs.shape)
-  // }
+  public static func == <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+    let backend = Backend.defaultBackend
+    let newData = Task {
+      let lhsData = try await backend.waitForData(await lhs.data)
+      return try await backend.execute { handle in
+        try handle.equals(lhsData, rhs, count: lhs.shape.product(), dtype: lhs.dtype)
+      }
+    }
+    return Tensor(dataTask: newData, shape: lhs.shape, dtype: .bool)
+  }
 
-  // public static func == (lhs: Float, rhs: Tensor) -> Tensor {
-  //   return rhs == lhs
-  // }
+  public static func == (lhs: Float, rhs: Tensor) -> Tensor {
+    return rhs == lhs
+  }
 
-  // public static func == (lhs: Tensor, rhs: Tensor) -> Tensor {
-  //   assert(lhs.shape == rhs.shape, "incompatible operands for ==: \(lhs.shape) != \(rhs.shape)")
-  //   return Tensor(
-  //     data: Array(zip(lhs.data, rhs.data).map { (x, y) in x == y ? 1.0 : 0.0 }),
-  //     shape: lhs.shape
-  //   )
-  // }
+  public static func == (lhs: Tensor, rhs: Tensor) -> Tensor {
+    assert(
+      lhs.shape == rhs.shape,
+      "shape mismatch for == operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
+    )
+    assert(
+      lhs.dtype == rhs.dtype, "dtypes for == operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+    let backend = Backend.defaultBackend
+    let newData = Task {
+      let (lhsData, rhsData) = try await backend.waitForData(await lhs.data, await rhs.data)
+      return try await backend.execute { handle in
+        try handle.equals(lhsData, rhsData, count: lhs.shape.product(), dtype: lhs.dtype)
+      }
+    }
+    return Tensor(dataTask: newData, shape: lhs.shape, dtype: .bool)
+  }
 
   public func backward(_ grad: Tensor? = nil) throws {
     let grad =
