@@ -19,7 +19,7 @@ public protocol TensorElement {
   static func == (lhs: Self, rhs: Self) -> Bool
 }
 
-public protocol NumericTensorElement: TensorElement {
+public protocol NumericTensorElement: TensorElement, Comparable {
   func pow<T: TensorElement>(_ exponent: T) -> Self
 
   static func + (lhs: Self, rhs: Self) -> Self

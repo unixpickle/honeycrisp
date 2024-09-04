@@ -45,6 +45,16 @@ public protocol BackendHandle {
   )
     throws
     -> Tensor.Data
+  func reduce(
+    _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
+  )
+    throws
+    -> Tensor.Data
+  func repeated(
+    _ a: Tensor.Data, outerCount: Int, innerCount: Int, repeats: Int, dtype: Tensor.DType
+  )
+    throws
+    -> Tensor.Data
 }
 
 open class Backend {
@@ -242,6 +252,90 @@ open class CPUBackend: Backend {
       } else {
         return try apply(Float(0))
       }
+    }
+
+    public func reduce(
+      _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
+    )
+      throws
+      -> Tensor.Data
+    {
+      func apply<T: NumericTensorElement>(_ x: T) throws -> Tensor.Data {
+        var arr = [T](repeating: x, count: dims.inCount)
+        try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
+
+        switch op {
+        case .sum:
+          var arrOut = [T]()
+          for i in 0..<dims.outerCount {
+            for j in 0..<dims.innerCount {
+              var sum = T(0.0)
+              for k in 0..<dims.reduceCount {
+                let item = arr[j + (k + i * dims.reduceCount) * dims.innerCount]
+                sum = sum + item
+              }
+              arrOut.append(sum)
+            }
+          }
+          assert(arrOut.count == dims.outCount)
+          let buffer = try allocate(length: arrOut.count * dtype.byteSize)
+          try arrayToPointer(arrOut, output: buffer.contents(), dtype: dtype)
+          return Tensor.Data(backend: backend, buffer: buffer)
+        case .argmin, .argmax:
+          assert(dims.outCount > 0, "cannot apply op \(self) to empty dimension")
+          var arrOut = [Int64]()
+          for i in 0..<dims.outerCount {
+            for j in 0..<dims.innerCount {
+              var extremum = arr[j + i * dims.reduceCount * dims.innerCount]
+              var index = Int64(0)
+              for k in 0..<dims.reduceCount {
+                let item = arr[j + (k + i * dims.reduceCount) * dims.innerCount]
+                if op == .argmin {
+                  if item < extremum {
+                    extremum = item
+                    index = Int64(k)
+                  }
+                } else if op == .argmax {
+                  if item > extremum {
+                    extremum = item
+                    index = Int64(k)
+                  }
+                }
+              }
+              arrOut.append(index)
+            }
+          }
+          assert(arrOut.count == dims.outCount)
+          let buffer = try allocate(length: arrOut.count * Tensor.DType.int64.byteSize)
+          try arrayToPointer(arrOut, output: buffer.contents(), dtype: .int64)
+          return Tensor.Data(backend: backend, buffer: buffer)
+        }
+      }
+      if dtype == .int64 {
+        return try apply(Int64(0))
+      } else {
+        return try apply(Float(0))
+      }
+    }
+
+    public func repeated(
+      _ a: Tensor.Data, outerCount: Int, innerCount: Int, repeats: Int, dtype: Tensor.DType
+    )
+      throws
+      -> Tensor.Data
+    {
+      let inData = a.buffer.contents()
+      let outData = try allocate(length: outerCount * innerCount * repeats * dtype.byteSize)
+      let innerBytes = dtype.byteSize * innerCount
+      for i in 0..<outerCount {
+        for j in 0..<repeats {
+          let outBytes = outData.contents().advanced(
+            by: (i * repeats + j) * innerBytes)
+          let inBytes = inData.advanced(by: i * innerBytes)
+          outBytes.copyMemory(from: inBytes, byteCount: innerBytes)
+        }
+      }
+      return Tensor.Data(backend: backend, buffer: outData)
     }
   }
 

@@ -71,6 +71,55 @@ final class HoneycrispTests: XCTestCase {
     XCTAssertEqual(eqData, [1, 1, 0, 1, 0])
   }
 
+  func testSum() async throws {
+    let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0, 7.0], shape: [1, 2, 3, 1])
+    var xGrad: Tensor?
+
+    func useX() -> Tensor {
+      x.onGrad { xGrad = $0 }
+    }
+
+    var sum = useX().sum(axis: 2)
+    try sum.backward(Tensor(data: [-1.0, -2.0], shape: [1, 2, 1]))
+    var outData = try await sum.floats()
+    var xGradData = try await xGrad!.floats()
+    XCTAssertEqual(outData, [6.0, 8.0])
+    XCTAssertEqual(xGradData, [-1.0, -1.0, -1.0, -2.0, -2.0, -2.0])
+
+    sum = useX().sum(axis: 1)
+    try sum.backward(Tensor(data: [-1.0, -2.0, -3.0], shape: [1, 3, 1]))
+    outData = try await sum.floats()
+    xGradData = try await xGrad!.floats()
+    XCTAssertEqual(xGradData, [-1.0, -2.0, -3.0, -1.0, -2.0, -3.0])
+    XCTAssertEqual(outData, [-1.0, 5.0, 10.0])
+
+    sum = useX().sum()
+    try sum.backward()
+    outData = try await sum.floats()
+    xGradData = try await xGrad!.floats()
+    XCTAssertEqual(outData, [14.0])
+    XCTAssertEqual(xGradData, [1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+  }
+
+  func testRepeat() async throws {
+    let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0, 7.0], shape: [1, 2, 3, 1])
+    var xGrad: Tensor?
+
+    func useX() -> Tensor {
+      x.onGrad { xGrad = $0 }
+    }
+
+    let repeated = useX().repeated(repeats: 2, axis: 2)
+    XCTAssertEqual(repeated.shape, [1, 2, 6, 1])
+    try repeated.backward(
+      Tensor(
+        data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0], shape: [1, 2, 6, 1]))
+    let outData = try await repeated.floats()
+    let outGrad = try await xGrad!.floats()
+    XCTAssertEqual(outData, [1.0, 2.0, 3.0, 1.0, 2.0, 3.0, -2.0, 3.0, 7.0, -2.0, 3.0, 7.0])
+    XCTAssertEqual(outGrad, [5.0, 7.0, 9.0, 17.0, 19.0, 21.0])
+  }
+
   // func testMatrixMatrixProduct() throws {
   //   let x = Tensor(ones: [64, 128])
   //   let y = Tensor(ones: [128, 32])
