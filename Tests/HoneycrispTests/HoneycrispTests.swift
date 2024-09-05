@@ -176,30 +176,49 @@ final class HoneycrispTests: XCTestCase {
     XCTAssertEqual(outGrad, [4.0, 5.0, 6.0, 1.0, 2.0, 3.0])
   }
 
-  // func testMatrixMatrixProduct() throws {
-  //   let x = Tensor(ones: [64, 128])
-  //   let y = Tensor(ones: [128, 32])
-  //   let z = x &* y
-  //   XCTAssertEqual(z.shape, [64, 32])
-  //   XCTAssert(z.data.map({ $0 == 128 }).reduce(true, { x, y in x && y }))
-  // }
+  func testMatrixMatrixProduct() async throws {
+    // Sanity check for transposes.
+    try await {
+      let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3])
+      let y = Tensor(data: [-1, -2, -3, -4, -5, -6], shape: [3, 2])
+      let z1 = Tensor.matmul(a: x, transA: false, b: y, transB: false, transOut: false)
+      let z2 = Tensor.matmul(a: y, transA: true, b: x, transB: true, transOut: true)
+      XCTAssertEqual(z1.shape, [2, 2])
+      XCTAssertEqual(z2.shape, [2, 2])
+      let out1 = try await z1.floats()
+      let out2 = try await z2.floats()
+      XCTAssertEqual(out1, out2)
+      XCTAssertEqual(out1, [-22, -28, -49, -64])
+    }()
 
-  // func testMatrixVectorProduct() throws {
-  //   let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3])
-  //   let y = Tensor(data: [-1, -3, 2], shape: [3, 1])
-  //   var xGrad: Tensor?
-  //   var yGrad: Tensor?
-  //   let xParam = x.onGrad { grad in xGrad = grad }
-  //   let yParam = y.onGrad { grad in yGrad = grad }
-  //   let product = xParam &* yParam
-  //   XCTAssertEqual(product.data, [-1, -7])
-  //   let outGrad = Tensor(onesLike: product)
-  //   product.backward(grad: outGrad)
-  //   XCTAssertEqual(xGrad!.data, [-1, -3, 2, -1, -3, 2])
-  //   XCTAssertEqual(xGrad!.shape, x.shape)
-  //   XCTAssertEqual(yGrad!.data, [5, 7, 9])
-  //   XCTAssertEqual(yGrad!.shape, y.shape)
-  // }
+    try await {
+      let x = Tensor(ones: [64, 128])
+      let y = Tensor(ones: [128, 32])
+      let z = Tensor.matmul(a: x, transA: false, b: y, transB: false, transOut: false)
+      XCTAssertEqual(z.shape, [64, 32])
+      let out = try await z.floats()
+      XCTAssert(out.map({ $0 == 128 }).reduce(true, { x, y in x && y }))
+    }()
+  }
+
+  func testMatrixVectorProduct() async throws {
+    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3])
+    let y = Tensor(data: [-1, -3, 2], shape: [3, 1])
+    var xGrad: Tensor?
+    var yGrad: Tensor?
+    let xParam = x.onGrad { grad in xGrad = grad }
+    let yParam = y.onGrad { grad in yGrad = grad }
+    let product = xParam &* yParam
+    let productData = try await product.floats()
+    XCTAssertEqual(productData, [-1, -7])
+    try product.backward()
+    let xGradData = try await xGrad!.floats()
+    let yGradData = try await yGrad!.floats()
+    XCTAssertEqual(xGradData, [-1, -3, 2, -1, -3, 2])
+    XCTAssertEqual(xGrad!.shape, x.shape)
+    XCTAssertEqual(yGradData, [5, 7, 9])
+    XCTAssertEqual(yGrad!.shape, y.shape)
+  }
 
   // func testSlice() throws {
   //   let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2])

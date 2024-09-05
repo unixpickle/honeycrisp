@@ -84,7 +84,7 @@ public class Tensor {
   private var numBackwardHandles: Int = 0
 
   public init(
-    dataTask: Task<Data, Error>, shape: [Int], dtype: DType = .float32,
+    dataTask: Task<Data, Error>, shape: [Int], dtype: DType,
     backwardImpl: (((Tensor) throws -> Void))? = nil
   ) {
     self.dataTask = dataTask
@@ -166,7 +166,7 @@ public class Tensor {
   }
 
   public func noGrad() -> Tensor {
-    return Tensor(dataTask: dataTask, shape: shape)
+    return Tensor(dataTask: dataTask, shape: shape, dtype: dtype)
   }
 
   public func onGrad(_ action: @escaping ((Tensor) throws -> Void)) -> Tensor {
@@ -235,7 +235,8 @@ public class Tensor {
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
-      return Tensor(dataTask: newData, shape: lhs.shape, backwardImpl: lhsHandle.backward)
+      return Tensor(
+        dataTask: newData, shape: lhs.shape, dtype: lhs.dtype, backwardImpl: lhsHandle.backward)
     }
   }
 
@@ -286,7 +287,7 @@ public class Tensor {
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
-      return Tensor(dataTask: newData, shape: lhs.shape) { grad in
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
         try lhsHandle.backward(grad * rhs)
       }
     }
@@ -357,7 +358,7 @@ public class Tensor {
       return Tensor(dataTask: newData, shape: shape, dtype: dtype)
     } else {
       let lhsHandle = saveForBackward()
-      return Tensor(dataTask: newData, shape: shape) { grad in
+      return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
         try lhsHandle.backward(grad * exponent * self.pow(exponent - T(1.0)))
       }
     }

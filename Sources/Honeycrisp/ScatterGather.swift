@@ -7,7 +7,7 @@ public struct ScatterGatherIndices {
   public let middleCount: Int
   public let innerCount: Int
 
-  var indicesCount: Int {
+  public var indicesCount: Int {
     if broadcasted {
       outCount
     } else {
@@ -15,11 +15,11 @@ public struct ScatterGatherIndices {
     }
   }
 
-  var scatterInCount: Int {
+  public var scatterInCount: Int {
     outerCount * middleCount * innerCount
   }
 
-  var scatterOutCount: Int {
+  public var scatterOutCount: Int {
     outerCount * outCount * innerCount
   }
 }

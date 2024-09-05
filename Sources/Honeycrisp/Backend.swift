@@ -76,6 +76,14 @@ public protocol BackendHandle {
   )
     throws
     -> Tensor.Data
+
+  func matmul(
+    a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
+    inner: Int, cols: Int,
+    dtype: Tensor.DType
+  )
+    throws
+    -> Tensor.Data
 }
 
 open class Backend {
@@ -435,6 +443,67 @@ open class CPUBackend: Backend {
         }
         let buffer = try allocate(length: s.scatterInCount * dtype.byteSize)
         try arrayToPointer(outArr, output: buffer.contents(), dtype: dtype)
+        return Tensor.Data(backend: backend, buffer: buffer)
+      }
+      if dtype == .int64 {
+        return try apply(Int64(0))
+      } else {
+        return try apply(Float(0))
+      }
+    }
+
+    public func matmul(
+      a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
+      inner: Int, cols: Int,
+      dtype: Tensor.DType
+    )
+      throws
+      -> Tensor.Data
+    {
+      let aCount = rows * inner
+      let bCount = inner * cols
+      func apply<T: NumericTensorElement>(_ zero: T) throws -> Tensor.Data {
+        var arrA = [T](repeating: zero, count: aCount)
+        var arrB = [T](repeating: zero, count: bCount)
+        try pointerToArray(a.buffer.contents(), output: &arrA, dtype: dtype)
+        try pointerToArray(b.buffer.contents(), output: &arrB, dtype: dtype)
+        var arrC = [T](repeating: zero, count: aCount * bCount)
+
+        func getA(_ i: Int, _ j: Int) -> T {
+          if transA {
+            arrA[i + j * rows]
+          } else {
+            arrA[i * inner + j]
+          }
+        }
+
+        func getB(_ i: Int, _ j: Int) -> T {
+          if transB {
+            arrB[i + j * inner]
+          } else {
+            arrB[i * cols + j]
+          }
+        }
+
+        func setC(_ i: Int, _ j: Int, _ x: T) {
+          if transOut {
+            arrC[i + j * rows] = x
+          } else {
+            arrC[i * cols + j] = x
+          }
+        }
+
+        for i in 0..<rows {
+          for j in 0..<cols {
+            var acc = T(0.0)
+            for k in 0..<inner {
+              acc = acc + getA(i, k) * getB(k, j)
+            }
+            setC(i, j, acc)
+          }
+        }
+        let buffer = try allocate(length: arrC.count * dtype.byteSize)
+        try arrayToPointer(arrC, output: buffer.contents(), dtype: dtype)
         return Tensor.Data(backend: backend, buffer: buffer)
       }
       if dtype == .int64 {
