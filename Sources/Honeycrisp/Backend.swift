@@ -12,46 +12,67 @@ public protocol BackendHandle {
   var commandQueue: MTLCommandQueue? { get }
 
   func allocate(length: Int) throws -> MTLBuffer
+
   func binaryOp(
     _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     throws
     -> Tensor.Data
+
   func binaryOp<T: NumericTensorElement>(
     _ a: Tensor.Data, _ b: T, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     throws
     -> Tensor.Data
+
   func binaryOp<T: NumericTensorElement>(
     _ a: T, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     throws
     -> Tensor.Data
+
   func equals(
     _ a: Tensor.Data, _ b: Tensor.Data, count: Int, dtype: Tensor.DType
   )
     throws
     -> Tensor.Data
+
   func equals<T: TensorElement>(
     _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
   )
     throws
     -> Tensor.Data
+
   func cast(_ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType)
     throws
     -> Tensor.Data
+
   func pow<T: NumericTensorElement>(
     _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
   )
     throws
     -> Tensor.Data
+
   func reduce(
     _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
   )
     throws
     -> Tensor.Data
+
   func repeated(
     _ a: Tensor.Data, outerCount: Int, innerCount: Int, repeats: Int, dtype: Tensor.DType
+  )
+    throws
+    -> Tensor.Data
+
+  func gather(
+    _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
+  )
+    throws
+    -> Tensor.Data
+
+  func scatter(
+    _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
   )
     throws
     -> Tensor.Data
@@ -336,6 +357,91 @@ open class CPUBackend: Backend {
         }
       }
       return Tensor.Data(backend: backend, buffer: outData)
+    }
+
+    public func gather(
+      _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
+    )
+      throws
+      -> Tensor.Data
+    {
+      var flatIndices = [Int64](repeating: 0, count: s.indicesCount)
+      try pointerToArray(s.indices.buffer.contents(), output: &flatIndices, dtype: .int64)
+
+      if s.broadcasted {
+        let innerSize = s.innerCount * dtype.byteSize
+        let inData = a.buffer.contents()
+        let outBuffer = try allocate(
+          length: s.innerCount * flatIndices.count * innerSize)
+        let outData = outBuffer.contents()
+        for i in 0..<s.outerCount {
+          for (j, idx) in flatIndices.enumerated() {
+            let source = inData.advanced(by: i * s.middleCount * innerSize + Int(idx) * innerSize)
+            let dst = outData.advanced(
+              by: i * flatIndices.count * innerSize + j * innerSize)
+            dst.copyMemory(from: source, byteCount: innerSize)
+          }
+        }
+        return Tensor.Data(backend: backend, buffer: outBuffer)
+      }
+
+      func apply<T: TensorElement>(_ zero: T) throws -> Tensor.Data {
+        var inArr = [T](repeating: zero, count: s.scatterInCount)
+        try pointerToArray(a.buffer.contents(), output: &inArr, dtype: dtype)
+        var outArr = [T](repeating: zero, count: s.scatterOutCount)
+        for i in 0..<s.outerCount {
+          for j in 0..<s.outCount {
+            for k in 0..<s.innerCount {
+              let outIdx = i * s.outCount * s.innerCount + j * s.innerCount + k
+              let inIdx = Int(flatIndices[outIdx])
+              let source = inArr[i * s.middleCount * s.innerCount + inIdx * s.innerCount + k]
+              outArr[outIdx] = source
+            }
+          }
+        }
+        let buffer = try allocate(length: s.scatterOutCount * dtype.byteSize)
+        try arrayToPointer(outArr, output: buffer.contents(), dtype: dtype)
+        return Tensor.Data(backend: backend, buffer: buffer)
+      }
+      if dtype == .int64 {
+        return try apply(Int64(0))
+      } else {
+        return try apply(Float(0))
+      }
+    }
+
+    public func scatter(
+      _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
+    )
+      throws
+      -> Tensor.Data
+    {
+      var flatIndices = [Int64](repeating: 0, count: s.indicesCount)
+      try pointerToArray(s.indices.buffer.contents(), output: &flatIndices, dtype: .int64)
+      func apply<T: NumericTensorElement>(_ zero: T) throws -> Tensor.Data {
+        var inArr = [T](repeating: zero, count: s.scatterOutCount)
+        try pointerToArray(a.buffer.contents(), output: &inArr, dtype: dtype)
+        var outArr = [T](repeating: zero, count: s.scatterInCount)
+        for i in 0..<s.outerCount {
+          for j in 0..<s.outCount {
+            for k in 0..<s.innerCount {
+              let inIdx = i * s.outCount * s.innerCount + j * s.innerCount + k
+              let indexIdx = s.broadcasted ? j : inIdx
+              let jOut = Int(flatIndices[indexIdx])
+              let outIdx = i * s.middleCount * s.innerCount + jOut * s.innerCount + k
+              outArr[outIdx] = outArr[outIdx] + inArr[inIdx]
+            }
+          }
+        }
+        let buffer = try allocate(length: s.scatterInCount * dtype.byteSize)
+        try arrayToPointer(outArr, output: buffer.contents(), dtype: dtype)
+        return Tensor.Data(backend: backend, buffer: buffer)
+      }
+      if dtype == .int64 {
+        return try apply(Int64(0))
+      } else {
+        return try apply(Float(0))
+      }
     }
   }
 

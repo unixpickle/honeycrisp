@@ -189,8 +189,8 @@ public class Tensor {
       return Tensor(dataTask: dataTask, shape: newShape, dtype: dtype)
     } else {
       let handle = self.saveForBackward()
-      return Tensor(dataTask: dataTask, shape: newShape, dtype: dtype) { grad in
-        try handle.backward(grad.reshape(self.shape))
+      return Tensor(dataTask: dataTask, shape: newShape, dtype: dtype) { [self] grad in
+        try handle.backward(grad.reshape(shape))
       }
     }
   }

@@ -120,6 +120,62 @@ final class HoneycrispTests: XCTestCase {
     XCTAssertEqual(outGrad, [5.0, 7.0, 9.0, 17.0, 19.0, 21.0])
   }
 
+  func testGather() async throws {
+    let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0, 7.0], shape: [1, 2, 3, 1])
+    var xGrad: Tensor?
+
+    func useX() -> Tensor {
+      x.onGrad { xGrad = $0 }
+    }
+
+    // Unbroadcasted gather along inner axis
+    var out = useX().gather(
+      axis: 2, indices: Tensor(data: [2, 0, 1, 2], shape: [1, 2, 2, 1], dtype: .int64))
+    XCTAssertEqual(out.shape, [1, 2, 2, 1])
+    try out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [1, 2, 2, 1]))
+    var outData = try await out.floats()
+    var outGrad = try await xGrad!.floats()
+    XCTAssertEqual(outData, [3.0, 1.0, 3.0, 7.0])
+    XCTAssertEqual(outGrad, [2.0, 0.0, 1.0, 0.0, 3.0, 4.0])
+
+    // Broadcasted gather along inner axis
+    out = useX().gather(
+      axis: 2, indices: Tensor(data: [2, 0], shape: [2], dtype: .int64))
+    XCTAssertEqual(out.shape, [1, 2, 2, 1])
+    try out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [1, 2, 2, 1]))
+    outData = try await out.floats()
+    outGrad = try await xGrad!.floats()
+    XCTAssertEqual(outData, [3.0, 1.0, 7.0, -2.0])
+    XCTAssertEqual(outGrad, [2.0, 0.0, 1.0, 4.0, 0.0, 3.0])
+
+    // Unbroadcasted gather along outer axis
+    out = useX().gather(
+      axis: 1, indices: Tensor(data: [0, 1, 0, 1, 0, 0], shape: [1, 2, 3, 1], dtype: .int64))
+    XCTAssertEqual(out.shape, [1, 2, 3, 1])
+    try out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: [1, 2, 3, 1]))
+    outData = try await out.floats()
+    outGrad = try await xGrad!.floats()
+    XCTAssertEqual(outData, [1.0, 3.0, 3.0, -2.0, 2.0, 3.0])
+    XCTAssertEqual(outGrad, [1.0, 5.0, 9.0, 4.0, 2.0, 0.0])
+
+    // Broadcasted scatter along outer axis
+    let permuteMe = Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: [1, 2, 3, 1])
+    let permuted = try await permuteMe.scatter(
+      axis: 1, count: 2, indices: Tensor(data: [1, 0], shape: [2])
+    ).floats()
+    XCTAssertEqual(permuted, [4.0, 5.0, 6.0, 1.0, 2.0, 3.0])
+
+    // Broadcasted gather along outer axis
+    out = useX().gather(
+      axis: 1, indices: Tensor(data: [1, 0], shape: [2], dtype: .int64))
+    XCTAssertEqual(out.shape, [1, 2, 3, 1])
+    try out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: [1, 2, 3, 1]))
+    outData = try await out.floats()
+    outGrad = try await xGrad!.floats()
+    XCTAssertEqual(outData, [-2.0, 3.0, 7.0, 1.0, 2.0, 3.0])
+    XCTAssertEqual(outGrad, [4.0, 5.0, 6.0, 1.0, 2.0, 3.0])
+  }
+
   // func testMatrixMatrixProduct() throws {
   //   let x = Tensor(ones: [64, 128])
   //   let y = Tensor(ones: [128, 32])
