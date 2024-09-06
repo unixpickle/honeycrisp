@@ -95,25 +95,29 @@ public class Tensor {
   }
 
   public init<T: TensorElement>(
-    data: [T], shape: [Int], dtype: DType? = nil, backend: Backend? = nil,
-    backwardImpl: ((Tensor) throws -> Void)? = nil
+    data: [T], shape: [Int], dtype: DType? = nil, backwardImpl: ((Tensor) throws -> Void)? = nil
   ) {
     let dtype = dtype ?? T.dtype
     if !dtype.supportsGrad {
       assert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
     }
     assert(data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
-    let backend = backend ?? Backend.defaultBackend
+    let backend = Backend.current
     self.dataTask = Task {
-      try await backend.execute { handle in
-        let buf = try handle.allocate(length: dtype.byteSize * shape.product())
-        try arrayToPointer(data, output: buf.contents(), dtype: dtype)
-        return Data(backend: backend, buffer: buf)
-      }
+      let buf = try await backend.allocate(length: dtype.byteSize * shape.product())
+      try arrayToPointer(data, output: buf.contents(), dtype: dtype)
+      return Data(backend: backend, buffer: buf)
     }
     self.shape = shape
     self.dtype = dtype
     self.needsGrad = false
+  }
+
+  public convenience init<T: NumericTensorElement>(
+    range: Range<T>, dtype: DType? = nil
+  ) where Range<T>: Collection {
+    let arr = Array(range)
+    self.init(data: arr, shape: [arr.count], dtype: dtype ?? T.dtype)
   }
 
   public convenience init(zerosLike: Tensor) {
@@ -137,11 +141,10 @@ public class Tensor {
   }
 
   public convenience init<T: TensorElement>(
-    constant: T, shape: [Int], dtype: DType? = nil, backend: Backend? = nil
+    constant: T, shape: [Int], dtype: DType? = nil
   ) {
     self.init(
-      data: [T](repeating: constant, count: shape.product()), shape: shape, dtype: dtype,
-      backend: backend)
+      data: [T](repeating: constant, count: shape.product()), shape: shape, dtype: dtype)
   }
 
   public func copyToArray<T: TensorElement>(_ out: inout [T]) async throws {
@@ -195,20 +198,22 @@ public class Tensor {
     }
   }
 
-  public func cast(as t: Tensor, backend: Backend? = nil) -> Tensor {
-    cast(t.dtype, backend: backend)
+  public func flatten() -> Tensor {
+    return reshape([shape.product()])
   }
 
-  public func cast(_ newType: DType, backend: Backend? = nil) -> Tensor {
+  public func cast(as t: Tensor) -> Tensor {
+    cast(t.dtype)
+  }
+
+  public func cast(_ newType: DType) -> Tensor {
     if newType == dtype {
       return self
     }
-    let backend = backend ?? Backend.defaultBackend
+    let backend = Backend.current
     let newData = Task {
-      let innerData = try await backend.waitForData(await data)
-      return try await backend.execute { handle in
-        try handle.cast(innerData, count: shape.product(), inType: dtype, outType: newType)
-      }
+      try await backend.cast(
+        try await self.data, count: shape.product(), inType: dtype, outType: newType)
     }
     if !needsGrad || !newType.supportsGrad {
       return Tensor(dataTask: newData, shape: shape, dtype: newType)
@@ -222,14 +227,10 @@ public class Tensor {
 
   public static func + <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
     assert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
-    let backend = Backend.defaultBackend
+    let backend = Backend.current
     let newData = Task {
-      let lhsData = try await backend.waitForData(await lhs.data)
-      return try await backend.execute { handle in
-        try handle.binaryOp(
-          lhsData, rhs, op: .add, count: lhs.shape.product(),
-          dtype: lhs.dtype)
-      }
+      try await backend.binaryOp(
+        try await lhs.data, rhs, op: .add, count: lhs.shape.product(), dtype: lhs.dtype)
     }
     if !lhs.needsGrad {
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
@@ -252,14 +253,11 @@ public class Tensor {
     assert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
     assert(
       lhs.dtype == rhs.dtype, "dtypes for + operator do not match: \(lhs.dtype) and \(rhs.dtype)")
-    let backend = Backend.defaultBackend
+    let backend = Backend.current
     let newData = Task {
-      let (lhsData, rhsData) = try await backend.waitForData(await lhs.data, await rhs.data)
-      return try await backend.execute { handle in
-        try handle.binaryOp(
-          lhsData, rhsData, op: .add, count: lhs.shape.product(),
-          dtype: lhs.dtype)
-      }
+      try await backend.binaryOp(
+        try await lhs.data, try await rhs.data, op: .add, count: lhs.shape.product(),
+        dtype: lhs.dtype)
     }
     if !lhs.needsGrad && !rhs.needsGrad {
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
@@ -274,21 +272,17 @@ public class Tensor {
   }
 
   public static func * <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
-    let backend = Backend.defaultBackend
+    let backend = Backend.current
     let newData = Task {
-      let lhsData = try await backend.waitForData(await lhs.data)
-      return try await backend.execute { handle in
-        try handle.binaryOp(
-          lhsData, rhs, op: .mul, count: lhs.shape.product(),
-          dtype: lhs.dtype)
-      }
+      try await backend.binaryOp(
+        try await lhs.data, rhs, op: .mul, count: lhs.shape.product(), dtype: lhs.dtype)
     }
     if !lhs.needsGrad {
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        try lhsHandle.backward(grad * rhs)
+        try lhsHandle.backward(backend.use { grad * rhs })
       }
     }
   }
@@ -305,14 +299,11 @@ public class Tensor {
     assert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with * operator")
     assert(
       lhs.dtype == rhs.dtype, "dtypes for * operator do not match: \(lhs.dtype) and \(rhs.dtype)")
-    let backend = Backend.defaultBackend
+    let backend = Backend.current
     let newData = Task {
-      let (lhsData, rhsData) = try await backend.waitForData(await lhs.data, await rhs.data)
-      return try await backend.execute { handle in
-        try handle.binaryOp(
-          lhsData, rhsData, op: .mul, count: lhs.shape.product(),
-          dtype: lhs.dtype)
-      }
+      try await backend.binaryOp(
+        try await lhs.data, try await rhs.data, op: .mul, count: lhs.shape.product(),
+        dtype: lhs.dtype)
     }
     if !lhs.needsGrad && !rhs.needsGrad {
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
@@ -320,8 +311,8 @@ public class Tensor {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        try lhsHandle.backward(grad * rhs.noGrad())
-        try rhsHandle.backward(grad * lhs.noGrad())
+        try lhsHandle.backward(backend.use { grad * rhs.noGrad() })
+        try rhsHandle.backward(backend.use { grad * lhs.noGrad() })
       }
     }
   }
@@ -345,21 +336,18 @@ public class Tensor {
 
   public func pow<T: NumericTensorElement>(_ exponent: T) -> Tensor {
     assert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
-    let backend = Backend.defaultBackend
+    let backend = Backend.current
     let newData = Task {
-      let lhsData = try await backend.waitForData(await data)
-      return try await backend.execute { handle in
-        try handle.pow(
-          lhsData, exponent, count: self.shape.product(),
-          dtype: self.dtype)
-      }
+      try await backend.pow(
+        try await self.data, exponent, count: self.shape.product(), dtype: self.dtype)
     }
     if !needsGrad {
       return Tensor(dataTask: newData, shape: shape, dtype: dtype)
     } else {
       let lhsHandle = saveForBackward()
       return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
-        try lhsHandle.backward(grad * exponent * self.pow(exponent - T(1.0)))
+        try lhsHandle.backward(
+          backend.use { grad * exponent * self.noGrad().pow(exponent - T(1.0)) })
       }
     }
   }
@@ -377,12 +365,10 @@ public class Tensor {
   }
 
   public static func == <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {
-    let backend = Backend.defaultBackend
+    let backend = Backend.current
     let newData = Task {
-      let lhsData = try await backend.waitForData(await lhs.data)
-      return try await backend.execute { handle in
-        try handle.equals(lhsData, rhs, count: lhs.shape.product(), dtype: lhs.dtype)
-      }
+      try await backend.equals(
+        try await lhs.data, rhs, count: lhs.shape.product(), dtype: lhs.dtype)
     }
     return Tensor(dataTask: newData, shape: lhs.shape, dtype: .bool)
   }
@@ -398,12 +384,10 @@ public class Tensor {
     )
     assert(
       lhs.dtype == rhs.dtype, "dtypes for == operator do not match: \(lhs.dtype) and \(rhs.dtype)")
-    let backend = Backend.defaultBackend
+    let backend = Backend.current
     let newData = Task {
-      let (lhsData, rhsData) = try await backend.waitForData(await lhs.data, await rhs.data)
-      return try await backend.execute { handle in
-        try handle.equals(lhsData, rhsData, count: lhs.shape.product(), dtype: lhs.dtype)
-      }
+      try await backend.equals(
+        try await lhs.data, try await rhs.data, count: lhs.shape.product(), dtype: lhs.dtype)
     }
     return Tensor(dataTask: newData, shape: lhs.shape, dtype: .bool)
   }

@@ -1,3 +1,4 @@
+import Foundation
 import Metal
 
 public enum BackendError: Error {
@@ -7,110 +8,160 @@ public enum BackendError: Error {
   case allocationFailed(Int)
 }
 
-public protocol BackendHandle {
-
-  var commandQueue: MTLCommandQueue? { get }
-
-  func allocate(length: Int) throws -> MTLBuffer
-
-  func binaryOp(
-    _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
-  )
-    throws
-    -> Tensor.Data
-
-  func binaryOp<T: NumericTensorElement>(
-    _ a: Tensor.Data, _ b: T, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
-  )
-    throws
-    -> Tensor.Data
-
-  func binaryOp<T: NumericTensorElement>(
-    _ a: T, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
-  )
-    throws
-    -> Tensor.Data
-
-  func equals(
-    _ a: Tensor.Data, _ b: Tensor.Data, count: Int, dtype: Tensor.DType
-  )
-    throws
-    -> Tensor.Data
-
-  func equals<T: TensorElement>(
-    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
-  )
-    throws
-    -> Tensor.Data
-
-  func cast(_ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType)
-    throws
-    -> Tensor.Data
-
-  func pow<T: NumericTensorElement>(
-    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
-  )
-    throws
-    -> Tensor.Data
-
-  func reduce(
-    _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
-  )
-    throws
-    -> Tensor.Data
-
-  func repeated(
-    _ a: Tensor.Data, outerCount: Int, innerCount: Int, repeats: Int, dtype: Tensor.DType
-  )
-    throws
-    -> Tensor.Data
-
-  func gather(
-    _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
-  )
-    throws
-    -> Tensor.Data
-
-  func scatter(
-    _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
-  )
-    throws
-    -> Tensor.Data
-
-  func matmul(
-    a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
-    inner: Int, cols: Int,
-    dtype: Tensor.DType
-  )
-    throws
-    -> Tensor.Data
-}
-
 open class Backend {
 
-  static var defaultBackend: Backend = CPUBackend()
+  private static let ThreadKey = "HONEYCRISP_CURRENT_BACKEND"
 
-  public func waitForData(_ data: [Tensor.Data]) async throws {
-    for x in data {
-      if let c = x.completeOnAllDevices, x.backend !== self {
-        try await c.value
+  public static var defaultBackend: Backend = CPUBackend()
+
+  public static var current: Backend {
+    if let backend = Thread.current.threadDictionary[ThreadKey] {
+      (backend as? Backend)!
+    } else {
+      defaultBackend
+    }
+  }
+
+  public func use<T>(_ fn: () throws -> T) rethrows -> T {
+    if let backend = Thread.current.threadDictionary[Backend.ThreadKey] {
+      let old = (backend as? Backend)!
+      defer {
+        Thread.current.threadDictionary[Backend.ThreadKey] = old
+      }
+      Thread.current.threadDictionary[Backend.ThreadKey] = self
+      return try fn()
+    } else {
+      defer {
+        Thread.current.threadDictionary.removeObject(forKey: Backend.ThreadKey)
+      }
+      Thread.current.threadDictionary[Backend.ThreadKey] = self
+      return try fn()
+    }
+  }
+
+  private var queue = DispatchQueue(label: "backend-worker")
+
+  internal func serialize<T>(_ work: () throws -> T) async throws -> T {
+    return try await withCheckedThrowingContinuation { continuation in
+      queue.sync {
+        do {
+          continuation.resume(returning: try work())
+        } catch {
+          continuation.resume(throwing: error)
+        }
       }
     }
   }
 
-  public func waitForData(_ a: Tensor.Data) async throws -> Tensor.Data {
-    try await waitForData([a])
-    return a
+  public func allocate(length: Int) async throws -> MTLBuffer {
+    throw BackendError.notImplemented
   }
 
-  public func waitForData(_ a: Tensor.Data, _ b: Tensor.Data) async throws -> (
-    Tensor.Data, Tensor.Data
-  ) {
-    try await waitForData([a, b])
-    return (a, b)
+  public func binaryOp(
+    _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
   }
 
-  public func execute<T>(_ work: (BackendHandle) throws -> T) async throws -> T {
+  public func binaryOp<T: NumericTensorElement>(
+    _ a: Tensor.Data, _ b: T, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
+  public func binaryOp<T: NumericTensorElement>(
+    _ a: T, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
+  public func equals(
+    _ a: Tensor.Data, _ b: Tensor.Data, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
+  public func equals<T: TensorElement>(
+    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
+  public func cast(_ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType)
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
+  public func pow<T: NumericTensorElement>(
+    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
+  public func reduce(
+    _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
+  public func repeated(
+    _ a: Tensor.Data, outerCount: Int, innerCount: Int, repeats: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
+  public func gather(
+    _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
+  public func scatter(
+    _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
+  public func matmul(
+    a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
+    inner: Int, cols: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
     throw BackendError.notImplemented
   }
 
@@ -118,184 +169,238 @@ open class Backend {
 
 open class CPUBackend: Backend {
 
-  open class Handle: BackendHandle {
-    public let backend: Backend
-    public let device: MTLDevice
-    public let commandQueue: MTLCommandQueue?
+  private var queue = DispatchQueue(label: "cpu-backend-worker")
+  private static var _global = CPUBackend()
+  public static var global: CPUBackend { CPUBackend._global }
 
-    init(backend: Backend, device: MTLDevice, commandQueue: MTLCommandQueue? = nil) {
-      self.backend = backend
-      self.device = device
-      self.commandQueue = commandQueue
+  internal var _device: MTLDevice?
+  internal var device: MTLDevice {
+    get throws {
+      if let d = _device {
+        return d
+      }
+      if let d = MTLCreateSystemDefaultDevice() {
+        _device = d
+        return d
+      }
+      throw BackendError.failedToCreateMTLDevice
     }
+  }
 
-    public func allocate(length: Int) throws -> MTLBuffer {
-      guard let result = device.makeBuffer(length: length, options: [.storageModeShared]) else {
+  internal func waitForData(_ xs: Tensor.Data...) async throws {
+    for x in xs {
+      if let waiter = x.completeOnAllDevices {
+        try await waiter.value
+      }
+    }
+  }
+
+  override public func allocate(length: Int) async throws -> MTLBuffer {
+    return try await serialize {
+      guard
+        let result = (try device).makeBuffer(length: max(1, length), options: [.storageModeShared])
+      else {
         throw BackendError.allocationFailed(length)
       }
       return result
     }
+  }
 
-    public func binaryOp(
-      _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
-    ) throws
-      -> Tensor.Data
-    {
-      func apply<T: NumericTensorElement>(_ x: T) throws -> Tensor.Data {
+  override public func binaryOp(
+    _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+  ) async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a, b)
+
+    func apply<T: NumericTensorElement>(_ x: T) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: count * dtype.byteSize)
+      try await serialize {
         var aData = [T](repeating: x, count: count)
         var bData = [T](repeating: x, count: count)
         try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
         try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
         let cData = op.apply(aData, bData)
-        let buffer = try allocate(length: count * dtype.byteSize)
         try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
-        return Tensor.Data(backend: backend, buffer: buffer)
       }
-      if dtype == .int64 {
-        return try apply(Int64(0))
-      } else {
-        return try apply(Float(0))
-      }
+      return Tensor.Data(backend: self, buffer: buffer)
     }
+    if dtype == .int64 {
+      return try await apply(Int64(0))
+    } else {
+      return try await apply(Float(0))
+    }
+  }
 
-    public func binaryOp<T: NumericTensorElement>(
-      _ a: Tensor.Data, _ b: T, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
-    )
-      throws
-      -> Tensor.Data
-    {
-      func apply<T1: NumericTensorElement>(_ b: T1) throws -> Tensor.Data {
+  override public func binaryOp<T: NumericTensorElement>(
+    _ a: Tensor.Data, _ b: T, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a)
+
+    func apply<T1: NumericTensorElement>(_ b: T1) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: count * dtype.byteSize)
+      try await serialize {
         var aData = [T1](repeating: T1(0.0), count: count)
         try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
         let cData = op.apply(aData, b)
-        let buffer = try allocate(length: count * dtype.byteSize)
         try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
-        return Tensor.Data(backend: backend, buffer: buffer)
       }
-      if dtype == .int64 {
-        return try apply(b.toInt64())
-      } else {
-        return try apply(b.toFloat())
-      }
+      return Tensor.Data(backend: self, buffer: buffer)
     }
+    if dtype == .int64 {
+      return try await apply(b.toInt64())
+    } else {
+      return try await apply(b.toFloat())
+    }
+  }
 
-    public func binaryOp<T: NumericTensorElement>(
-      _ a: T, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
-    )
-      throws
-      -> Tensor.Data
-    {
-      func apply<T1: NumericTensorElement>(_ a: T1) throws -> Tensor.Data {
+  override public func binaryOp<T: NumericTensorElement>(
+    _ a: T, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(b)
+    func apply<T1: NumericTensorElement>(_ a: T1) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: count * dtype.byteSize)
+      try await serialize {
         var bData = [T1](repeating: T1(0.0), count: count)
         try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
         let cData = op.apply(a, bData)
-        let buffer = try allocate(length: count * dtype.byteSize)
         try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
-        return Tensor.Data(backend: backend, buffer: buffer)
       }
-      if dtype == .int64 {
-        return try apply(a.toInt64())
-      } else {
-        return try apply(a.toFloat())
-      }
+      return Tensor.Data(backend: self, buffer: buffer)
     }
+    if dtype == .int64 {
+      return try await apply(a.toInt64())
+    } else {
+      return try await apply(a.toFloat())
+    }
+  }
 
-    public func equals(
-      _ a: Tensor.Data, _ b: Tensor.Data, count: Int, dtype: Tensor.DType
-    )
-      throws
-      -> Tensor.Data
-    {
-      func apply<T1: NumericTensorElement>(_ x: T1) throws -> Tensor.Data {
-        var aData = [T1](repeating: x, count: count)
-        var bData = [T1](repeating: x, count: count)
+  override public func equals(
+    _ a: Tensor.Data, _ b: Tensor.Data, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a, b)
+
+    func apply<T1: NumericTensorElement>(_: T1.Type) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: count * Tensor.DType.bool.byteSize)
+      try await serialize {
+        var aData = [T1](repeating: T1(0.0), count: count)
+        var bData = [T1](repeating: T1(0.0), count: count)
         try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
         try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
         let cData = zip(aData, bData).map { $0 == $1 }
-        let buffer = try allocate(length: count * Tensor.DType.bool.byteSize)
         try arrayToPointer(cData, output: buffer.contents(), dtype: .bool)
-        return Tensor.Data(backend: backend, buffer: buffer)
       }
-      if dtype == .int64 {
-        return try apply(Int64(0))
-      } else {
-        return try apply(Float(0))
-      }
+      return Tensor.Data(backend: self, buffer: buffer)
     }
+    if dtype == .int64 {
+      return try await apply(Int64.self)
+    } else {
+      return try await apply(Float.self)
+    }
+  }
 
-    public func equals<T: TensorElement>(
-      _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
-    )
-      throws
-      -> Tensor.Data
-    {
-      func apply<T1: NumericTensorElement>(_ b: T1) throws -> Tensor.Data {
+  override public func equals<T: TensorElement>(
+    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a)
+    func apply<T1: NumericTensorElement>(_ b: T1) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: count * Tensor.DType.bool.byteSize)
+      try await serialize {
         var aData = [T1](repeating: T1(0.0), count: count)
         try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
         let cData = aData.map { $0 == b }
-        let buffer = try allocate(length: count * Tensor.DType.bool.byteSize)
         try arrayToPointer(cData, output: buffer.contents(), dtype: .bool)
-        return Tensor.Data(backend: backend, buffer: buffer)
       }
-      if dtype == .int64 {
-        return try apply(b.toInt64())
-      } else {
-        return try apply(b.toFloat())
-      }
+      return Tensor.Data(backend: self, buffer: buffer)
     }
+    if dtype == .int64 {
+      return try await apply(b.toInt64())
+    } else {
+      return try await apply(b.toFloat())
+    }
+  }
 
-    public func cast(_ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType)
-      throws
-      -> Tensor.Data
-    {
-      func apply<T: TensorElement>(_ x: T) throws -> Tensor.Data {
-        var arr = [T](repeating: x, count: count)
+  override public func cast(
+    _ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a)
+
+    func apply<T: TensorElement>(_: T.Type) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: count * outType.byteSize)
+      try await serialize {
+        var arr = [T](repeating: T(0.0), count: count)
         try pointerToArray(a.buffer.contents(), output: &arr, dtype: inType)
-        let buffer = try allocate(length: count * outType.byteSize)
         try arrayToPointer(arr, output: buffer.contents(), dtype: outType)
-        return Tensor.Data(backend: backend, buffer: buffer)
       }
-      if inType == .int64 {
-        return try apply(Int64(0))
-      } else {
-        return try apply(Float(0))
-      }
+      return Tensor.Data(backend: self, buffer: buffer)
     }
+    if inType == .int64 {
+      return try await apply(Int64.self)
+    } else {
+      return try await apply(Float.self)
+    }
+  }
 
-    public func pow<T: NumericTensorElement>(
-      _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
-    )
-      throws
-      -> Tensor.Data
-    {
-      func apply<T1: NumericTensorElement>(_ x: T1) throws -> Tensor.Data {
+  override public func pow<T: NumericTensorElement>(
+    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a)
+
+    func apply<T1: NumericTensorElement>(_ x: T1) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: count * dtype.byteSize)
+      try await serialize {
         var arr = [T1](repeating: x, count: count)
         try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
         let cData = arr.map { $0.pow(x) }
-        let buffer = try allocate(length: count * dtype.byteSize)
         try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
-        return Tensor.Data(backend: backend, buffer: buffer)
       }
-      if dtype == .int64 {
-        return try apply(Int64(0))
-      } else {
-        return try apply(Float(0))
-      }
+      return Tensor.Data(backend: self, buffer: buffer)
     }
+    if dtype == .int64 {
+      return try await apply(Int64(0))
+    } else {
+      return try await apply(Float(0))
+    }
+  }
 
-    public func reduce(
-      _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
-    )
-      throws
-      -> Tensor.Data
-    {
-      func apply<T: NumericTensorElement>(_ x: T) throws -> Tensor.Data {
+  override public func reduce(
+    _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a)
+
+    func apply<T: NumericTensorElement>(_ x: T) async throws -> Tensor.Data {
+      let arr = try await serialize {
         var arr = [T](repeating: x, count: dims.inCount)
         try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
+        return arr
+      }
 
-        switch op {
-        case .sum:
-          var arrOut = [T]()
+      switch op {
+      case .sum:
+        var arrOut = [T]()
+        let buffer = try await allocate(length: dims.outCount * dtype.byteSize)
+        try await serialize {
           for i in 0..<dims.outerCount {
             for j in 0..<dims.innerCount {
               var sum = T(0.0)
@@ -307,12 +412,14 @@ open class CPUBackend: Backend {
             }
           }
           assert(arrOut.count == dims.outCount)
-          let buffer = try allocate(length: arrOut.count * dtype.byteSize)
           try arrayToPointer(arrOut, output: buffer.contents(), dtype: dtype)
-          return Tensor.Data(backend: backend, buffer: buffer)
-        case .argmin, .argmax:
-          assert(dims.outCount > 0, "cannot apply op \(self) to empty dimension")
-          var arrOut = [Int64]()
+        }
+        return Tensor.Data(backend: self, buffer: buffer)
+      case .argmin, .argmax:
+        assert(dims.outCount > 0, "cannot apply op \(self) to empty dimension")
+        var arrOut = [Int64]()
+        let buffer = try await allocate(length: dims.outCount * Tensor.DType.int64.byteSize)
+        try await serialize {
           for i in 0..<dims.outerCount {
             for j in 0..<dims.innerCount {
               var extremum = arr[j + i * dims.reduceCount * dims.innerCount]
@@ -335,26 +442,28 @@ open class CPUBackend: Backend {
             }
           }
           assert(arrOut.count == dims.outCount)
-          let buffer = try allocate(length: arrOut.count * Tensor.DType.int64.byteSize)
           try arrayToPointer(arrOut, output: buffer.contents(), dtype: .int64)
-          return Tensor.Data(backend: backend, buffer: buffer)
         }
-      }
-      if dtype == .int64 {
-        return try apply(Int64(0))
-      } else {
-        return try apply(Float(0))
+        return Tensor.Data(backend: self, buffer: buffer)
       }
     }
+    if dtype == .int64 {
+      return try await apply(Int64(0))
+    } else {
+      return try await apply(Float(0))
+    }
+  }
 
-    public func repeated(
-      _ a: Tensor.Data, outerCount: Int, innerCount: Int, repeats: Int, dtype: Tensor.DType
-    )
-      throws
-      -> Tensor.Data
-    {
+  override public func repeated(
+    _ a: Tensor.Data, outerCount: Int, innerCount: Int, repeats: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a)
+    let outData = try await allocate(length: outerCount * innerCount * repeats * dtype.byteSize)
+    try await serialize {
       let inData = a.buffer.contents()
-      let outData = try allocate(length: outerCount * innerCount * repeats * dtype.byteSize)
       let innerBytes = dtype.byteSize * innerCount
       for i in 0..<outerCount {
         for j in 0..<repeats {
@@ -364,23 +473,30 @@ open class CPUBackend: Backend {
           outBytes.copyMemory(from: inBytes, byteCount: innerBytes)
         }
       }
-      return Tensor.Data(backend: backend, buffer: outData)
     }
+    return Tensor.Data(backend: self, buffer: outData)
+  }
 
-    public func gather(
-      _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
-    )
-      throws
-      -> Tensor.Data
-    {
+  override public func gather(
+    _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a, s.indices)
+
+    let flatIndices = try await serialize {
       var flatIndices = [Int64](repeating: 0, count: s.indicesCount)
       try pointerToArray(s.indices.buffer.contents(), output: &flatIndices, dtype: .int64)
+      return flatIndices
+    }
 
-      if s.broadcasted {
-        let innerSize = s.innerCount * dtype.byteSize
+    if s.broadcasted {
+      let innerSize = s.innerCount * dtype.byteSize
+      let outBuffer = try await allocate(
+        length: s.innerCount * flatIndices.count * innerSize)
+      try await serialize {
         let inData = a.buffer.contents()
-        let outBuffer = try allocate(
-          length: s.innerCount * flatIndices.count * innerSize)
         let outData = outBuffer.contents()
         for i in 0..<s.outerCount {
           for (j, idx) in flatIndices.enumerated() {
@@ -390,10 +506,13 @@ open class CPUBackend: Backend {
             dst.copyMemory(from: source, byteCount: innerSize)
           }
         }
-        return Tensor.Data(backend: backend, buffer: outBuffer)
       }
+      return Tensor.Data(backend: self, buffer: outBuffer)
+    }
 
-      func apply<T: TensorElement>(_ zero: T) throws -> Tensor.Data {
+    func apply<T: TensorElement>(_ zero: T) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: s.scatterOutCount * dtype.byteSize)
+      try await serialize {
         var inArr = [T](repeating: zero, count: s.scatterInCount)
         try pointerToArray(a.buffer.contents(), output: &inArr, dtype: dtype)
         var outArr = [T](repeating: zero, count: s.scatterOutCount)
@@ -407,26 +526,32 @@ open class CPUBackend: Backend {
             }
           }
         }
-        let buffer = try allocate(length: s.scatterOutCount * dtype.byteSize)
         try arrayToPointer(outArr, output: buffer.contents(), dtype: dtype)
-        return Tensor.Data(backend: backend, buffer: buffer)
       }
-      if dtype == .int64 {
-        return try apply(Int64(0))
-      } else {
-        return try apply(Float(0))
-      }
+      return Tensor.Data(backend: self, buffer: buffer)
     }
+    if dtype == .int64 {
+      return try await apply(Int64(0))
+    } else {
+      return try await apply(Float(0))
+    }
+  }
 
-    public func scatter(
-      _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
-    )
-      throws
-      -> Tensor.Data
-    {
+  override public func scatter(
+    _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a, s.indices)
+    let flatIndices = try await serialize {
       var flatIndices = [Int64](repeating: 0, count: s.indicesCount)
       try pointerToArray(s.indices.buffer.contents(), output: &flatIndices, dtype: .int64)
-      func apply<T: NumericTensorElement>(_ zero: T) throws -> Tensor.Data {
+      return flatIndices
+    }
+    func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: s.scatterInCount * dtype.byteSize)
+      try await serialize {
         var inArr = [T](repeating: zero, count: s.scatterOutCount)
         try pointerToArray(a.buffer.contents(), output: &inArr, dtype: dtype)
         var outArr = [T](repeating: zero, count: s.scatterInCount)
@@ -441,28 +566,32 @@ open class CPUBackend: Backend {
             }
           }
         }
-        let buffer = try allocate(length: s.scatterInCount * dtype.byteSize)
         try arrayToPointer(outArr, output: buffer.contents(), dtype: dtype)
-        return Tensor.Data(backend: backend, buffer: buffer)
       }
-      if dtype == .int64 {
-        return try apply(Int64(0))
-      } else {
-        return try apply(Float(0))
-      }
+      return Tensor.Data(backend: self, buffer: buffer)
     }
+    if dtype == .int64 {
+      return try await apply(Int64(0))
+    } else {
+      return try await apply(Float(0))
+    }
+  }
 
-    public func matmul(
-      a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
-      inner: Int, cols: Int,
-      dtype: Tensor.DType
-    )
-      throws
-      -> Tensor.Data
-    {
-      let aCount = rows * inner
-      let bCount = inner * cols
-      func apply<T: NumericTensorElement>(_ zero: T) throws -> Tensor.Data {
+  override public func matmul(
+    a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
+    inner: Int, cols: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a, b)
+
+    let aCount = rows * inner
+    let bCount = inner * cols
+    func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: aCount * bCount * dtype.byteSize)
+      try await serialize {
         var arrA = [T](repeating: zero, count: aCount)
         var arrB = [T](repeating: zero, count: bCount)
         try pointerToArray(a.buffer.contents(), output: &arrA, dtype: dtype)
@@ -502,63 +631,28 @@ open class CPUBackend: Backend {
             setC(i, j, acc)
           }
         }
-        let buffer = try allocate(length: arrC.count * dtype.byteSize)
         try arrayToPointer(arrC, output: buffer.contents(), dtype: dtype)
-        return Tensor.Data(backend: backend, buffer: buffer)
       }
-      if dtype == .int64 {
-        return try apply(Int64(0))
-      } else {
-        return try apply(Float(0))
-      }
+      return Tensor.Data(backend: self, buffer: buffer)
     }
-  }
-
-  private var queue = DispatchQueue(label: "cpu-backend-worker")
-  private static var _global = CPUBackend()
-  public static var global: CPUBackend { CPUBackend._global }
-
-  private var _allocatorDevice: MTLDevice?
-  private var allocatorDevice: MTLDevice {
-    get throws {
-      if let d = _allocatorDevice {
-        return d
-      }
-      if let d = MTLCreateSystemDefaultDevice() {
-        _allocatorDevice = d
-        return d
-      }
-      throw BackendError.failedToCreateMTLDevice
-    }
-  }
-
-  override public func execute<T>(_ work: (BackendHandle) throws -> T) async throws -> T {
-    return try await withCheckedThrowingContinuation { continuation in
-      queue.sync {
-        do {
-          continuation.resume(
-            returning: try work(Handle(backend: self, device: try allocatorDevice)))
-        } catch {
-          continuation.resume(throwing: error)
-        }
-      }
+    if dtype == .int64 {
+      return try await apply(Int64(0))
+    } else {
+      return try await apply(Float(0))
     }
   }
 
 }
 
-open class MPSBackend: Backend {
-
-  open class Handle: CPUBackend.Handle {
-  }
+open class MPSBackend: CPUBackend {
 
   private var queue = DispatchQueue(label: "mps-backend-worker")
-  public let device: MTLDevice
-  private let commandQueue: MTLCommandQueue
+  private var commandQueue: MTLCommandQueue? = nil
 
   public init(device: MTLDevice? = nil, commandQueue: MTLCommandQueue? = nil) throws {
+    super.init()
     if let device = device {
-      self.device = device
+      self._device = device
       if let commandQueue = commandQueue {
         self.commandQueue = commandQueue
       } else {
@@ -572,24 +666,11 @@ open class MPSBackend: Backend {
       guard let d = MTLCreateSystemDefaultDevice() else {
         throw BackendError.failedToCreateMTLDevice
       }
-      self.device = d
+      self._device = d
       guard let q = d.makeCommandQueue() else {
         throw BackendError.failedToCreateCommandQueue
       }
       self.commandQueue = q
-    }
-  }
-
-  override public func execute<T>(_ work: (BackendHandle) throws -> T) async throws -> T {
-    return try await withCheckedThrowingContinuation { continuation in
-      queue.sync {
-        do {
-          continuation.resume(
-            returning: try work(Handle(backend: self, device: device, commandQueue: commandQueue)))
-        } catch {
-          continuation.resume(throwing: error)
-        }
-      }
     }
   }
 

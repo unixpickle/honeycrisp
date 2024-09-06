@@ -25,7 +25,7 @@ public struct ScatterGatherIndices {
 }
 
 extension Tensor {
-  public func gather(axis: Int, indices: Tensor, backend: Backend? = nil) -> Tensor {
+  public func gather(axis: Int, indices: Tensor) -> Tensor {
     let axis = positiveAxis(axis)!
     assert(indices.dtype == .int64, "can only gather with indices of dtype \(indices.dtype)")
     assert(
@@ -40,20 +40,19 @@ extension Tensor {
         "tensor shape \(shape) must match indices shape \(indices) except at axis \(axis)")
     }
 
-    let backend = backend ?? Backend.defaultBackend
+    let backend = Backend.current
     let newData = Task {
-      let (innerData, indexData) = try await backend.waitForData(await data, await indices.data)
-      return try await backend.execute { handle in
-        let info = ScatterGatherIndices(
+      try await backend.gather(
+        try await self.data,
+        ScatterGatherIndices(
           broadcasted: indices.shape.count != shape.count,
-          indices: indexData,
+          indices: try await indices.data,
           outCount: indices.shape.count == 1 ? indices.shape[0] : indices.shape[axis],
           outerCount: shape[..<axis].product(),
           middleCount: shape[axis],
           innerCount: shape[(axis + 1)...].product()
-        )
-        return try handle.gather(innerData, info, dtype: dtype)
-      }
+        ),
+        dtype: dtype)
     }
     if !needsGrad {
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype)
@@ -61,12 +60,14 @@ extension Tensor {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { [self] grad in
         try handle.backward(
-          grad.scatter(axis: axis, count: shape[axis], indices: indices, backend: backend))
+          backend.use {
+            grad.scatter(axis: axis, count: shape[axis], indices: indices)
+          })
       }
     }
   }
 
-  public func scatter(axis: Int, count: Int, indices: Tensor, backend: Backend? = nil) -> Tensor {
+  public func scatter(axis: Int, count: Int, indices: Tensor) -> Tensor {
     let axis = positiveAxis(axis)!
     assert(indices.dtype == .int64, "can only scatter with indices of dtype \(indices.dtype)")
     assert(
@@ -76,27 +77,26 @@ extension Tensor {
     var newShape = shape
     newShape[axis] = count
 
-    let backend = backend ?? Backend.defaultBackend
+    let backend = Backend.current
     let newData = Task { [self] in
-      let (innerData, indexData) = try await backend.waitForData(await data, await indices.data)
-      return try await backend.execute { handle in
-        let selection = ScatterGatherIndices(
+      try await backend.scatter(
+        try await self.data,
+        ScatterGatherIndices(
           broadcasted: indices.shape.count != shape.count,
-          indices: indexData,
+          indices: try await indices.data,
           outCount: indices.shape.count == 1 ? indices.shape[0] : indices.shape[axis],
           outerCount: shape[..<axis].product(),
           middleCount: count,
           innerCount: shape[(axis + 1)...].product()
-        )
-        return try handle.scatter(innerData, selection, dtype: dtype)
-      }
+        ), dtype: dtype)
     }
     if !needsGrad {
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype)
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { grad in
-        try handle.backward(grad.gather(axis: axis, indices: indices, backend: backend))
+        try handle.backward(
+          backend.use { grad.gather(axis: axis, indices: indices) })
       }
     }
   }
