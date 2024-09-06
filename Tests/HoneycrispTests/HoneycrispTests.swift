@@ -109,7 +109,7 @@ final class HoneycrispTests: XCTestCase {
       x.onGrad { xGrad = $0 }
     }
 
-    let repeated = useX().repeated(repeats: 2, axis: 2)
+    let repeated = useX().repeating(axis: 2, count: 2)
     XCTAssertEqual(repeated.shape, [1, 2, 6, 1])
     try repeated.backward(
       Tensor(
@@ -220,51 +220,61 @@ final class HoneycrispTests: XCTestCase {
     XCTAssertEqual(yGrad!.shape, y.shape)
   }
 
-  // func testSlice() throws {
-  //   let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2])
-  //   XCTAssertEqual(x[1].data, [3, 4])
-  //   XCTAssertEqual(x[1..<3].data, [3, 4, 5, 6])
-  //   XCTAssertEqual(x[1...2].data, [3, 4, 5, 6])
-  //   XCTAssertEqual(x[1..<2].data, [3, 4])
-  //   XCTAssertEqual(x[(-2)..<(-1)].data, [3, 4])
-  //   XCTAssertEqual(x[(-2)...(-1)].data, [3, 4, 5, 6])
-  //   XCTAssertEqual(x[(-2)...].data, [3, 4, 5, 6])
-  //   XCTAssertEqual(x[...(-2)].data, [1, 2, 3, 4])
-  //   XCTAssertEqual(x[..<(-2)].data, [1, 2])
+  func testIndexing() async throws {
+    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2])
+    XCTAssertEqual(x[0].shape, [2])
+    XCTAssertEqual(x[..., 0].shape, [3])
+    try await assertDataEqual(x[1], [3, 4])
+    try await assertDataEqual(x[1..<3], [3, 4, 5, 6])
+    try await assertDataEqual(x[1...2], [3, 4, 5, 6])
+    try await assertDataEqual(x[1..<2], [3, 4])
+    try await assertDataEqual(x[(-2)..<(-1)], [3, 4])
+    try await assertDataEqual(x[(-2)...(-1)], [3, 4, 5, 6])
+    try await assertDataEqual(x[(-2)...], [3, 4, 5, 6])
+    try await assertDataEqual(x[...(-2)], [1, 2, 3, 4])
+    try await assertDataEqual(x[..<(-2)], [1, 2])
 
-  //   let y = Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], shape: [3, 1, 4])
-  //   XCTAssertEqual(y[..., 0].shape, [3, 4])
-  //   XCTAssertEqual(y[..., 0].data, y.data)
-  //   XCTAssertEqual(y[0, 0, 0].shape, [])
-  //   XCTAssertEqual(y[0, 0, 0].data, [1])
-  //   XCTAssertEqual(y[0...1, ..., 3].data, [4, 8])
-  //   XCTAssertEqual(y[0..<2, ..., 3].data, [4, 8])
-  //   XCTAssertEqual(y[0...2, ..., 3].data, [4, 8, 12])
-  //   XCTAssertEqual(y[0..<3, ..., 3].data, [4, 8, 12])
-  //   XCTAssertEqual(y[0..., ..., 3].data, [4, 8, 12])
-  //   XCTAssertEqual(y[1...2, ..., 2...3].data, [7, 8, 11, 12])
-  //   XCTAssertEqual(y[0...2, ..., 2...3].data, [3, 4, 7, 8, 11, 12])
-  //   XCTAssertEqual(y[0...2, 0..<1, 2...3].data, [3, 4, 7, 8, 11, 12])
-  //   XCTAssertEqual(y[FullRange(dims: 3), NewAxis()].data, y.data)
-  //   XCTAssertEqual(y[FullRange(dims: 3), NewAxis()].shape, [3, 1, 4, 1])
-  //   XCTAssertEqual(y[FullRange(dims: 2), NewAxis()].data, y.data)
-  //   XCTAssertEqual(y[FullRange(dims: 2), NewAxis()].shape, [3, 1, 1, 4])
-  //   XCTAssertEqual(y[FullRange(dims: 1), NewAxis()].data, y.data)
-  //   XCTAssertEqual(y[FullRange(dims: 1), NewAxis()].shape, [3, 1, 1, 4])
-  //   XCTAssertEqual(y[NewAxis()].data, y.data)
-  //   XCTAssertEqual(y[NewAxis()].shape, [1, 3, 1, 4])
+    let y = Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], shape: [3, 1, 4])
+    XCTAssertEqual(y[..., 0].shape, [3, 4])
+    try await assertDataEqual(y[..., 0], y)
+    XCTAssertEqual(y[0, ..., 0].shape, [1])
+    try await assertDataEqual(y[0, ..., 0], [1])
+    XCTAssertEqual(y[..., 0, ...].shape, [3, 4])
+    try await assertDataEqual(y[0, FullRange(dims: 2)], [1, 2, 3, 4])
+    XCTAssertEqual(y[0, FullRange(dims: 2)].shape, [1, 4])
+    try await assertDataEqual(y[..., 0, ...], y)
+    XCTAssertEqual(y[0, 0, 0].shape, [])
+    try await assertDataEqual(y[0, 0, 0], [1])
+    try await assertDataEqual(y[0...1, ..., 3], [4, 8])
+    try await assertDataEqual(y[0..<2, ..., 3], [4, 8])
+    try await assertDataEqual(y[0...2, ..., 3], [4, 8, 12])
+    try await assertDataEqual(y[0..<3, ..., 3], [4, 8, 12])
+    try await assertDataEqual(y[0..., ..., 3], [4, 8, 12])
+    try await assertDataEqual(y[1...2, ..., 2...3], [7, 8, 11, 12])
+    try await assertDataEqual(y[0...2, ..., 2...3], [3, 4, 7, 8, 11, 12])
+    try await assertDataEqual(y[0...2, 0..<1, 2...3], [3, 4, 7, 8, 11, 12])
+    try await assertDataEqual(y[FullRange(dims: 3), NewAxis()], y)
+    XCTAssertEqual(y[FullRange(dims: 3), NewAxis()].shape, [3, 1, 4, 1])
+    try await assertDataEqual(y[FullRange(dims: 2), NewAxis()], y)
+    XCTAssertEqual(y[FullRange(dims: 2), NewAxis()].shape, [3, 1, 1, 4])
+    try await assertDataEqual(y[FullRange(dims: 1), NewAxis()], y)
+    XCTAssertEqual(y[FullRange(dims: 1), NewAxis()].shape, [3, 1, 1, 4])
+    try await assertDataEqual(y[NewAxis()], y)
+    XCTAssertEqual(y[NewAxis()].shape, [1, 3, 1, 4])
 
-  //   var yGrad: Tensor?
-  //   let yParam = y.onGrad { grad in yGrad = grad }
-  //   yParam[1...2, ..., 2...3].backward(grad: Tensor(data: [1, 2, 3, 4], shape: [2, 1, 2]))
-  //   XCTAssertEqual(yGrad!.shape, y.shape)
-  //   XCTAssertEqual(yGrad!.data, [0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 4])
+    XCTAssertEqual(y[..., 0, 3].shape, [3])
 
-  //   let yParam1 = y.onGrad { grad in yGrad = grad }
-  //   yParam1[..., 0, 3].backward(grad: Tensor(data: [1, 2, 3], shape: [3]))
-  //   XCTAssertEqual(yGrad!.shape, y.shape)
-  //   XCTAssertEqual(yGrad!.data, [0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3])
-  // }
+    var yGrad: Tensor?
+    let yParam = y.onGrad { grad in yGrad = grad }
+    try yParam[1...2, ..., 2...3].backward(Tensor(data: [1, 2, 3, 4], shape: [2, 1, 2]))
+    XCTAssertEqual(yGrad!.shape, y.shape)
+    try await assertDataEqual(yGrad!, [0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 4])
+
+    let yParam1 = y.onGrad { grad in yGrad = grad }
+    try yParam1[..., 0, 3].backward(Tensor(data: [1, 2, 3], shape: [3]))
+    XCTAssertEqual(yGrad!.shape, y.shape)
+    try await assertDataEqual(yGrad!, [0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3])
+  }
 
   // func testEquality() throws {
   //   let t1 = Tensor(data: [1, 2, 3, 4, 3, 1, 2, 0], shape: [2, 4])
@@ -577,3 +587,18 @@ final class HoneycrispTests: XCTestCase {
 //   }
 //   XCTAssert(allGood, "tensors \(x.data) and \(y.data) are not equal")
 // }
+
+func assertDataEqual(
+  _ x: Tensor, _ y: [Float], file: StaticString = #filePath, line: UInt = #line
+) async throws {
+  let data = try await x.floats()
+  XCTAssertEqual(data, y, file: file, line: line)
+}
+
+func assertDataEqual(
+  _ x: Tensor, _ y: Tensor, file: StaticString = #filePath, line: UInt = #line
+) async throws {
+  let data = try await x.floats()
+  let data1 = try await y.floats()
+  XCTAssertEqual(data, data1, file: file, line: line)
+}
