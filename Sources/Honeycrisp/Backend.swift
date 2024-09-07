@@ -165,6 +165,13 @@ open class Backend {
     throw BackendError.notImplemented
   }
 
+  public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
 }
 
 open class CPUBackend: Backend {
@@ -364,20 +371,20 @@ open class CPUBackend: Backend {
   {
     try await waitForData(a)
 
-    func apply<T1: NumericTensorElement>(_ x: T1) async throws -> Tensor.Data {
+    func apply<T1: NumericTensorElement>(_ b: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        var arr = [T1](repeating: x, count: count)
+        var arr = [T1](repeating: T1(0.0), count: count)
         try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
-        let cData = arr.map { $0.pow(x) }
+        let cData = arr.map { $0.pow(b) }
         try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
       }
       return Tensor.Data(backend: self, buffer: buffer)
     }
     if dtype == .int64 {
-      return try await apply(Int64(0))
+      return try await apply(b.toInt64())
     } else {
-      return try await apply(Float(0))
+      return try await apply(b.toFloat())
     }
   }
 
@@ -640,6 +647,21 @@ open class CPUBackend: Backend {
     } else {
       return try await apply(Float(0))
     }
+  }
+
+  override public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a)
+    let buffer = try await allocate(length: count * dtype.byteSize)
+    try await serialize {
+      var arr = [Float](repeating: 0, count: count)
+      try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
+      let cData = arr.map(op.apply)
+      try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+    }
+    return Tensor.Data(backend: self, buffer: buffer)
   }
 
 }
