@@ -26,7 +26,7 @@ public struct ScatterGatherIndices {
 
 extension Tensor {
   public func gather(axis: Int, indices: Tensor) -> Tensor {
-    let axis = positiveAxis(axis)!
+    let axis = positiveAxis(axis)
     assert(indices.dtype == .int64, "can only gather with indices of dtype \(indices.dtype)")
     assert(
       shape.count == indices.shape.count || indices.shape.count == 1,
@@ -59,7 +59,7 @@ extension Tensor {
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { [self] grad in
-        try handle.backward(
+        handle.backward(
           backend.use {
             grad.scatter(axis: axis, count: shape[axis], indices: indices)
           })
@@ -68,7 +68,7 @@ extension Tensor {
   }
 
   public func scatter(axis: Int, count: Int, indices: Tensor) -> Tensor {
-    let axis = positiveAxis(axis)!
+    let axis = positiveAxis(axis)
     assert(indices.dtype == .int64, "can only scatter with indices of dtype \(indices.dtype)")
     assert(
       shape == indices.shape || (indices.shape.count == 1 && shape[axis] == indices.shape[0]),
@@ -95,7 +95,7 @@ extension Tensor {
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { grad in
-        try handle.backward(
+        handle.backward(
           backend.use { grad.gather(axis: axis, indices: indices) })
       }
     }

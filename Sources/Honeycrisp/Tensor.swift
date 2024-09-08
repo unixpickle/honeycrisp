@@ -37,7 +37,7 @@ public class Tensor {
   }
 
   public final class BackwardHandle {
-    private var addGrad: ((Tensor) throws -> Void)?
+    private var addGrad: ((Tensor) -> Void)?
     private var cancel: (() -> Void)?
 
     init() {
@@ -45,18 +45,18 @@ public class Tensor {
       self.cancel = { () in () }
     }
 
-    init(addGrad: @escaping (Tensor) throws -> Void, cancel: @escaping () -> Void) {
+    init(addGrad: @escaping (Tensor) -> Void, cancel: @escaping () -> Void) {
       self.addGrad = addGrad
       self.cancel = cancel
     }
 
-    public func backward(_ grad: Tensor) throws {
+    public func backward(_ grad: Tensor) {
       assert(!grad.needsGrad, "second-order gradients are not supported")
       assert(addGrad != nil, "cannot re-use backward handle")
       let ag = addGrad!
       addGrad = nil
       cancel = nil
-      try ag(grad)
+      ag(grad)
     }
 
     deinit {
@@ -77,7 +77,7 @@ public class Tensor {
     }
   }
 
-  private var backwardImpl: (((Tensor) throws -> Void))?
+  private var backwardImpl: (((Tensor) -> Void))?
 
   // State used during backward pass to accumulate gradients.
   private var curGrad: Tensor? = nil
@@ -85,7 +85,7 @@ public class Tensor {
 
   public init(
     dataTask: Task<Data, Error>, shape: [Int], dtype: DType,
-    backwardImpl: (((Tensor) throws -> Void))? = nil
+    backwardImpl: (((Tensor) -> Void))? = nil
   ) {
     self.dataTask = dataTask
     self.shape = shape
@@ -95,7 +95,7 @@ public class Tensor {
   }
 
   public init<T: TensorElement>(
-    data: [T], shape: [Int], dtype: DType? = nil, backwardImpl: ((Tensor) throws -> Void)? = nil
+    data: [T], shape: [Int], dtype: DType? = nil, backwardImpl: ((Tensor) -> Void)? = nil
   ) {
     let dtype = dtype ?? T.dtype
     if !dtype.supportsGrad {
@@ -173,14 +173,14 @@ public class Tensor {
     return Tensor(dataTask: dataTask, shape: shape, dtype: dtype)
   }
 
-  public func onGrad(_ action: @escaping ((Tensor) throws -> Void)) -> Tensor {
+  public func onGrad(_ action: @escaping ((Tensor) -> Void)) -> Tensor {
     if !needsGrad {
       return Tensor(dataTask: dataTask, shape: shape, dtype: dtype, backwardImpl: action)
     }
     let handle = self.saveForBackward()
     return Tensor(dataTask: dataTask, shape: shape, dtype: dtype) { grad in
-      try action(grad)
-      try handle.backward(grad)
+      action(grad)
+      handle.backward(grad)
     }
   }
 
@@ -194,13 +194,20 @@ public class Tensor {
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: dataTask, shape: newShape, dtype: dtype) { [self] grad in
-        try handle.backward(grad.reshape(shape))
+        handle.backward(grad.reshape(shape))
       }
     }
   }
 
   public func flatten() -> Tensor {
     return reshape([shape.product()])
+  }
+
+  public func squeeze(axis: Int) -> Tensor {
+    assert(shape[positiveAxis(axis)] == 1, "cannot squeeze axis \(axis) for shape \(shape)")
+    var newShape = shape
+    newShape.remove(at: axis)
+    return reshape(newShape)
   }
 
   public func cast(as t: Tensor) -> Tensor {
@@ -221,69 +228,9 @@ public class Tensor {
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: shape, dtype: newType) { grad in
-        try handle.backward(grad.cast(self.dtype))
+        handle.backward(grad.cast(self.dtype))
       }
     }
-  }
-
-  public func elemwise(op: ElemwiseOp, grad gradOp: ElemwiseOp? = nil) -> Tensor {
-    let backend = Backend.current
-    let newData = Task {
-      try await backend.elemwise(
-        try await self.data, op: op, count: shape.product(), dtype: dtype)
-    }
-    if let gradOp = gradOp, needsGrad {
-      let handle = self.saveForBackward()
-      return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
-        try handle.backward(backend.use { grad * self.noGrad().elemwise(op: gradOp) })
-      }
-    } else {
-      return Tensor(dataTask: newData, shape: shape, dtype: dtype)
-    }
-  }
-
-  public func sin() -> Tensor {
-    self.elemwise(op: .sin, grad: .cos)
-  }
-
-  public func cos() -> Tensor {
-    self.elemwise(op: .cos, grad: .minusSin)
-  }
-
-  public func exp() -> Tensor {
-    self.elemwise(op: .exp, grad: .exp)
-  }
-
-  public func log() -> Tensor {
-    self.elemwise(op: .log, grad: .recip)
-  }
-
-  public func sigmoid() -> Tensor {
-    self.elemwise(op: .sigmoid, grad: .sigmoidGrad)
-  }
-
-  public func relu() -> Tensor {
-    self.elemwise(op: .relu, grad: .reluGrad)
-  }
-
-  public func tanh() -> Tensor {
-    2 * (2 * self).sigmoid() - 1
-  }
-
-  public func gelu() -> Tensor {
-    0.5 * self * (1 + (0.797884561 * (self + 0.044715 * self.pow(3))).tanh())
-  }
-
-  public func silu() -> Tensor {
-    return self * self.sigmoid()
-  }
-
-  public func sqrt() -> Tensor {
-    pow(0.5)
-  }
-
-  public func rsqrt() -> Tensor {
-    pow(-0.5)
   }
 
   public static func + <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
@@ -326,8 +273,8 @@ public class Tensor {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        try lhsHandle.backward(grad)
-        try rhsHandle.backward(grad)
+        lhsHandle.backward(grad)
+        rhsHandle.backward(grad)
       }
     }
   }
@@ -343,7 +290,7 @@ public class Tensor {
     } else {
       let lhsHandle = lhs.saveForBackward()
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        try lhsHandle.backward(backend.use { grad * rhs })
+        lhsHandle.backward(backend.use { grad * rhs })
       }
     }
   }
@@ -372,8 +319,8 @@ public class Tensor {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        try lhsHandle.backward(backend.use { grad * rhs.noGrad() })
-        try rhsHandle.backward(backend.use { grad * lhs.noGrad() })
+        lhsHandle.backward(backend.use { grad * rhs.noGrad() })
+        rhsHandle.backward(backend.use { grad * lhs.noGrad() })
       }
     }
   }
@@ -407,7 +354,7 @@ public class Tensor {
     } else {
       let lhsHandle = saveForBackward()
       return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
-        try lhsHandle.backward(
+        lhsHandle.backward(
           backend.use { grad * exponent * self.noGrad().pow(exponent - T(1.0)) })
       }
     }
@@ -453,7 +400,7 @@ public class Tensor {
     return Tensor(dataTask: newData, shape: lhs.shape, dtype: .bool)
   }
 
-  public func backward(_ grad: Tensor? = nil) throws {
+  public func backward(_ grad: Tensor? = nil) {
     assert(needsGrad, "backward called on Tensor that does not need grad")
     let grad =
       if let grad = grad {
@@ -463,7 +410,7 @@ public class Tensor {
       }
 
     assert(numBackwardHandles == 0, "cannot call backward() on tensor that is used elsewhere")
-    try self.saveForBackward().backward(grad)
+    self.saveForBackward().backward(grad)
   }
 
   public func saveForBackward() -> BackwardHandle {
@@ -490,7 +437,7 @@ public class Tensor {
         if let grad = curGrad, numBackwardHandles == 0 {
           let bwd = backwardImpl!
           backwardImpl = nil
-          try bwd(grad)
+          bwd(grad)
           curGrad = nil
         }
       },
@@ -500,6 +447,21 @@ public class Tensor {
           assert(false, "backward pass was incompleted due to an unused reference")
         }
       })
+  }
+
+  internal func positiveAxis(_ axis: Int?) -> Int? {
+    if let axis = axis {
+      // Type annotation needed to clarify overload of method.
+      let result: Int = positiveAxis(axis)
+      return result
+    } else {
+      return nil
+    }
+  }
+  internal func positiveAxis(_ axis: Int) -> Int {
+    let result = axis < 0 ? axis + shape.count : axis
+    assert(result >= 0, "axis \(axis) out of bounds for shape \(shape)")
+    return result
   }
 
 }
