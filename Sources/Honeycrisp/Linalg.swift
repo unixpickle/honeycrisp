@@ -35,11 +35,11 @@ extension Tensor {
       let handleA = a.saveForBackward()
       let handleB = b.saveForBackward()
       return Tensor(dataTask: newData, shape: outShape, dtype: a.dtype) { grad in
-        try handleA.backward(
+        handleA.backward(
           backend.use {
             matmul(a: grad, transA: false, b: b.noGrad(), transB: true, transOut: false)
           })
-        try handleB.backward(
+        handleB.backward(
           backend.use {
             matmul(a: a.noGrad(), transA: true, b: grad, transB: false, transOut: false)
           })
