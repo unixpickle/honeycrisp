@@ -62,6 +62,17 @@ final class HoneycrispTests: XCTestCase {
     try await assertDataEqual(t1 == t2, [1, 0, 0, 1, 0, 0, 0, 1])
   }
 
+  func testComparison() async throws {
+    let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0], shape: [5])
+    let y = Tensor(data: [1.5, 2, 2, -2, -3], shape: [5])
+    try await assertDataEqual(x <= y, [1, 1, 0, 1, 0])
+    try await assertDataEqual(x < y, [1, 0, 0, 0, 0])
+    try await assertDataEqual(x >= y, [0, 1, 1, 1, 1])
+    try await assertDataEqual(x > y, [0, 0, 1, 0, 1])
+    XCTAssertEqual((x >= y).dtype, .bool)
+    XCTAssertEqual((x >= y).shape, x.shape)
+  }
+
   func testSum() async throws {
     let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0, 7.0], shape: [1, 2, 3, 1])
     var xGrad: Tensor?

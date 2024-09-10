@@ -84,8 +84,8 @@ open class Backend {
     throw BackendError.notImplemented
   }
 
-  public func equals(
-    _ a: Tensor.Data, _ b: Tensor.Data, count: Int, dtype: Tensor.DType
+  public func compare(
+    _ a: Tensor.Data, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -93,8 +93,17 @@ open class Backend {
     throw BackendError.notImplemented
   }
 
-  public func equals<T: TensorElement>(
-    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+  public func compare<T: TensorElement>(
+    _ a: Tensor.Data, _ b: T, op: ComparisonOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
+  public func compare<T: TensorElement>(
+    _ a: T, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -236,7 +245,7 @@ open class CPUBackend: Backend {
         var bData = [T](repeating: x, count: count)
         try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
         try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
-        let cData = op.apply(aData, bData)
+        let cData = zip(aData, bData).map { op.apply($0, $1) }
         try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
       }
       return Tensor.Data(backend: self, buffer: buffer)
@@ -261,7 +270,7 @@ open class CPUBackend: Backend {
       try await serialize {
         var aData = [T1](repeating: T1(0.0), count: count)
         try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
-        let cData = op.apply(aData, b)
+        let cData = aData.map { op.apply($0, b) }
         try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
       }
       return Tensor.Data(backend: self, buffer: buffer)
@@ -285,7 +294,7 @@ open class CPUBackend: Backend {
       try await serialize {
         var bData = [T1](repeating: T1(0.0), count: count)
         try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
-        let cData = op.apply(a, bData)
+        let cData = bData.map { op.apply(a, $0) }
         try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
       }
       return Tensor.Data(backend: self, buffer: buffer)
@@ -297,8 +306,8 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func equals(
-    _ a: Tensor.Data, _ b: Tensor.Data, count: Int, dtype: Tensor.DType
+  override public func compare(
+    _ a: Tensor.Data, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -312,7 +321,7 @@ open class CPUBackend: Backend {
         var bData = [T1](repeating: T1(0.0), count: count)
         try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
         try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
-        let cData = zip(aData, bData).map { $0 == $1 }
+        let cData = zip(aData, bData).map { op.apply($0, $1) }
         try arrayToPointer(cData, output: buffer.contents(), dtype: .bool)
       }
       return Tensor.Data(backend: self, buffer: buffer)
@@ -324,8 +333,8 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func equals<T: TensorElement>(
-    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+  override public func compare<T: TensorElement>(
+    _ a: Tensor.Data, _ b: T, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -336,7 +345,7 @@ open class CPUBackend: Backend {
       try await serialize {
         var aData = [T1](repeating: T1(0.0), count: count)
         try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
-        let cData = aData.map { $0 == b }
+        let cData = aData.map { op.apply($0, b) }
         try arrayToPointer(cData, output: buffer.contents(), dtype: .bool)
       }
       return Tensor.Data(backend: self, buffer: buffer)
@@ -345,6 +354,30 @@ open class CPUBackend: Backend {
       return try await apply(b.toInt64())
     } else {
       return try await apply(b.toFloat())
+    }
+  }
+
+  override public func compare<T: TensorElement>(
+    _ a: T, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(b)
+    func apply<T1: NumericTensorElement>(_ a: T1) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: count * Tensor.DType.bool.byteSize)
+      try await serialize {
+        var bData = [T1](repeating: T1(0.0), count: count)
+        try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
+        let cData = bData.map { op.apply(a, $0) }
+        try arrayToPointer(cData, output: buffer.contents(), dtype: .bool)
+      }
+      return Tensor.Data(backend: self, buffer: buffer)
+    }
+    if dtype == .int64 {
+      return try await apply(a.toInt64())
+    } else {
+      return try await apply(a.toFloat())
     }
   }
 

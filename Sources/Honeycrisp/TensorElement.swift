@@ -7,7 +7,7 @@ enum ConversionError: Error {
   case vImageError(String)
 }
 
-public protocol TensorElement {
+public protocol TensorElement: Comparable {
   static var isFloatLossy: Bool { get }
   static var dtype: Tensor.DType { get }
 
@@ -19,7 +19,7 @@ public protocol TensorElement {
   static func == (lhs: Self, rhs: Self) -> Bool
 }
 
-public protocol NumericTensorElement: TensorElement, Comparable {
+public protocol NumericTensorElement: TensorElement {
   func pow<T: TensorElement>(_ exponent: T) -> Self
 
   static func + (lhs: Self, rhs: Self) -> Self
@@ -98,6 +98,22 @@ extension Bool: TensorElement {
 
   public func toInt64() -> Int64 {
     return self ? 1 : 0
+  }
+
+  public static func < (lhs: Self, rhs: Self) -> Bool {
+    lhs == false && rhs == true
+  }
+
+  public static func <= (lhs: Self, rhs: Self) -> Bool {
+    lhs == false
+  }
+
+  public static func >= (lhs: Self, rhs: Self) -> Bool {
+    lhs == true
+  }
+
+  public static func > (lhs: Self, rhs: Self) -> Bool {
+    lhs == true && rhs == false
   }
 }
 
