@@ -172,6 +172,15 @@ open class Backend {
     throw BackendError.notImplemented
   }
 
+  public func concat(
+    _ inputs: [Tensor.Data], outerCount: Int, innerCounts: [Int], dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented
+  }
+
 }
 
 open class CPUBackend: Backend {
@@ -660,6 +669,33 @@ open class CPUBackend: Backend {
       try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
       let cData = arr.map(op.apply)
       try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+    }
+    return Tensor.Data(backend: self, buffer: buffer)
+  }
+
+  override public func concat(
+    _ inputs: [Tensor.Data], outerCount: Int, innerCounts: [Int], dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    assert(inputs.count == innerCounts.count)
+    for input in inputs {
+      try await waitForData(input)
+    }
+    let totalInner = innerCounts.sum()
+    let buffer = try await allocate(length: outerCount * totalInner * dtype.byteSize)
+    try await serialize {
+      var outOffset = 0
+      for i in 0..<outerCount {
+        for (input, innerCount) in zip(inputs, innerCounts) {
+          let chunkSize = innerCount * dtype.byteSize
+          let outPtr = buffer.contents().advanced(by: outOffset)
+          let inPtr = input.buffer.contents().advanced(by: i * chunkSize)
+          outPtr.copyMemory(from: inPtr, byteCount: chunkSize)
+          outOffset += chunkSize
+        }
+      }
     }
     return Tensor.Data(backend: self, buffer: buffer)
   }

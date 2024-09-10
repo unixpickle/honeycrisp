@@ -129,12 +129,12 @@ public class Tensor {
     self.init(constant: Float(1), like: onesLike)
   }
 
-  public convenience init(zeros shape: [Int]) {
-    self.init(constant: Float(0), shape: shape)
+  public convenience init(zeros shape: [Int], dtype: DType = .float32) {
+    self.init(constant: Float(0), shape: shape, dtype: dtype)
   }
 
-  public convenience init(ones shape: [Int]) {
-    self.init(constant: Float(1), shape: shape)
+  public convenience init(ones shape: [Int], dtype: DType = .float32) {
+    self.init(constant: Float(1), shape: shape, dtype: dtype)
   }
 
   public convenience init<T: TensorElement>(constant: T, like: Tensor) {
