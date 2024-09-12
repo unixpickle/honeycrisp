@@ -326,6 +326,45 @@ final class HoneycrispTests: XCTestCase {
     yParam1[..., 0, 3].backward(Tensor(data: [1, 2, 3], shape: [3]))
     XCTAssertEqual(yGrad!.shape, y.shape)
     try await assertDataEqual(yGrad!, [0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3])
+
+    // High dimensional permutations.
+    let bigArr = Tensor(
+      data: [
+        4, 8, 7, 2, 9, 6, 6, 7, 6, 8, 4, 9, 1, 9, 9, 7, 2, 3, 0, 9, 7, 6, 9, 8, 1, 3, 5, 0, 1, 5, 9,
+        5, 0, 5, 4, 0, 2, 9, 8, 7, 5, 5, 7, 3, 0, 1, 5, 1, 9, 6, 3, 3, 6, 7, 1, 4, 6, 1, 6, 3, 2, 8,
+        1, 2, 1, 2, 1, 8, 0, 4, 2, 7, 1, 0, 0, 7, 3, 9, 5, 5, 6, 5, 7, 3, 9, 3, 9, 0, 9, 8, 9, 9, 0,
+        7, 0, 6, 2, 8, 7, 6, 8, 8, 3, 7, 8, 3, 8, 9, 4, 0, 7, 7, 0, 4, 3, 3, 9, 4, 3, 5,
+      ], shape: [2, 1, 3, 5, 4], dtype: .float32)
+    let perm1 = bigArr[PermuteAxes(1, 2, 3, 4, 0)]
+    XCTAssertEqual(perm1.shape, [1, 3, 5, 4, 2])
+    try await assertDataEqual(
+      perm1,
+      [
+        4, 2, 8, 8, 7, 1, 2, 2, 9, 1, 6, 2, 6, 1, 7, 8, 6, 0, 8, 4, 4, 2, 9, 7, 1, 1, 9, 0, 9, 0, 7,
+        7, 2, 3, 3, 9, 0, 5, 9, 5, 7, 6, 6, 5, 9, 7, 8, 3, 1, 9, 3, 3, 5, 9, 0, 0, 1, 9, 5, 8, 9, 9,
+        5, 9, 0, 0, 5, 7, 4, 0, 0, 6, 2, 2, 9, 8, 8, 7, 7, 6, 5, 8, 5, 8, 7, 3, 3, 7, 0, 8, 1, 3, 5,
+        8, 1, 9, 9, 4, 6, 0, 3, 7, 3, 7, 6, 0, 7, 4, 1, 3, 4, 3, 6, 9, 1, 4, 6, 3, 3, 5,
+      ])
+    let perm2 = bigArr[FullRange(dims: 2), PermuteAxes(2, 1, 0)]
+    XCTAssertEqual(perm2.shape, [2, 1, 4, 5, 3])
+    try await assertDataEqual(
+      perm2,
+      [
+        4, 7, 5, 9, 1, 0, 6, 1, 9, 1, 0, 6, 2, 2, 6, 8, 6, 5, 6, 3, 1, 8, 5, 6, 9, 5, 7, 3, 9, 1, 7,
+        9, 7, 6, 5, 5, 4, 9, 3, 9, 4, 1, 0, 8, 6, 2, 8, 3, 7, 0, 1, 9, 5, 3, 7, 0, 4, 9, 7, 3, 2, 6,
+        8, 1, 9, 8, 0, 9, 4, 1, 0, 0, 3, 2, 9, 8, 5, 8, 2, 3, 3, 4, 8, 0, 0, 7, 4, 9, 8, 4, 1, 7, 3,
+        1, 9, 8, 2, 9, 7, 0, 0, 3, 5, 7, 3, 2, 3, 7, 8, 0, 9, 7, 9, 7, 7, 6, 3, 5, 6, 5,
+      ])
+    let perm3 = bigArr[PermuteAxes(1, 0)]
+    XCTAssertEqual(perm3.shape, [1, 2, 3, 5, 4])
+    try await assertDataEqual(
+      perm3,
+      [
+        4, 8, 7, 2, 9, 6, 6, 7, 6, 8, 4, 9, 1, 9, 9, 7, 2, 3, 0, 9, 7, 6, 9, 8, 1, 3, 5, 0, 1, 5, 9,
+        5, 0, 5, 4, 0, 2, 9, 8, 7, 5, 5, 7, 3, 0, 1, 5, 1, 9, 6, 3, 3, 6, 7, 1, 4, 6, 1, 6, 3, 2, 8,
+        1, 2, 1, 2, 1, 8, 0, 4, 2, 7, 1, 0, 0, 7, 3, 9, 5, 5, 6, 5, 7, 3, 9, 3, 9, 0, 9, 8, 9, 9, 0,
+        7, 0, 6, 2, 8, 7, 6, 8, 8, 3, 7, 8, 3, 8, 9, 4, 0, 7, 7, 0, 4, 3, 3, 9, 4, 3, 5,
+      ])
   }
 
   func testElemwise() async throws {
@@ -614,6 +653,25 @@ final class HoneycrispTests: XCTestCase {
     let bErr = abs(bData - 2.718)
     XCTAssert(wErr < 0.05, "model.weight.data[0]=\(wData)")
     XCTAssert(bErr < 0.05, "model.bias.data[0]=\(bData)")
+  }
+
+  func testRandom() async throws {
+    let x = Tensor(randn: [1000, 100])
+    let y = Tensor(randn: [1000, 100], generator: try await Backend.defaultBackend.createRandom())
+    let xMean = try await x.mean().item()
+    let yMean = try await y.mean().item()
+    let xStd = try await (x - xMean).pow(2).mean().sqrt().item()
+    let yStd = try await (y - yMean).pow(2).mean().sqrt().item()
+    XCTAssert(abs(xMean) < 0.03, "unexpected mean of normal: \(xMean)")
+    XCTAssert(abs(yMean) < 0.03, "unexpected mean of normal: \(yMean)")
+    XCTAssert(abs(xStd - 1) < 0.03, "unexpected standard deviation of normal: \(xStd)")
+    XCTAssert(abs(yStd - 1) < 0.03, "unexpected standard deviation of normal: \(yStd)")
+
+    let z = Tensor(rand: [1000, 100])
+    let zMean = try await z.mean().item()
+    let zStd = try await (z - zMean).pow(2).mean().sqrt().item()
+    XCTAssert(abs(zMean - 0.5) < 0.03, "unexpected mean of uniform: \(zMean)")
+    XCTAssert(abs(zStd - 0.288675135) < 0.03, "unexpected standard deviation of uniform: \(zStd)")
   }
 }
 

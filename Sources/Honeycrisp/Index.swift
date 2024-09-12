@@ -148,6 +148,35 @@ extension PartialRangeThrough<Int>: TensorIndex {
   }
 }
 
+public struct PermuteAxes: TensorIndex {
+  public let perm: [Int]
+
+  public var minTensorIndexDims: Int { perm.count }
+
+  public init(_ perm: Int...) {
+    for x in perm {
+      assert(x >= 0 && x < perm.count, "invalid permutation indices \(perm)")
+    }
+    assert(perm.count == Set(perm).count, "permutation has repeated axis \(perm)")
+    self.perm = perm
+  }
+
+  public func tensorIndex(forShape inShape: [Int]) -> TensorIndexResult {
+    assert(
+      perm.count <= inShape.count,
+      "incompatible permutation \(perm) for shape \(inShape)")
+    let reshape = [inShape[..<perm.count].product()] + inShape[perm.count...]
+    let outShape = perm.map { inShape[$0] }
+    let backend = Backend.current
+    let indices = Tensor(
+      dataTask: Task {
+        try await backend.axisPermutation(permutation: perm, shape: Array(inShape[..<perm.count]))
+      }, shape: [reshape[0]], dtype: .int64)
+    return TensorIndexResult(
+      reshape: reshape, indices: indices, gatherAxis: 0, gatherReshape: outShape)
+  }
+}
+
 extension Array: TensorIndex where Element == any TensorIndex {
   public var minTensorIndexDims: Int { self.map({ $0.minTensorIndexDims }).sum() }
 

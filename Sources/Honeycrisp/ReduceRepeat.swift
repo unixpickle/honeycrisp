@@ -41,6 +41,11 @@ extension Tensor {
     gatherFromReduce(op: .argmax, axis: axis, keepdims: keepdims)
   }
 
+  public func mean(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+    let axis = positiveAxis(axis)
+    return sum(axis: axis, keepdims: keepdims) / Float(axis != nil ? shape[axis!] : shape.product())
+  }
+
   internal func gatherFromReduce(op: ReduceOp, axis: Int?, keepdims: Bool) -> Tensor {
     guard let axis = positiveAxis(axis) else {
       let result = flatten().gatherFromReduce(op: op, axis: 0, keepdims: false)

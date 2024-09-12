@@ -2,7 +2,7 @@ import Foundation
 import Metal
 
 public enum BackendError: Error {
-  case notImplemented
+  case notImplemented(String)
   case failedToCreateMTLDevice
   case failedToCreateCommandQueue
   case allocationFailed(Int)
@@ -54,7 +54,7 @@ open class Backend {
   }
 
   public func allocate(length: Int) async throws -> MTLBuffer {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("allocate")
   }
 
   public func binaryOp(
@@ -63,7 +63,7 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("binaryOp")
   }
 
   public func binaryOp<T: NumericTensorElement>(
@@ -72,7 +72,7 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("binaryOp")
   }
 
   public func binaryOp<T: NumericTensorElement>(
@@ -81,7 +81,7 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("binaryOp")
   }
 
   public func compare(
@@ -90,7 +90,7 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("compare")
   }
 
   public func compare<T: TensorElement>(
@@ -99,7 +99,7 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("compare")
   }
 
   public func compare<T: TensorElement>(
@@ -108,14 +108,14 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("compare")
   }
 
   public func cast(_ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType)
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("cast")
   }
 
   public func pow<T: NumericTensorElement>(
@@ -124,7 +124,7 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("pow")
   }
 
   public func reduce(
@@ -133,7 +133,7 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("reduce")
   }
 
   public func repeated(
@@ -142,7 +142,7 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("repeated")
   }
 
   public func gather(
@@ -151,7 +151,7 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("gather")
   }
 
   public func scatter(
@@ -160,7 +160,7 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("scatter")
   }
 
   public func matmul(
@@ -171,14 +171,14 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("matmul")
   }
 
   public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("elemwise")
   }
 
   public func concat(
@@ -187,12 +187,83 @@ open class Backend {
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented
+    throw BackendError.notImplemented("concat")
+  }
+
+  public func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data {
+    throw BackendError.notImplemented("axisPermutation")
+  }
+
+  public func defaultRandom() async throws -> RandomGenerator {
+    throw BackendError.notImplemented("defaultRandom")
+  }
+
+  public func createRandom() async throws -> RandomGenerator {
+    throw BackendError.notImplemented("createRandom")
   }
 
 }
 
 open class CPUBackend: Backend {
+
+  public struct NativeRandomGenerator: RandomGenerator {
+    public let cpuBackend: CPUBackend
+
+    public var backend: Backend {
+      cpuBackend
+    }
+
+    public func save() async throws -> Data {
+      throw BackendError.notImplemented("save")
+    }
+
+    public func restore(_ x: Data) async throws {
+      throw BackendError.notImplemented("restore")
+    }
+
+    public func seed(_ x: Int) async throws {
+      throw BackendError.notImplemented("seed")
+    }
+
+    public func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) async throws
+      -> Tensor.Data
+    {
+      let buffer = try await backend.allocate(length: count * dtype.byteSize)
+      try await backend.serialize {
+        switch dist {
+        case .uniform:
+          let arr = (0..<count).map { _ in Float.random(in: 0..<1.0) }
+          try arrayToPointer(arr, output: buffer.contents(), dtype: dtype)
+        case .normal:
+          let elCount = count / 2 + (count % 2)
+          var results = [Float]()
+          for _ in 0..<elCount {
+            let u1 = Float.random(in: 1e-5..<1.0)
+            let u2 = Float.random(in: 0..<1.0)
+            let r = sqrt(-2 * log(u1))
+            let phi = 2 * Float.pi * u2
+            let z1 = r * cos(phi)
+            let z2 = r * sin(phi)
+            results.append(z1)
+            if results.count < count {
+              results.append(z2)
+            }
+          }
+          try arrayToPointer(results, output: buffer.contents(), dtype: dtype)
+        }
+      }
+      return Tensor.Data(backend: backend, buffer: buffer)
+    }
+
+    public func sample(count: Int, in range: Range<Int64>) async throws -> Tensor.Data {
+      let buffer = try await backend.allocate(length: count * Tensor.DType.int64.byteSize)
+      try await backend.serialize {
+        let ints = (0..<count).map { _ in Int64.random(in: range) }
+        try arrayToPointer(ints, output: buffer.contents(), dtype: .int64)
+      }
+      return Tensor.Data(backend: backend, buffer: buffer)
+    }
+  }
 
   private var queue = DispatchQueue(label: "cpu-backend-worker")
   private static var _global = CPUBackend()
@@ -733,6 +804,43 @@ open class CPUBackend: Backend {
     return Tensor.Data(backend: self, buffer: buffer)
   }
 
+  override public func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data
+  {
+    let buffer = try await allocate(length: shape.product() * Tensor.DType.int64.byteSize)
+    try await serialize {
+      let oldStrides = stridesForShape(shape)
+
+      let permutedStrides = permutation.map { oldStrides[$0] }
+      let newShape = permutation.map { shape[$0] }
+      let newStrides = stridesForShape(newShape)
+      var newIndices = [Int](repeating: 0, count: shape.product())
+      for i in 0..<newIndices.count {
+        let newIndex = zip(newStrides, newShape).map { stride, shape in (i / stride) % shape }
+        let flatIndex = zip(newIndex, permutedStrides).map { $0 * $1 }.sum()
+        assert(flatIndex >= 0 && flatIndex < newIndices.count, "bad flat index for \(newIndex)")
+        newIndices[i] = flatIndex
+      }
+      try arrayToPointer(newIndices, output: buffer.contents(), dtype: .int64)
+    }
+    return Tensor.Data(backend: self, buffer: buffer)
+  }
+
+  override public func defaultRandom() async throws -> RandomGenerator {
+    NativeRandomGenerator(cpuBackend: self)
+  }
+
+  override public func createRandom() async throws -> RandomGenerator {
+    NativeRandomGenerator(cpuBackend: self)
+  }
+
+}
+
+func stridesForShape(_ shape: [Int]) -> [Int] {
+  var strides = [Int](repeating: 0, count: shape.count)
+  for i in 0..<shape.count {
+    strides[i] = shape[(i + 1)...].product()
+  }
+  return strides
 }
 
 open class MPSBackend: CPUBackend {
