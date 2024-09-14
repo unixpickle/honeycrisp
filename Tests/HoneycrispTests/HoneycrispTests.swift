@@ -576,8 +576,9 @@ final class HoneycrispTests: XCTestCase {
 
   func testTrainable() throws {
     class Linear: Trainable {
-      @Parameter(name: "weight") var weight: Tensor
-      @Parameter(name: "bias") var bias: Tensor
+      @Param(name: "weight") var weight: Tensor
+      @Param(name: "bias") var bias: Tensor
+      @Param(name: "optional") var optional: Tensor?
 
       init(inSize: Int, outSize: Int) {
         super.init()
@@ -598,16 +599,25 @@ final class HoneycrispTests: XCTestCase {
     }
 
     let instance = Linear(inSize: 3, outSize: 5)
-    let params = instance.parameters
-    XCTAssertEqual(params.count, 2)
-    XCTAssertEqual(params[0].0, "bias")
-    XCTAssertEqual(params[0].1.data!.shape, [5])
-    XCTAssertEqual(params[1].0, "weight")
-    XCTAssertEqual(params[1].1.data!.shape, [3, 5])
-    XCTAssert(instance.$bias.data != nil)
-    XCTAssert(instance.$weight.data != nil)
-    XCTAssertEqual(instance.bias.shape, [5])
-    XCTAssertEqual(instance.weight.shape, [3, 5])
+    for _ in 0..<2 {
+      var params = instance.parameters
+      XCTAssertEqual(params.count, 2)
+      XCTAssertEqual(params[0].0, "bias")
+      XCTAssertEqual(params[0].1.data!.shape, [5])
+      XCTAssertEqual(params[1].0, "weight")
+      XCTAssertEqual(params[1].1.data!.shape, [3, 5])
+      XCTAssert(instance.$bias.data != nil)
+      XCTAssert(instance.$weight.data != nil)
+      XCTAssertEqual(instance.bias.shape, [5])
+      XCTAssertEqual(instance.weight.shape, [3, 5])
+
+      instance.optional = Tensor(zeros: [7])
+      params = instance.parameters
+      XCTAssertEqual(params.count, 3)
+      XCTAssertEqual(params[1].0, "optional")
+      XCTAssertEqual(params[1].1.data!.shape, [7])
+      instance.optional = nil
+    }
 
     let net = Network()
     let netParams = net.parameters
@@ -624,8 +634,8 @@ final class HoneycrispTests: XCTestCase {
 
   func testAdam() async throws {
     class Linear: Trainable {
-      @Parameter(name: "weight") var weight: Tensor
-      @Parameter(name: "bias") var bias: Tensor
+      @Param(name: "weight") var weight: Tensor
+      @Param(name: "bias") var bias: Tensor
 
       override init() {
         super.init()

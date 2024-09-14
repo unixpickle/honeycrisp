@@ -10,7 +10,7 @@ open class Optimizer {
   }
 
   public func clearGrads() {
-    for p in self.parameters.values {
+    for var p in self.parameters.values {
       p.grad = nil
     }
   }
@@ -42,7 +42,7 @@ public class Adam: Optimizer {
   }
 
   override public func step() {
-    for (name, param) in parameters {
+    for (name, var param) in parameters {
       guard let grad = param.grad else {
         continue
       }

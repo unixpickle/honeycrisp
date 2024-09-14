@@ -1,6 +1,6 @@
 import Metal
 
-public class Tensor {
+public final class Tensor {
 
   public enum DType {
     case int64
