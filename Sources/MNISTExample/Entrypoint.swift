@@ -2,22 +2,6 @@ import Foundation
 import Honeycrisp
 import MNIST
 
-class Linear: Trainable {
-  @Parameter var weight: Tensor
-  @Parameter var bias: Tensor
-
-  init(inSize: Int, outSize: Int) {
-    super.init()
-    weight = Tensor(gaussian: [inSize, outSize]) / sqrt(Float(inSize))
-    bias = Tensor(zeros: [outSize])
-  }
-
-  func callAsFunction(_ x: Tensor) -> Tensor {
-    let h = (x &* weight)
-    return h + bias.expand(as: h)
-  }
-}
-
 class Model: Trainable {
   @Child var layer1: Linear
   @Child var layer2: Linear
@@ -25,9 +9,9 @@ class Model: Trainable {
 
   override init() {
     super.init()
-    layer1 = Linear(inSize: 28 * 28, outSize: 256)
-    layer2 = Linear(inSize: 256, outSize: 256)
-    layer3 = Linear(inSize: 256, outSize: 10)
+    layer1 = Linear(inCount: 28 * 28, outCount: 256)
+    layer2 = Linear(inCount: 256, outCount: 256)
+    layer3 = Linear(inCount: 256, outCount: 10)
   }
 
   func callAsFunction(_ x: Tensor) -> Tensor {
@@ -58,8 +42,8 @@ struct DataIterator: Sequence, IteratorProtocol {
       offset += 1
     }
     return (
-      Tensor(data: inputData, shape: [batchSize, 28 * 28]),
-      Tensor(oneHot: outputLabels, count: 10)
+      Tensor(data: inputData, shape: [batchSize, 28 * 28], dtype: .float32),
+      Tensor(data: outputLabels, shape: [batchSize, 1], dtype: .int64)
     )
   }
 }
@@ -67,7 +51,7 @@ struct DataIterator: Sequence, IteratorProtocol {
 @main
 struct Main {
   static func main() async {
-    let bs = 256
+    let bs = 8
 
     print("creating model and optimizer...")
     let model = Model()
@@ -84,16 +68,14 @@ struct Main {
     let train = DataIterator(images: dataset.train, batchSize: bs)
     let test = DataIterator(images: dataset.test, batchSize: bs)
 
-    func computeLossAndAcc(_ inputsAndTargets: (Tensor, Tensor)) -> (Tensor, Float) {
+    func computeLossAndAcc(_ inputsAndTargets: (Tensor, Tensor)) -> (Tensor, Tensor) {
       let (inputs, targets) = inputsAndTargets
       let output = model(inputs)
 
       // Compute accuracy where we evenly distribute out ties.
-      var maskMax = output == (output.max(axis: -1, keepdims: true).expand(as: output))
-      maskMax = maskMax / maskMax.sum(axis: -1, keepdims: true).expand(as: maskMax)
-      let acc = (maskMax * targets).sum(axis: -1).mean().item()
+      let acc = (output.argmax(axis: -1, keepdims: true) == targets).cast(.float32).mean()
 
-      return (-(output * targets).sum(axis: 1).mean(), acc)
+      return (-(output.gather(axis: 1, indices: targets)).mean(), acc)
     }
 
     for (i, (batch, testBatch)) in zip(train, test).enumerated() {
@@ -101,10 +83,15 @@ struct Main {
       loss.backward()
       opt.step()
       opt.clearGrads()
-
       let (testLoss, testAcc) = computeLossAndAcc(testBatch)
-      print(
-        "step \(i): loss=\(loss.item()) testLoss=\(testLoss.item()) acc=\(acc) testAcc=\(testAcc)")
+      do {
+        print(
+          "step \(i): loss=\(try await loss.item()) testLoss=\(try await testLoss.item()) acc=\(try await acc.item()) testAcc=\(try await testAcc.item())"
+        )
+      } catch {
+        print("fatal error: \(error)")
+        return
+      }
     }
   }
 }

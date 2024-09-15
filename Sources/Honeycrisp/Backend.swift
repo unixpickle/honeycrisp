@@ -710,13 +710,13 @@ open class CPUBackend: Backend {
     let aCount = rows * inner
     let bCount = inner * cols
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
-      let buffer = try await allocate(length: aCount * bCount * dtype.byteSize)
+      let buffer = try await allocate(length: rows * cols * dtype.byteSize)
       try await serialize {
         var arrA = [T](repeating: zero, count: aCount)
         var arrB = [T](repeating: zero, count: bCount)
         try pointerToArray(a.buffer.contents(), output: &arrA, dtype: dtype)
         try pointerToArray(b.buffer.contents(), output: &arrB, dtype: dtype)
-        var arrC = [T](repeating: zero, count: aCount * bCount)
+        var arrC = [T](repeating: zero, count: rows * cols)
 
         func getA(_ i: Int, _ j: Int) -> T {
           if transA {
@@ -751,6 +751,7 @@ open class CPUBackend: Backend {
             setC(i, j, acc)
           }
         }
+
         try arrayToPointer(arrC, output: buffer.contents(), dtype: dtype)
       }
       return Tensor.Data(backend: self, buffer: buffer)
