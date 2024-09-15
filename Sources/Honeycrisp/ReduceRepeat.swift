@@ -69,7 +69,7 @@ extension Tensor {
       try await backend.reduce(try await self.data, op: op, dims: reduceDims(axis), dtype: dtype)
     }
     let newShape = Array(shape[..<axis]) + (keepdims ? [1] : []) + Array(shape[(axis + 1)...])
-    if !needsGrad || (op == .argmin || op == .argmax) {
+    if !Tensor.isGradEnabled || !needsGrad || (op != .sum) {
       return Tensor(
         dataTask: newData, shape: newShape, dtype: op == .argmin || op == .argmax ? .int64 : dtype)
     } else {
@@ -103,7 +103,7 @@ extension Tensor {
       } else {
         Array(shape[..<axis]) + [shape[axis] * count] + Array(shape[(axis + 1)...])
       }
-    if !needsGrad {
+    if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(
         dataTask: newData, shape: newShape, dtype: dtype)
     } else {

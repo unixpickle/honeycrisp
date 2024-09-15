@@ -29,7 +29,7 @@ extension Tensor {
         transOut: transOut, rows: aShape[0],
         inner: aShape[1], cols: bShape[1], dtype: a.dtype)
     }
-    if !a.needsGrad && !b.needsGrad {
+    if !Tensor.isGradEnabled || (!a.needsGrad && !b.needsGrad) {
       return Tensor(dataTask: newData, shape: outShape, dtype: a.dtype)
     } else {
       let handleA = a.saveForBackward()

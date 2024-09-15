@@ -683,6 +683,20 @@ final class HoneycrispTests: XCTestCase {
     XCTAssert(abs(zMean - 0.5) < 0.03, "unexpected mean of uniform: \(zMean)")
     XCTAssert(abs(zStd - 0.288675135) < 0.03, "unexpected standard deviation of uniform: \(zStd)")
   }
+
+  func testNoGrad() async throws {
+    let x = Tensor(ones: [3]).onGrad { grad in assert(false) }
+    XCTAssert(!Tensor.withGrad(enabled: false) { x.sum() }.needsGrad)
+    Tensor.withGrad(enabled: false) {
+      XCTAssert(!Tensor.isGradEnabled)
+      XCTAssert(Tensor.withGrad(enabled: true) { Tensor.isGradEnabled })
+      XCTAssert(Tensor.withGrad(enabled: true) { x.sum() }.needsGrad)
+      XCTAssert(!x.sum().needsGrad)
+    }
+    XCTAssert(x.sum().needsGrad)
+    XCTAssert(!Tensor.withGrad(enabled: false) { x * x }.needsGrad)
+    XCTAssert((x * x).needsGrad)
+  }
 }
 
 func assertClose(

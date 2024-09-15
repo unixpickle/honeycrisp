@@ -10,7 +10,7 @@ extension Tensor {
       }
       return result
     }
-    if !needsGrad {
+    if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: task, shape: shape, dtype: dtype)
     } else {
       let handle = saveForBackward()

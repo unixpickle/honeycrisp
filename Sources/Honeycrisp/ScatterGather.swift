@@ -54,7 +54,7 @@ extension Tensor {
         ),
         dtype: dtype)
     }
-    if !needsGrad {
+    if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype)
     } else {
       let handle = self.saveForBackward()
@@ -90,7 +90,7 @@ extension Tensor {
           innerCount: shape[(axis + 1)...].product()
         ), dtype: dtype)
     }
-    if !needsGrad {
+    if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype)
     } else {
       let handle = self.saveForBackward()

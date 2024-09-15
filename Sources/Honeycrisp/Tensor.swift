@@ -66,6 +66,33 @@ public final class Tensor {
     }
   }
 
+  private static let GradEnabledThreadKey = "HONEYCRISP_GRAD_ENABLED"
+
+  public static var isGradEnabled: Bool {
+    if let enabled = Thread.current.threadDictionary[GradEnabledThreadKey] {
+      enabled as! Bool
+    } else {
+      true
+    }
+  }
+
+  public static func withGrad<T>(enabled flag: Bool, _ fn: () throws -> T) rethrows -> T {
+    if let enabled = Thread.current.threadDictionary[GradEnabledThreadKey] {
+      let old = enabled as! Bool
+      defer {
+        Thread.current.threadDictionary[GradEnabledThreadKey] = old
+      }
+      Thread.current.threadDictionary[GradEnabledThreadKey] = flag
+      return try fn()
+    } else {
+      defer {
+        Thread.current.threadDictionary.removeObject(forKey: GradEnabledThreadKey)
+      }
+      Thread.current.threadDictionary[GradEnabledThreadKey] = flag
+      return try fn()
+    }
+  }
+
   public let dataTask: Task<Data, Error>
   public let shape: [Int]
   public let dtype: DType
@@ -90,8 +117,12 @@ public final class Tensor {
     self.dataTask = dataTask
     self.shape = shape
     self.dtype = dtype
-    self.backwardImpl = backwardImpl
-    self.needsGrad = backwardImpl != nil
+    if Tensor.isGradEnabled {
+      self.backwardImpl = backwardImpl
+      self.needsGrad = backwardImpl != nil
+    } else {
+      self.needsGrad = false
+    }
   }
 
   public init<T: TensorElement>(
@@ -110,8 +141,12 @@ public final class Tensor {
     }
     self.shape = shape
     self.dtype = dtype
-    self.backwardImpl = backwardImpl
-    self.needsGrad = backwardImpl != nil
+    if Tensor.isGradEnabled {
+      self.backwardImpl = backwardImpl
+      self.needsGrad = backwardImpl != nil
+    } else {
+      self.needsGrad = false
+    }
   }
 
   public convenience init<T: NumericTensorElement>(
@@ -174,6 +209,9 @@ public final class Tensor {
   }
 
   public func onGrad(_ action: @escaping ((Tensor) -> Void)) -> Tensor {
+    if !Tensor.isGradEnabled {
+      return Tensor(dataTask: dataTask, shape: shape, dtype: dtype)
+    }
     if !needsGrad {
       return Tensor(dataTask: dataTask, shape: shape, dtype: dtype, backwardImpl: action)
     }
@@ -189,7 +227,7 @@ public final class Tensor {
       return self
     }
     assert(shape.product() == newShape.product())
-    if !needsGrad {
+    if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: dataTask, shape: newShape, dtype: dtype)
     } else {
       let handle = self.saveForBackward()
@@ -223,7 +261,7 @@ public final class Tensor {
       try await backend.cast(
         try await self.data, count: shape.product(), inType: dtype, outType: newType)
     }
-    if !needsGrad || !newType.supportsGrad {
+    if !needsGrad || !Tensor.isGradEnabled || !newType.supportsGrad {
       return Tensor(dataTask: newData, shape: shape, dtype: newType)
     } else {
       let handle = self.saveForBackward()
@@ -240,7 +278,7 @@ public final class Tensor {
       try await backend.binaryOp(
         try await lhs.data, rhs, op: .add, count: lhs.shape.product(), dtype: lhs.dtype)
     }
-    if !lhs.needsGrad {
+    if !lhs.needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
@@ -267,7 +305,7 @@ public final class Tensor {
         try await lhs.data, try await rhs.data, op: .add, count: lhs.shape.product(),
         dtype: lhs.dtype)
     }
-    if !lhs.needsGrad && !rhs.needsGrad {
+    if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
@@ -285,7 +323,7 @@ public final class Tensor {
       try await backend.binaryOp(
         try await lhs.data, rhs, op: .mul, count: lhs.shape.product(), dtype: lhs.dtype)
     }
-    if !lhs.needsGrad {
+    if !lhs.needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
@@ -313,7 +351,7 @@ public final class Tensor {
         try await lhs.data, try await rhs.data, op: .mul, count: lhs.shape.product(),
         dtype: lhs.dtype)
     }
-    if !lhs.needsGrad && !rhs.needsGrad {
+    if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
@@ -349,7 +387,7 @@ public final class Tensor {
       try await backend.pow(
         try await self.data, exponent, count: self.shape.product(), dtype: self.dtype)
     }
-    if !needsGrad {
+    if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: shape, dtype: dtype)
     } else {
       let lhsHandle = saveForBackward()
@@ -504,10 +542,11 @@ public final class Tensor {
       }
 
     assert(numBackwardHandles == 0, "cannot call backward() on tensor that is used elsewhere")
-    self.saveForBackward().backward(grad)
+    Tensor.withGrad(enabled: true) { self.saveForBackward() }.backward(grad)
   }
 
   public func saveForBackward() -> BackwardHandle {
+    assert(Tensor.isGradEnabled, "backward handle cannot be saved while grads are disabled")
     if !self.needsGrad {
       return BackwardHandle()
     }

@@ -55,7 +55,7 @@ extension Tensor {
       try await backend.elemwise(
         try await self.data, op: op, count: shape.product(), dtype: dtype)
     }
-    if let gradOp = gradOp, needsGrad {
+    if let gradOp = gradOp, needsGrad && Tensor.isGradEnabled {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
         handle.backward(backend.use { grad * self.noGrad().elemwise(op: gradOp) })
