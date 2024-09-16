@@ -9,17 +9,17 @@ class Model: Trainable {
 
   override init() {
     super.init()
-    layer1 = Linear(inCount: 28 * 28, outCount: 256)
-    layer2 = Linear(inCount: 256, outCount: 256)
-    layer3 = Linear(inCount: 256, outCount: 10)
+    layer1 = Linear(inCount: 28 * 28, outCount: 1024)
+    layer2 = Linear(inCount: 1024, outCount: 1024)
+    layer3 = Linear(inCount: 1024, outCount: 10)
   }
 
   func callAsFunction(_ x: Tensor) -> Tensor {
     var h = x
     h = layer1(h)
-    h = h.gelu()
+    h = h.relu()
     h = layer2(h)
-    h = h.gelu()
+    h = h.relu()
     h = layer3(h)
     return h.logSoftmax(axis: -1)
   }
@@ -51,11 +51,28 @@ struct DataIterator: Sequence, IteratorProtocol {
 @main
 struct Main {
   static func main() async {
-    let bs = 8
+    let bs = 1024
+
+    do {
+      Backend.defaultBackend = try MPSBackend()
+    } catch {
+      print("failed to init MPS backend: \(error)")
+    }
 
     print("creating model and optimizer...")
     let model = Model()
     let opt = Adam(model.parameters, lr: 0.001)
+
+    do {
+      let paramNorm = try await model.parameters.map { (_, param) in param.data!.pow(2).sum() }
+        .reduce(
+          Tensor(zeros: []), { $0 + $1 }
+        ).sqrt().item()
+      print(" => initial param norm: \(paramNorm)")
+    } catch {
+      print("error getting param norm: \(error)")
+      return
+    }
 
     print("creating dataset...")
     let dataset: MNISTDataset
@@ -78,15 +95,21 @@ struct Main {
       return (-(output.gather(axis: 1, indices: targets)).mean(), acc)
     }
 
+    print("training...")
+    var seenExamples = 0
     for (i, (batch, testBatch)) in zip(train, test).enumerated() {
       let (loss, acc) = computeLossAndAcc(batch)
       loss.backward()
       opt.step()
       opt.clearGrads()
-      let (testLoss, testAcc) = computeLossAndAcc(testBatch)
+      let (testLoss, testAcc) = Tensor.withGrad(enabled: false) {
+        computeLossAndAcc(testBatch)
+      }
+      seenExamples += batch.0.shape[0]
+      let epochs = Float(seenExamples) / Float(train.images.count)
       do {
         print(
-          "step \(i): loss=\(try await loss.item()) testLoss=\(try await testLoss.item()) acc=\(try await acc.item()) testAcc=\(try await testAcc.item())"
+          "step \(i): loss=\(try await loss.item()) testLoss=\(try await testLoss.item()) acc=\(try await acc.item()) testAcc=\(try await testAcc.item()) epochs=\(epochs)"
         )
       } catch {
         print("fatal error: \(error)")

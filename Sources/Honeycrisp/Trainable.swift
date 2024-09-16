@@ -1,3 +1,5 @@
+import Foundation
+
 public protocol MaybeTensor {
   var isNil: Bool { get }
 
@@ -196,7 +198,8 @@ public class Linear: Trainable {
 
   public init(inCount: Int, outCount: Int, dtype: Tensor.DType = .float32, bias: Bool = true) {
     super.init()
-    self.weight = Tensor(randn: [inCount, outCount], dtype: dtype) / Float(inCount)
+    self.weight =
+      (Tensor(rand: [inCount, outCount], dtype: dtype) - 0.5) * (sqrt(3.0) / 0.5 / Float(inCount))
     if bias {
       self.bias = Tensor(zeros: [outCount])
     }

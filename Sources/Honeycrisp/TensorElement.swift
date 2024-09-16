@@ -152,13 +152,21 @@ func arrayToPointer<T: TensorElement>(
 private func arrayToPointer<A: TensorElement, B: TensorElement>(
   _ input: [A], _ output: UnsafeMutablePointer<B>
 ) {
-  if A.isFloatLossy {
-    for (i, x) in input.enumerated() {
-      output[i] = B(x.toInt64())
-    }
+  if A.self == B.self {
+    input.withUnsafeBufferPointer({ srcBuf in
+      UnsafeMutableRawPointer(output).copyMemory(
+        from: UnsafeRawPointer(srcBuf.baseAddress!), byteCount: input.count * MemoryLayout<A>.stride
+      )
+    })
   } else {
-    for (i, x) in input.enumerated() {
-      output[i] = B(x.toFloat())
+    if A.isFloatLossy {
+      for (i, x) in input.enumerated() {
+        output[i] = B(x.toInt64())
+      }
+    } else {
+      for (i, x) in input.enumerated() {
+        output[i] = B(x.toFloat())
+      }
     }
   }
 }
@@ -205,13 +213,22 @@ func pointerToArray<T: TensorElement>(
 private func pointerToArray<A: TensorElement, B: TensorElement>(
   _ input: UnsafeMutablePointer<A>, _ output: inout [B]
 ) {
-  if A.isFloatLossy {
-    for i in 0..<output.count {
-      output[i] = B(input[i].toInt64())
-    }
+  if A.self == B.self {
+    let count = output.count
+    output.withUnsafeMutableBufferPointer({ dstBuf in
+      UnsafeMutableRawPointer(dstBuf.baseAddress!).copyMemory(
+        from: UnsafeRawPointer(input), byteCount: count * MemoryLayout<A>.stride
+      )
+    })
   } else {
-    for i in 0..<output.count {
-      output[i] = B(input[i].toFloat())
+    if A.isFloatLossy {
+      for i in 0..<output.count {
+        output[i] = B(input[i].toInt64())
+      }
+    } else {
+      for i in 0..<output.count {
+        output[i] = B(input[i].toFloat())
+      }
     }
   }
 }

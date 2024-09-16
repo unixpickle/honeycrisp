@@ -3,6 +3,16 @@ import XCTest
 @testable import Honeycrisp
 
 final class HoneycrispTests: XCTestCase {
+  var _backends: [Backend] = []
+  var backends: [Backend] {
+    if _backends.count > 0 {
+      return _backends
+    } else {
+      _backends = [CPUBackend.global, try! MPSBackend()]
+      return _backends
+    }
+  }
+
   func testCast() async throws {
     let x = Tensor(data: [1.0, 2.0, 0.0], shape: [3], dtype: .float32)
     try await assertDataEqual(x, [1.0, 2.0, 0.0])
@@ -19,9 +29,30 @@ final class HoneycrispTests: XCTestCase {
     let x = Tensor(data: [1.0, 2.0, 0.0], shape: [3], dtype: .float32)
     let y = Tensor(data: [-1.0, 2.0, -3.0], shape: [3], dtype: .float32)
     try await assertDataEqual(x + y, [0.0, 4.0, -3.0])
+    try await assertDataEqual(x.cast(.int64) + y.cast(.int64), [0.0, 4.0, -3.0])
+    try await assertDataEqual(x.cast(.float16) + y.cast(.float16), [0.0, 4.0, -3.0])
     try await assertDataEqual(x + 3, [4.0, 5.0, 3.0])
+    try await assertDataEqual(x.cast(.int64) + 3, [4.0, 5.0, 3.0])
+    try await assertDataEqual(x.cast(.float16) + 3, [4.0, 5.0, 3.0])
+    try await assertDataEqual(3 + x, [4.0, 5.0, 3.0])
+    try await assertDataEqual(3 + x.cast(.int64), [4.0, 5.0, 3.0])
+    try await assertDataEqual(3 + x.cast(.float16), [4.0, 5.0, 3.0])
     try await assertDataEqual(x + 1.5, [2.5, 3.5, 1.5])
     try await assertDataEqual(1.5 + x, [2.5, 3.5, 1.5])
+  }
+
+  func testMul() async throws {
+    let x = Tensor(data: [1.0, 2.0, 3.0, 0.0], shape: [4], dtype: .float32)
+    let y = Tensor(data: [-1.0, 2.0, 2.0, -3.0], shape: [4], dtype: .float32)
+    try await assertDataEqual(x * y, [-1.0, 4.0, 6.0, 0.0])
+    try await assertDataEqual(x.cast(.float16) * y.cast(.float16), [-1.0, 4.0, 6.0, 0.0])
+    try await assertDataEqual(x.cast(.int64) * y.cast(.int64), [-1.0, 4.0, 6.0, 0.0])
+    try await assertDataEqual(x * 2, [2.0, 4.0, 6.0, 0.0])
+    try await assertDataEqual(x.cast(.float16) * 2, [2.0, 4.0, 6.0, 0.0])
+    try await assertDataEqual(x.cast(.int64) * 2, [2.0, 4.0, 6.0, 0.0])
+    try await assertDataEqual(2 * x, [2.0, 4.0, 6.0, 0.0])
+    try await assertDataEqual(2 * x.cast(.float16), [2.0, 4.0, 6.0, 0.0])
+    try await assertDataEqual(2 * x.cast(.int64), [2.0, 4.0, 6.0, 0.0])
   }
 
   func testMulGrad() async throws {
@@ -235,16 +266,47 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testMatrixMatrixProduct() async throws {
+    let start = Backend.defaultBackend
+    defer {
+      Backend.defaultBackend = start
+    }
+    for backend in backends {
+      Backend.defaultBackend = backend
+      try await runMatrixTest()
+    }
+  }
+
+  func runMatrixTest() async throws {
     // Sanity check for transposes.
     try await {
-      let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3])
-      let y = Tensor(data: [-1, -2, -3, -4, -5, -6], shape: [3, 2])
-      let z1 = Tensor.matmul(a: x, transA: false, b: y, transB: false, transOut: false)
-      let z2 = Tensor.matmul(a: y, transA: true, b: x, transB: true, transOut: true)
-      XCTAssertEqual(z1.shape, [2, 2])
-      XCTAssertEqual(z2.shape, [2, 2])
-      try await assertDataEqual(z1, [-22, -28, -49, -64])
-      try await assertDataEqual(z2, [-22, -28, -49, -64])
+      for transA in [false, true] {
+        for transB in [false, true] {
+          for transOut in [false, true] {
+            for dtype in [Tensor.DType.float32, Tensor.DType.float16] {
+              let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3], dtype: dtype)
+              let y = Tensor(
+                data: [-1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12], shape: [4, 3],
+                dtype: dtype)[
+                  PermuteAxes(1, 0)
+                ]
+              var aGrad: Tensor?
+              var bGrad: Tensor?
+              let a = x.onGrad { grad in aGrad = grad }
+              let b = y.onGrad { grad in bGrad = grad }
+              let subOut = Tensor.matmul(
+                a: transA ? a[PermuteAxes(1, 0)] : a, transA: transA,
+                b: transB ? b[PermuteAxes(1, 0)] : b, transB: transB, transOut: transOut)
+              let out = transOut ? subOut[PermuteAxes(1, 0)] : subOut
+              XCTAssertEqual(out.shape, [2, 4])
+              out.backward(Tensor(data: [8, 7, 6, 5, 4, 3, 2, 1], shape: [2, 4], dtype: dtype))
+              try await assertDataEqual(out, [-14, -32, -50, -68, -32, -77, -122, -167])
+              try await assertDataEqual(aGrad!, [-128.0, -154.0, -180.0, -40.0, -50.0, -60.0])
+              try await assertDataEqual(
+                bGrad!, [24.0, 19.0, 14.0, 9.0, 36.0, 29.0, 22.0, 15.0, 48.0, 39.0, 30.0, 21.0])
+            }
+          }
+        }
+      }
     }()
 
     try await {
@@ -371,15 +433,20 @@ final class HoneycrispTests: XCTestCase {
     func testF(input: [Float], output: [Float], grad: [Float], _ op: (Tensor) -> Tensor)
       async throws
     {
-      var actualGrad: Tensor?
-      let tensorIn = Tensor(data: input, shape: [input.count]) { g in
-        actualGrad = g
+      for dtype in [Tensor.DType.float32, Tensor.DType.float16] {
+        var actualGrad: Tensor?
+        let tensorIn = Tensor(data: input, shape: [input.count], dtype: dtype) { g in
+          actualGrad = g
+        }
+        assert(tensorIn.needsGrad, "\(tensorIn.dtype) \(tensorIn.needsGrad)")
+        let actualOut = op(tensorIn)
+        let tol = Float(dtype == .float32 ? 1e-4 : 1e-2)
+        try await assertClose(
+          actualOut, Tensor(data: output, shape: [output.count]), atol: tol, rtol: tol)
+        actualOut.backward(Tensor(onesLike: actualOut))
+        try await assertClose(
+          actualGrad!, Tensor(data: grad, shape: [output.count]), atol: tol, rtol: tol)
       }
-      assert(tensorIn.needsGrad, "\(tensorIn.dtype) \(tensorIn.needsGrad)")
-      let actualOut = op(tensorIn)
-      try await assertClose(actualOut, Tensor(data: output, shape: [output.count]))
-      actualOut.backward(Tensor(onesLike: actualOut))
-      try await assertClose(actualGrad!, Tensor(data: grad, shape: [output.count]))
     }
 
     try await testF(
@@ -387,6 +454,11 @@ final class HoneycrispTests: XCTestCase {
       output: [1, 4, 9, 1, 4, 9],
       grad: [-2, -4, -6, 2, 4, 6]
     ) { $0.pow(2) }
+    try await testF(
+      input: [-1, -2, -3, 1, 2, 3],
+      output: [1.0 / -1.0, 1.0 / -2.0, 1.0 / -3.0, 1.0, 1.0 / 2.0, 1.0 / 3.0].map({ Float($0) }),
+      grad: [-1.0, -0.25, -0.11111111, -1.0, -0.25, -0.11111111]
+    ) { $0.pow(-1) }
     try await testF(
       input: [1, 2],
       output: [2.718281828459045, 7.38905609893065],

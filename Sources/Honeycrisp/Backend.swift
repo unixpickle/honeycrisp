@@ -1,3 +1,4 @@
+import Accelerate
 import Foundation
 import Metal
 
@@ -206,11 +207,15 @@ open class Backend {
 
 open class CPUBackend: Backend {
 
-  public struct NativeRandomGenerator: RandomGenerator {
+  public class NativeRandomGenerator: RandomGenerator {
     public let cpuBackend: CPUBackend
 
     public var backend: Backend {
       cpuBackend
+    }
+
+    init(cpuBackend: CPUBackend) {
+      self.cpuBackend = cpuBackend
     }
 
     public func save() async throws -> Data {
@@ -309,22 +314,36 @@ open class CPUBackend: Backend {
   {
     try await waitForData(a, b)
 
-    func apply<T: NumericTensorElement>(_ x: T) async throws -> Tensor.Data {
+    func apply<T: NumericTensorElement>(_: T.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        var aData = [T](repeating: x, count: count)
-        var bData = [T](repeating: x, count: count)
-        try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
-        try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
-        let cData = zip(aData, bData).map { op.apply($0, $1) }
-        try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+        if dtype == .float32 && (op == .add || op == .mul) {
+          let x = UnsafePointer<Float>(
+            a.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          let y = UnsafePointer<Float>(
+            b.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
+          switch op {
+          case .add:
+            vDSP_vadd(x, 1, y, 1, z, 1, vDSP_Length(count))
+          case .mul:
+            vDSP_vmul(x, 1, y, 1, z, 1, vDSP_Length(count))
+          }
+        } else {
+          var aData = [T](repeating: T(0.0), count: count)
+          var bData = [T](repeating: T(0.0), count: count)
+          try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
+          try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
+          let cData = zip(aData, bData).map { op.apply($0, $1) }
+          try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+        }
       }
       return Tensor.Data(backend: self, buffer: buffer)
     }
     if dtype == .int64 {
-      return try await apply(Int64(0))
+      return try await apply(Int64.self)
     } else {
-      return try await apply(Float(0))
+      return try await apply(Float.self)
     }
   }
 
@@ -339,10 +358,24 @@ open class CPUBackend: Backend {
     func apply<T1: NumericTensorElement>(_ b: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        var aData = [T1](repeating: T1(0.0), count: count)
-        try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
-        let cData = aData.map { op.apply($0, b) }
-        try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+        if dtype == .float32 && (op == .add || op == .mul) {
+          let x = UnsafePointer<Float>(
+            a.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          [b.toFloat()].withUnsafeBufferPointer({ y in
+            let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
+            switch op {
+            case .add:
+              vDSP_vsadd(x, 1, y.baseAddress!, z, 1, vDSP_Length(count))
+            case .mul:
+              vDSP_vsmul(x, 1, y.baseAddress!, z, 1, vDSP_Length(count))
+            }
+          })
+        } else {
+          var aData = [T1](repeating: T1(0.0), count: count)
+          try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
+          let cData = aData.map { op.apply($0, b) }
+          try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+        }
       }
       return Tensor.Data(backend: self, buffer: buffer)
     }
@@ -363,10 +396,24 @@ open class CPUBackend: Backend {
     func apply<T1: NumericTensorElement>(_ a: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        var bData = [T1](repeating: T1(0.0), count: count)
-        try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
-        let cData = bData.map { op.apply(a, $0) }
-        try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+        if dtype == .float32 && (op == .add || op == .mul) {
+          let x = UnsafePointer<Float>(
+            b.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          [a.toFloat()].withUnsafeBufferPointer({ y in
+            let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
+            switch op {
+            case .add:
+              vDSP_vsadd(x, 1, y.baseAddress!, z, 1, vDSP_Length(count))
+            case .mul:
+              vDSP_vsmul(x, 1, y.baseAddress!, z, 1, vDSP_Length(count))
+            }
+          })
+        } else {
+          var bData = [T1](repeating: T1(0.0), count: count)
+          try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
+          let cData = bData.map { op.apply(a, $0) }
+          try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+        }
       }
       return Tensor.Data(backend: self, buffer: buffer)
     }
@@ -487,10 +534,24 @@ open class CPUBackend: Backend {
     func apply<T1: NumericTensorElement>(_ b: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        var arr = [T1](repeating: T1(0.0), count: count)
-        try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
-        let cData = arr.map { $0.pow(b) }
-        try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+        if dtype == .float32 && (b == T1(2.0) || b == T1(-1.0)) {
+          let x = UnsafePointer<Float>(
+            a.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          let z = UnsafeMutablePointer<Float>(
+            buffer.contents().bindMemory(to: Float.self, capacity: count))
+          if b == T1(2.0) {
+            vDSP_vmul(x, 1, x, 1, z, 1, vDSP_Length(count))
+          } else {
+            [Float(1)].withUnsafeBufferPointer { one in
+              vDSP_svdiv(one.baseAddress!, x, 1, z, 1, vDSP_Length(count))
+            }
+          }
+        } else {
+          var arr = [T1](repeating: T1(0.0), count: count)
+          try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
+          let cData = arr.map { $0.pow(b) }
+          try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+        }
       }
       return Tensor.Data(backend: self, buffer: buffer)
     }
@@ -711,48 +772,59 @@ open class CPUBackend: Backend {
     let bCount = inner * cols
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
       let buffer = try await allocate(length: rows * cols * dtype.byteSize)
-      try await serialize {
-        var arrA = [T](repeating: zero, count: aCount)
-        var arrB = [T](repeating: zero, count: bCount)
-        try pointerToArray(a.buffer.contents(), output: &arrA, dtype: dtype)
-        try pointerToArray(b.buffer.contents(), output: &arrB, dtype: dtype)
-        var arrC = [T](repeating: zero, count: rows * cols)
-
-        func getA(_ i: Int, _ j: Int) -> T {
-          if transA {
-            arrA[i + j * rows]
-          } else {
-            arrA[i * inner + j]
-          }
+      if !transA && !transB && !transOut && dtype == .float32 {
+        try await serialize {
+          let x = UnsafePointer<Float>(
+            a.buffer.contents().bindMemory(to: Float.self, capacity: aCount))
+          let y = UnsafePointer<Float>(
+            b.buffer.contents().bindMemory(to: Float.self, capacity: aCount))
+          let z = buffer.contents().bindMemory(to: Float.self, capacity: rows * cols)
+          vDSP_mmul(x, 1, y, 1, z, 1, vDSP_Length(rows), vDSP_Length(cols), vDSP_Length(inner))
         }
+      } else {
+        try await serialize {
+          var arrA = [T](repeating: zero, count: aCount)
+          var arrB = [T](repeating: zero, count: bCount)
+          try pointerToArray(a.buffer.contents(), output: &arrA, dtype: dtype)
+          try pointerToArray(b.buffer.contents(), output: &arrB, dtype: dtype)
+          var arrC = [T](repeating: zero, count: rows * cols)
 
-        func getB(_ i: Int, _ j: Int) -> T {
-          if transB {
-            arrB[i + j * inner]
-          } else {
-            arrB[i * cols + j]
-          }
-        }
-
-        func setC(_ i: Int, _ j: Int, _ x: T) {
-          if transOut {
-            arrC[i + j * rows] = x
-          } else {
-            arrC[i * cols + j] = x
-          }
-        }
-
-        for i in 0..<rows {
-          for j in 0..<cols {
-            var acc = T(0.0)
-            for k in 0..<inner {
-              acc = acc + getA(i, k) * getB(k, j)
+          func getA(_ i: Int, _ j: Int) -> T {
+            if transA {
+              arrA[i + j * rows]
+            } else {
+              arrA[i * inner + j]
             }
-            setC(i, j, acc)
           }
-        }
 
-        try arrayToPointer(arrC, output: buffer.contents(), dtype: dtype)
+          func getB(_ i: Int, _ j: Int) -> T {
+            if transB {
+              arrB[i + j * inner]
+            } else {
+              arrB[i * cols + j]
+            }
+          }
+
+          func setC(_ i: Int, _ j: Int, _ x: T) {
+            if transOut {
+              arrC[i + j * rows] = x
+            } else {
+              arrC[i * cols + j] = x
+            }
+          }
+
+          for i in 0..<rows {
+            for j in 0..<cols {
+              var acc = T(0.0)
+              for k in 0..<inner {
+                acc = acc + getA(i, k) * getB(k, j)
+              }
+              setC(i, j, acc)
+            }
+          }
+
+          try arrayToPointer(arrC, output: buffer.contents(), dtype: dtype)
+        }
       }
       return Tensor.Data(backend: self, buffer: buffer)
     }
@@ -842,36 +914,4 @@ func stridesForShape(_ shape: [Int]) -> [Int] {
     strides[i] = shape[(i + 1)...].product()
   }
   return strides
-}
-
-open class MPSBackend: CPUBackend {
-
-  private var queue = DispatchQueue(label: "mps-backend-worker")
-  private var commandQueue: MTLCommandQueue? = nil
-
-  public init(device: MTLDevice? = nil, commandQueue: MTLCommandQueue? = nil) throws {
-    super.init()
-    if let device = device {
-      self._device = device
-      if let commandQueue = commandQueue {
-        self.commandQueue = commandQueue
-      } else {
-        if let q = device.makeCommandQueue() {
-          self.commandQueue = q
-        } else {
-          throw BackendError.failedToCreateCommandQueue
-        }
-      }
-    } else {
-      guard let d = MTLCreateSystemDefaultDevice() else {
-        throw BackendError.failedToCreateMTLDevice
-      }
-      self._device = d
-      guard let q = d.makeCommandQueue() else {
-        throw BackendError.failedToCreateCommandQueue
-      }
-      self.commandQueue = q
-    }
-  }
-
 }

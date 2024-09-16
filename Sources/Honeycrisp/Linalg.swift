@@ -37,11 +37,11 @@ extension Tensor {
       return Tensor(dataTask: newData, shape: outShape, dtype: a.dtype) { grad in
         handleA.backward(
           backend.use {
-            matmul(a: grad, transA: false, b: b.noGrad(), transB: true, transOut: false)
+            matmul(a: grad, transA: transOut, b: b.noGrad(), transB: !transB, transOut: transA)
           })
         handleB.backward(
           backend.use {
-            matmul(a: a.noGrad(), transA: true, b: grad, transB: false, transOut: false)
+            matmul(a: a.noGrad(), transA: !transA, b: grad, transB: transOut, transOut: transB)
           })
       }
     }

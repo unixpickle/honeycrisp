@@ -33,7 +33,14 @@ public final class Tensor {
   public struct Data {
     public let backend: Backend
     public let buffer: MTLBuffer
-    public let completeOnAllDevices: Task<Void, Error>? = nil
+    public let completeOnAllDevices: Task<Void, Error>?
+
+    public init(backend: Backend, buffer: MTLBuffer, completeOnAllDevices: Task<Void, Error>? = nil)
+    {
+      self.backend = backend
+      self.buffer = buffer
+      self.completeOnAllDevices = completeOnAllDevices
+    }
   }
 
   public final class BackwardHandle {
