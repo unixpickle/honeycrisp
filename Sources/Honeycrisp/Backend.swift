@@ -7,6 +7,7 @@ public enum BackendError: Error {
   case failedToCreateMTLDevice
   case failedToCreateCommandQueue
   case allocationFailed(Int)
+  case kernelFailed(String)
 }
 
 open class Backend {

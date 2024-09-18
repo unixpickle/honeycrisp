@@ -264,6 +264,10 @@ extension Array: TensorIndex where Element == any TensorIndex {
 }
 
 extension Tensor {
+  public func t() -> Tensor {
+    return self[FullRange(dims: shape.count - 2), PermuteAxes(1, 0)]
+  }
+
   public subscript(index: any TensorIndex...) -> Tensor {
     let result = Array(index).tensorIndex(forShape: shape)
     var out = reshape(result.reshape)

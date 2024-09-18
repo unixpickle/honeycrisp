@@ -17,9 +17,9 @@ class Model: Trainable {
   func callAsFunction(_ x: Tensor) -> Tensor {
     var h = x
     h = layer1(h)
-    h = h.relu()
+    h = h.gelu()
     h = layer2(h)
-    h = h.relu()
+    h = h.gelu()
     h = layer3(h)
     return h.logSoftmax(axis: -1)
   }

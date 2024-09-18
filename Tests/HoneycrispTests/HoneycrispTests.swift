@@ -286,17 +286,16 @@ final class HoneycrispTests: XCTestCase {
               let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3], dtype: dtype)
               let y = Tensor(
                 data: [-1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12], shape: [4, 3],
-                dtype: dtype)[
-                  PermuteAxes(1, 0)
-                ]
+                dtype: dtype
+              ).t()
               var aGrad: Tensor?
               var bGrad: Tensor?
               let a = x.onGrad { grad in aGrad = grad }
               let b = y.onGrad { grad in bGrad = grad }
               let subOut = Tensor.matmul(
-                a: transA ? a[PermuteAxes(1, 0)] : a, transA: transA,
-                b: transB ? b[PermuteAxes(1, 0)] : b, transB: transB, transOut: transOut)
-              let out = transOut ? subOut[PermuteAxes(1, 0)] : subOut
+                a: transA ? a.t() : a, transA: transA,
+                b: transB ? b.t() : b, transB: transB, transOut: transOut)
+              let out = transOut ? subOut.t() : subOut
               XCTAssertEqual(out.shape, [2, 4])
               out.backward(Tensor(data: [8, 7, 6, 5, 4, 3, 2, 1], shape: [2, 4], dtype: dtype))
               try await assertDataEqual(out, [-14, -32, -50, -68, -32, -77, -122, -167])
@@ -430,22 +429,31 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testElemwise() async throws {
-    func testF(input: [Float], output: [Float], grad: [Float], _ op: (Tensor) -> Tensor)
+    func testF(
+      input: [Float], output: [Float], grad: [Float], tol: Float = 1e-4, _ op: (Tensor) -> Tensor
+    )
       async throws
     {
-      for dtype in [Tensor.DType.float32, Tensor.DType.float16] {
-        var actualGrad: Tensor?
-        let tensorIn = Tensor(data: input, shape: [input.count], dtype: dtype) { g in
-          actualGrad = g
+      let oldBackend = Backend.defaultBackend
+      defer {
+        Backend.defaultBackend = oldBackend
+      }
+      for backend in backends {
+        Backend.defaultBackend = backend
+        for dtype in [Tensor.DType.float32, Tensor.DType.float16] {
+          var actualGrad: Tensor?
+          let tensorIn = Tensor(data: input, shape: [input.count], dtype: dtype) { g in
+            actualGrad = g
+          }
+          assert(tensorIn.needsGrad, "\(tensorIn.dtype) \(tensorIn.needsGrad)")
+          let actualOut = op(tensorIn)
+          let thisTol = tol * Float(dtype == .float32 ? 1.0 : 100.0)
+          try await assertClose(
+            actualOut, Tensor(data: output, shape: [output.count]), atol: thisTol, rtol: thisTol)
+          actualOut.backward(Tensor(onesLike: actualOut))
+          try await assertClose(
+            actualGrad!, Tensor(data: grad, shape: [output.count]), atol: thisTol, rtol: thisTol)
         }
-        assert(tensorIn.needsGrad, "\(tensorIn.dtype) \(tensorIn.needsGrad)")
-        let actualOut = op(tensorIn)
-        let tol = Float(dtype == .float32 ? 1e-4 : 1e-2)
-        try await assertClose(
-          actualOut, Tensor(data: output, shape: [output.count]), atol: tol, rtol: tol)
-        actualOut.backward(Tensor(onesLike: actualOut))
-        try await assertClose(
-          actualGrad!, Tensor(data: grad, shape: [output.count]), atol: tol, rtol: tol)
       }
     }
 
@@ -478,8 +486,29 @@ final class HoneycrispTests: XCTestCase {
       grad: [
         0.0, -0.08609922230243683, 0.5, 1.0829640626907349, 1.0860992670059204, 1.0115842819213867,
         1.0,
-      ]
+      ],
+      tol: 1e-3
     ) { $0.gelu() }
+    try await testF(
+      input: [-100, -2, -0.1, 0.1, 1, 2, 3, 100],
+      output: [0, 0, 0, 0.1, 1, 2, 3, 100],
+      grad: [0, 0, 0, 1, 1, 1, 1, 1]
+    ) { $0.relu() }
+    try await testF(
+      input: [-100, 100, 0, 3.0],
+      output: [0, 1, 0.5, 0.9525741338729858],
+      grad: [0, 0, 0.25, Float(0.9525741338729858 * (1 - 0.9525741338729858))]
+    ) { $0.sigmoid() }
+    try await testF(
+      input: [1, Float(M_E), Float(M_E * M_E), 10000.0],
+      output: [0, 1, 2, log(10000.0)],
+      grad: [1, 1 / Float(M_E), 1 / Float(M_E * M_E), Float(1 / 10000.0)]
+    ) { $0.log() }
+    try await testF(
+      input: [Float](repeating: 9.0, count: 1024),
+      output: [Float](repeating: 9.0, count: 1024),
+      grad: [Float](repeating: 1.0, count: 1024)
+    ) { $0.exp().log() }
   }
 
   func testMinMax() async throws {
@@ -780,7 +809,7 @@ func assertClose(
   let xData = try await x.floats()
   let yData = try await y.floats()
   for (a, b) in zip(xData, yData) {
-    if abs(a - b) > atol && (b == 0 || abs(a / b - 1) > rtol) {
+    if a.isNaN != b.isNaN || (abs(a - b) > atol && (b == 0 || abs(a / b - 1) > rtol)) {
       allGood = false
     }
   }

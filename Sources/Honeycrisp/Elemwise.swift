@@ -11,29 +11,41 @@ public enum ElemwiseOp {
   case sigmoidGrad
   case relu
   case reluGrad
+  case gelu
+  case geluGrad
 
   public func apply<T: NumericTensorElement>(x: T) -> T {
-    switch self {
+    let f = x.toFloat()
+    return switch self {
     case .sin:
-      T(Foundation.sin(x.toFloat()))
+      T(Foundation.sin(f))
     case .cos:
-      T(Foundation.cos(x.toFloat()))
+      T(Foundation.cos(f))
     case .minusSin:
-      T(-Foundation.sin(x.toFloat()))
+      T(-Foundation.sin(f))
     case .exp:
-      T(Foundation.exp(x.toFloat()))
+      T(Foundation.exp(f))
     case .log:
-      T(Foundation.log(x.toFloat()))
+      T(Foundation.log(f))
     case .recip:
-      T(1 / x.toFloat())
+      T(1 / f)
     case .sigmoid:
-      T(safeSigmoid(x.toFloat()))
+      T(safeSigmoid(f))
     case .sigmoidGrad:
-      T(safeSigmoid(x.toFloat()) * safeSigmoid(-x.toFloat()))
+      T(safeSigmoid(f) * safeSigmoid(-f))
     case .relu:
       x < T(0.0) ? T(0.0) : x
     case .reluGrad:
       x < T(0.0) ? T(0.0) : T(1.0)
+    case .gelu:
+      T(0.5 * f * (1 + safeTanh(0.797884561 * (f + 0.044715 * pow(f, 3)))))
+    case .geluGrad:
+      T(
+        {
+          let tanhTerm = tanh(0.035677408145115 * pow(f, 3) + 0.797884561 * f)
+          return 0.5 * f * (1 - pow(tanhTerm, 2)) * (0.107032224435345 * pow(f, 2) + 0.797884561)
+            + 0.5 * tanhTerm + 0.5
+        }())
     }
   }
 }
@@ -46,6 +58,17 @@ private func safeSigmoid(_ x: Float) -> Float {
   } else {
     1 / (1 + exp(-x))
   }
+}
+
+private func safeTanh(_ x: Float) -> Float {
+  2 * safeSigmoid(2 * x) - 1
+  // if x < -20 {
+  //   -1
+  // } else if x > 20 {
+  //   1
+  // } else {
+  //   tanh(x)
+  // }
 }
 
 extension Tensor {
@@ -94,7 +117,7 @@ extension Tensor {
   }
 
   public func gelu() -> Tensor {
-    0.5 * self * (1 + (0.797884561 * (self + 0.044715 * self.pow(3))).tanh())
+    self.elemwise(op: .gelu, grad: .geluGrad)
   }
 
   public func silu() -> Tensor {
