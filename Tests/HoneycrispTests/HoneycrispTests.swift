@@ -13,6 +13,17 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func runInBackends(_ fn: () async throws -> Void) async throws {
+    let start = Backend.defaultBackend
+    defer {
+      Backend.defaultBackend = start
+    }
+    for backend in backends {
+      Backend.defaultBackend = backend
+      try await fn()
+    }
+  }
+
   func testCast() async throws {
     let x = Tensor(data: [1.0, 2.0, 0.0], shape: [3], dtype: .float32)
     try await assertDataEqual(x, [1.0, 2.0, 0.0])
@@ -266,55 +277,45 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testMatrixMatrixProduct() async throws {
-    let start = Backend.defaultBackend
-    defer {
-      Backend.defaultBackend = start
-    }
-    for backend in backends {
-      Backend.defaultBackend = backend
-      try await runMatrixTest()
-    }
-  }
-
-  func runMatrixTest() async throws {
-    // Sanity check for transposes.
-    try await {
-      for transA in [false, true] {
-        for transB in [false, true] {
-          for transOut in [false, true] {
-            for dtype in [Tensor.DType.float32, Tensor.DType.float16] {
-              let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3], dtype: dtype)
-              let y = Tensor(
-                data: [-1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12], shape: [4, 3],
-                dtype: dtype
-              ).t()
-              var aGrad: Tensor?
-              var bGrad: Tensor?
-              let a = x.onGrad { grad in aGrad = grad }
-              let b = y.onGrad { grad in bGrad = grad }
-              let subOut = Tensor.matmul(
-                a: transA ? a.t() : a, transA: transA,
-                b: transB ? b.t() : b, transB: transB, transOut: transOut)
-              let out = transOut ? subOut.t() : subOut
-              XCTAssertEqual(out.shape, [2, 4])
-              out.backward(Tensor(data: [8, 7, 6, 5, 4, 3, 2, 1], shape: [2, 4], dtype: dtype))
-              try await assertDataEqual(out, [-14, -32, -50, -68, -32, -77, -122, -167])
-              try await assertDataEqual(aGrad!, [-128.0, -154.0, -180.0, -40.0, -50.0, -60.0])
-              try await assertDataEqual(
-                bGrad!, [24.0, 19.0, 14.0, 9.0, 36.0, 29.0, 22.0, 15.0, 48.0, 39.0, 30.0, 21.0])
+    try await runInBackends {
+      // Sanity check for transposes.
+      try await {
+        for transA in [false, true] {
+          for transB in [false, true] {
+            for transOut in [false, true] {
+              for dtype in [Tensor.DType.float32, Tensor.DType.float16] {
+                let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3], dtype: dtype)
+                let y = Tensor(
+                  data: [-1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12], shape: [4, 3],
+                  dtype: dtype
+                ).t()
+                var aGrad: Tensor?
+                var bGrad: Tensor?
+                let a = x.onGrad { grad in aGrad = grad }
+                let b = y.onGrad { grad in bGrad = grad }
+                let subOut = Tensor.matmul(
+                  a: transA ? a.t() : a, transA: transA,
+                  b: transB ? b.t() : b, transB: transB, transOut: transOut)
+                let out = transOut ? subOut.t() : subOut
+                XCTAssertEqual(out.shape, [2, 4])
+                out.backward(Tensor(data: [8, 7, 6, 5, 4, 3, 2, 1], shape: [2, 4], dtype: dtype))
+                try await assertDataEqual(out, [-14, -32, -50, -68, -32, -77, -122, -167])
+                try await assertDataEqual(aGrad!, [-128.0, -154.0, -180.0, -40.0, -50.0, -60.0])
+                try await assertDataEqual(
+                  bGrad!, [24.0, 19.0, 14.0, 9.0, 36.0, 29.0, 22.0, 15.0, 48.0, 39.0, 30.0, 21.0])
+              }
             }
           }
         }
-      }
-    }()
-
-    try await {
-      let x = Tensor(ones: [64, 128])
-      let y = Tensor(ones: [128, 32])
-      let z = Tensor.matmul(a: x, transA: false, b: y, transB: false, transOut: false)
-      XCTAssertEqual(z.shape, [64, 32])
-      try await assertDataEqual(z, [Float](repeating: 128, count: 64 * 32))
-    }()
+      }()
+      try await {
+        let x = Tensor(ones: [64, 128])
+        let y = Tensor(ones: [128, 32])
+        let z = Tensor.matmul(a: x, transA: false, b: y, transB: false, transOut: false)
+        XCTAssertEqual(z.shape, [64, 32])
+        try await assertDataEqual(z, [Float](repeating: 128, count: 64 * 32))
+      }()
+    }
   }
 
   func testMatrixVectorProduct() async throws {
@@ -551,32 +552,34 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testExpandAndRepeat() async throws {
-    let t1Arr: [Float] = [1, 2, 3, 4]
-    let t2Arr: [Float] = [1, 2, 3, 4, 5, 6]
-    let t1 = Tensor(data: t1Arr, shape: [2, 2])
-    XCTAssertEqual(
-      t1.reshape([1, 2, 1, 2]).expand(shape: [3, 7, 2, 5, 2]).shape, [3, 7, 2, 5, 2])
+    try await runInBackends {
+      let t1Arr: [Float] = [1, 2, 3, 4]
+      let t2Arr: [Float] = [1, 2, 3, 4, 5, 6]
+      let t1 = Tensor(data: t1Arr, shape: [2, 2])
+      XCTAssertEqual(
+        t1.reshape([1, 2, 1, 2]).expand(shape: [3, 7, 2, 5, 2]).shape, [3, 7, 2, 5, 2])
 
-    let t2 = Tensor(data: t2Arr, shape: [1, 2, 1, 3, 1])
-    try await assertDataEqual(t2.repeating(axis: 0, count: 2), t2Arr + t2Arr)
-    try await assertDataEqual(t2.repeating(axis: 1, count: 2), t2Arr + t2Arr)
-    try await assertDataEqual(
-      t2.repeating(axis: 2, count: 2), [1, 2, 3, 1, 2, 3, 4, 5, 6, 4, 5, 6])
-    try await assertDataEqual(
-      t2.repeating(axis: 3, count: 2), [1, 2, 3, 1, 2, 3, 4, 5, 6, 4, 5, 6])
-    try await assertDataEqual(
-      t2.repeating(axis: 4, count: 2), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6])
+      let t2 = Tensor(data: t2Arr, shape: [1, 2, 1, 3, 1])
+      try await assertDataEqual(t2.repeating(axis: 0, count: 2), t2Arr + t2Arr)
+      try await assertDataEqual(t2.repeating(axis: 1, count: 2), t2Arr + t2Arr)
+      try await assertDataEqual(
+        t2.repeating(axis: 2, count: 2), [1, 2, 3, 1, 2, 3, 4, 5, 6, 4, 5, 6])
+      try await assertDataEqual(
+        t2.repeating(axis: 3, count: 2), [1, 2, 3, 1, 2, 3, 4, 5, 6, 4, 5, 6])
+      try await assertDataEqual(
+        t2.repeating(axis: 4, count: 2), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6])
 
-    var grad: Tensor?
-    let repeated = t2.onGrad({ g in grad = g }).repeating(axis: 2, count: 2)
-    repeated.backward(
-      Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], shape: [1, 2, 2, 3, 1]).cast(as: t1))
-    try await assertDataEqual(grad!, [5, 7, 9, 17, 19, 21])
+      var grad: Tensor?
+      let repeated = t2.onGrad({ g in grad = g }).repeating(axis: 2, count: 2)
+      repeated.backward(
+        Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], shape: [1, 2, 2, 3, 1]).cast(as: t1))
+      try await assertDataEqual(grad!, [5, 7, 9, 17, 19, 21])
 
-    // Repeating past last axis should introduce a new dimension
-    XCTAssertEqual(t1.repeating(axis: 2, count: 3).shape, [2, 2, 3])
-    try await assertDataEqual(
-      t1.repeating(axis: 2, count: 3), [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4])
+      // Repeating past last axis should introduce a new dimension
+      XCTAssertEqual(t1.repeating(axis: 2, count: 3).shape, [2, 2, 3])
+      try await assertDataEqual(
+        t1.repeating(axis: 2, count: 3), [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4])
+    }
   }
 
   func testSoftmax() async throws {

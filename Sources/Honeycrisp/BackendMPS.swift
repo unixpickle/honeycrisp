@@ -186,6 +186,57 @@ open class MPSBackend: CPUBackend {
     }
   }
 
+  override public func repeated(
+    _ a: Tensor.Data, outerCount: Int, innerCount: Int, repeats: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let outBytes = innerCount * outerCount * repeats * dtype.byteSize
+    assert(
+      outBytes <= Int(UInt32.max),
+      "cannot apply kernel to this many values")
+
+    let output = try await allocate(length: outBytes * dtype.byteSize)
+
+    try await waitForGPUData(a)
+    return try await serialize {
+      let device = try device
+      let completion = try completionBuffer { buf in
+        guard let function = library!.makeFunction(name: "repeat") else {
+          throw BackendError.notImplemented("function 'repeat' not found in shader library")
+        }
+        let state = try device.makeComputePipelineState(function: function)
+        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
+          throw BackendError.kernelFailed("could not create compute encoder")
+        }
+        var inner = UInt32(innerCount * dtype.byteSize)
+        var outer = UInt32(outerCount)
+        var reps = UInt32(repeats)
+        computeEncoder.setBuffer(a.buffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(output, offset: 0, index: 1)
+        computeEncoder.setBuffer(
+          device.makeBuffer(bytes: &inner, length: MemoryLayout<UInt32>.stride, options: []),
+          offset: 0, index: 2)
+        computeEncoder.setBuffer(
+          device.makeBuffer(bytes: &outer, length: MemoryLayout<UInt32>.stride, options: []),
+          offset: 0, index: 3)
+        computeEncoder.setBuffer(
+          device.makeBuffer(bytes: &reps, length: MemoryLayout<UInt32>.stride, options: []),
+          offset: 0, index: 4)
+
+        let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(outBytes, min: 32))
+        let gridSize = MTLSize(
+          width: nextMultiple(outBytes, divisor: groupSize), height: 1, depth: 1)
+        let threadGroupSize = MTLSize(width: groupSize, height: 1, depth: 1)
+        computeEncoder.setComputePipelineState(state)
+        computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        computeEncoder.endEncoding()
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
   override public func matmul(
     a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
     inner: Int, cols: Int, dtype: Tensor.DType
@@ -529,23 +580,35 @@ open class MPSBackend: CPUBackend {
       }
 
       kernel void relu_grad_fp32(device const float* input [[buffer(0)]],
-                                 device float* grad_input [[buffer(1)]],
+                                 device float* output [[buffer(1)]],
                                  constant uint &N [[buffer(2)]],
                                  uint id [[thread_position_in_grid]]) {
           if (id < N) {
               float x = input[id];
-              grad_input[id] = x > 0.0f ? 1.0f : 0.0f;
+              output[id] = x > 0.0f ? 1.0f : 0.0f;
           }
       }
 
 
       kernel void relu_grad_fp16(device const half* input [[buffer(0)]],
-                                 device half* grad_input [[buffer(1)]],
+                                 device half* output [[buffer(1)]],
                                  constant uint &N [[buffer(2)]],
                                  uint id [[thread_position_in_grid]]) {
           if (id < N) {
               half x = input[id];
-              grad_input[id] = x > half(0.0) ? half(1.0) : half(0.0);
+              output[id] = x > half(0.0) ? half(1.0) : half(0.0);
+          }
+      }
+
+      kernel void repeat(device const char* input [[buffer(0)]],
+                         device char* output [[buffer(1)]],
+                         constant uint &inner [[buffer(2)]],
+                         constant uint &outer [[buffer(3)]],
+                         constant uint &reps [[buffer(4)]],
+                         uint id [[thread_position_in_grid]]) {
+          if (id < inner * outer * reps) {
+              uint sourceIdx = (id % inner) + (id / (inner * reps)) * inner;
+              output[id] = input[sourceIdx];
           }
       }
     """
