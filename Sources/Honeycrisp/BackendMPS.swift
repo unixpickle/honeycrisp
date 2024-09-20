@@ -15,62 +15,91 @@ open class MPSBackend: CPUBackend {
 
   public class MPSRandomGenerator: NativeRandomGenerator {
     public let mpsBackend: MPSBackend
-    private var seed: Int
+    private var seed: UInt64
+    private var offset: UInt64
 
     init(mpsBackend: MPSBackend, seed: Int) {
       self.mpsBackend = mpsBackend
-      self.seed = seed
+      self.seed = UInt64(seed)
+      self.offset = 0
       super.init(cpuBackend: mpsBackend)
     }
 
     override public func save() async throws -> Data {
-      let seed = try await mpsBackend.serialize {
-        return UInt64(self.seed)
+      let info = try await mpsBackend.serialize {
+        return [self.seed, self.offset]
       }
-      return Data((0..<8).map { UInt8((seed >> (8 * $0)) & 0xff) })
+      return Data(info.flatMap { x in (0..<8).map { UInt8((x >> (8 * $0)) & 0xff) } })
     }
 
     override public func restore(_ x: Data) async throws {
-      var result: UInt64 = 0
+      var seed: UInt64 = 0
+      var offset: UInt64 = 0
       for (i, x) in x.enumerated() {
-        result |= UInt64(x) << (8 * i)
+        if i < 8 {
+          seed |= UInt64(x) << (8 * i)
+        } else {
+          offset |= UInt64(x) << (8 * (i - 8))
+        }
       }
       try await mpsBackend.serialize {
-        seed = Int(result)
+        self.seed = seed
+        self.offset = offset
       }
     }
 
     override public func seed(_ seed: Int) async throws {
       try await mpsBackend.serialize {
-        self.seed = seed
+        self.seed = UInt64(seed)
+        self.offset = 0
       }
     }
 
     override public func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) async throws
       -> Tensor.Data
     {
-      guard let mpsDType = dtype.mpsDType else {
+      if dtype != .float16 && dtype != .float32 {
         return try await super.sample(count: count, dist: dist, dtype: dtype)
       }
+      assert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
 
-      let buffer = try await backend.allocate(length: count * dtype.byteSize)
+      let functionName =
+        "\(dist == .normal ? "randn" : "rand")_\(dtype == .float16 ? "fp16" : "fp32")"
+      let output = try await mpsBackend.allocate(length: count * dtype.byteSize)
+
       return try await mpsBackend.serialize {
-        let completion = mpsBackend.completionBuffer { buf in
-          let rng = MPSMatrixRandomPhilox(
-            device: try! mpsBackend.device,
-            destinationDataType: mpsDType, seed: seed,
-            distributionDescriptor: dist == .normal
-              ? .normalDistributionDescriptor(withMean: 0, standardDeviation: 1)
-              : .uniformDistributionDescriptor(withMinimum: 0, maximum: 1))
-          seed += 1
-          rng.encode(
-            commandBuffer: buf,
-            destinationVector: MPSVector(
-              buffer: buffer,
-              descriptor: MPSVectorDescriptor(
-                length: count, dataType: mpsDType)))
+        let device = try mpsBackend.device
+        let completion = try mpsBackend.completionBuffer { buf in
+          guard let function = mpsBackend.library!.makeFunction(name: functionName) else {
+            throw BackendError.notImplemented(
+              "function \(functionName) not found in shader library")
+          }
+          let state = try device.makeComputePipelineState(function: function)
+          guard let computeEncoder = buf.makeComputeCommandEncoder() else {
+            throw BackendError.kernelFailed("could not create compute encoder")
+          }
+          computeEncoder.setBuffer(output, offset: 0, index: 0)
+          computeEncoder.setBuffer(try mpsBackend.makeUIntBuffer(UInt32(seed)), offset: 0, index: 1)
+          computeEncoder.setBuffer(
+            try mpsBackend.makeUIntBuffer(UInt32(seed >> 32)), offset: 0, index: 2)
+          computeEncoder.setBuffer(
+            try mpsBackend.makeUIntBuffer(UInt32(offset)), offset: 0, index: 3)
+          computeEncoder.setBuffer(
+            try mpsBackend.makeUIntBuffer(UInt32(count)), offset: 0, index: 4)
+
+          let chunkSize = dist == .normal ? 2 : 4
+          let totalThreads = (count + chunkSize - 1) / chunkSize
+          let groupSize = min(
+            state.maxTotalThreadsPerThreadgroup, mpsBackend.nextPowerOf2(totalThreads, min: 32))
+          let gridSize = MTLSize(
+            width: mpsBackend.nextMultiple(totalThreads, divisor: groupSize), height: 1, depth: 1)
+          let threadGroupSize = MTLSize(width: groupSize, height: 1, depth: 1)
+          computeEncoder.setComputePipelineState(state)
+          computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+          computeEncoder.endEncoding()
+          offset += UInt64(totalThreads)
         }
-        return Tensor.Data(backend: mpsBackend, buffer: buffer, completeOnAllDevices: completion)
+        return Tensor.Data(backend: mpsBackend, buffer: output, completeOnAllDevices: completion)
       }
     }
   }
@@ -333,6 +362,14 @@ open class MPSBackend: CPUBackend {
     } else {
       x + divisor - (x % divisor)
     }
+  }
+
+  internal func makeUIntBuffer(_ x: UInt32) throws -> MTLBuffer {
+    var x = x
+    guard let result = (try device).makeBuffer(bytes: &x, length: 4, options: []) else {
+      throw BackendError.allocationFailed(4)
+    }
+    return result
   }
 
   internal func completionBuffer(_ action: (MTLCommandBuffer) throws -> Void) rethrows -> Task<
@@ -609,6 +646,133 @@ open class MPSBackend: CPUBackend {
           if (id < inner * outer * reps) {
               uint sourceIdx = (id % inner) + (id / (inner * reps)) * inner;
               output[id] = input[sourceIdx];
+          }
+      }
+
+      constant uint PHILOX_ROUND_A = 0xD2511F53;
+      constant uint PHILOX_ROUND_B = 0xCD9E8D57;
+      constant uint PHILOX_KEY_A = 0x9E3779B9;
+      constant uint PHILOX_KEY_B = 0xBB67AE85;
+      constant constexpr float M_PI = 3.14159265358979323846264338327950288;
+
+      inline uint umulhi(uint x, uint y) {
+        uint x0 = x & 0xffff;
+        uint x1 = x >> 16;
+        uint y0 = y & 0xffff;
+        uint y1 = y >> 16;
+
+        // Three terms that sum to the total product
+        uint p0 = x0 * y0;
+        uint p1 = x1 * y0 + x0 * y1; // downshifted by 16
+        uint p2 = x1 * y1; // downshifted by 32
+        p1 += p0 >> 16;
+        p2 += p1 >> 16;
+        return p2;
+      }
+
+      inline void philox(uint seed0, uint seed1, uint offset, thread uint* c) {
+        c[0] = offset;
+        c[1] = 0;
+        c[2] = 0;
+        c[3] = 0;
+        uint k0 = seed0;
+        uint k1 = seed1;
+
+        for (int i = 0; i < 10; i++) {
+            uint prev_c0 = c[0];
+            uint prev_c2 = c[2];
+            c[0] = umulhi(PHILOX_ROUND_B, c[2]) ^ c[1] ^ k0;
+            c[2] = umulhi(PHILOX_ROUND_A, prev_c0) ^ c[3] ^ k1;
+            c[1] = PHILOX_ROUND_B * prev_c2;
+            c[3] = PHILOX_ROUND_A * prev_c0;
+            k0 = (k0 + PHILOX_KEY_A);
+            k1 = (k1 + PHILOX_KEY_B);
+        }
+      }
+
+      kernel void rand_fp32(device float* output [[buffer(0)]],
+                            constant uint &seed0 [[buffer(1)]],
+                            constant uint &seed1 [[buffer(2)]],
+                            constant uint &offset [[buffer(3)]],
+                            constant uint &size [[buffer(4)]],
+                            uint id [[thread_position_in_grid]]) {
+          uint c[4];
+          philox(seed0, seed1, offset + id, c);
+          for (int i = 0; i < 4; i++) {
+              uint outIdx = id * 4 + i;
+              if (outIdx < size) {
+                  output[outIdx] = float(c[i]) / float(0xffffffff);
+              }
+          }
+      }
+
+      kernel void rand_fp16(device half* output [[buffer(0)]],
+                            constant uint &seed0 [[buffer(1)]],
+                            constant uint &seed1 [[buffer(2)]],
+                            constant uint &offset [[buffer(3)]],
+                            constant uint &size [[buffer(4)]],
+                            uint id [[thread_position_in_grid]]) {
+          uint c[4];
+          philox(seed0, seed1, offset + id, c);
+          for (int i = 0; i < 4; i++) {
+              uint outIdx = id * 4 + i;
+              if (outIdx < size) {
+                  output[outIdx] = half(float(c[i]) / float(0xffffffff));
+              }
+          }
+      }
+
+      kernel void randn_fp32(device float* output [[buffer(0)]],
+                             constant uint &seed0 [[buffer(1)]],
+                             constant uint &seed1 [[buffer(2)]],
+                             constant uint &offset [[buffer(3)]],
+                             constant uint &size [[buffer(4)]],
+                             uint id [[thread_position_in_grid]]) {
+          uint c[4];
+          philox(seed0, seed1, offset + id, c);
+          float u1 = float(c[0]) / float(0xffffffff);
+          if (u1 < 1e-5) {
+              u1 = 1e-5;
+          }
+          float u2 = float(c[1]) / float(0xffffffff);
+          float r = sqrt(-2 * log(u1));
+          float phi = 2 * M_PI * u2;
+          float z[2];
+          z[0] = r * cos(phi);
+          z[1] = r * sin(phi);
+
+          for (int i = 0; i < 2; i++) {
+              uint outIdx = id * 2 + i;
+              if (outIdx < size) {
+                  output[outIdx] = z[i];
+              }
+          }
+      }
+
+      kernel void randn_fp16(device half* output [[buffer(0)]],
+                             constant uint &seed0 [[buffer(1)]],
+                             constant uint &seed1 [[buffer(2)]],
+                             constant uint &offset [[buffer(3)]],
+                             constant uint &size [[buffer(4)]],
+                             uint id [[thread_position_in_grid]]) {
+          uint c[4];
+          philox(seed0, seed1, offset + id, c);
+          float u1 = float(c[0]) / float(0xffffffff);
+          if (u1 < 1e-5) {
+              u1 = 1e-5;
+          }
+          float u2 = float(c[1]) / float(0xffffffff);
+          float r = sqrt(-2 * log(u1));
+          float phi = 2 * M_PI * u2;
+          float z[2];
+          z[0] = r * cos(phi);
+          z[1] = r * sin(phi);
+
+          for (int i = 0; i < 2; i++) {
+              uint outIdx = id * 2 + i;
+              if (outIdx < size) {
+                  output[outIdx] = half(z[i]);
+              }
           }
       }
     """

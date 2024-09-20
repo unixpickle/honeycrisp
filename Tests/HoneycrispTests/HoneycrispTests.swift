@@ -770,22 +770,30 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testRandom() async throws {
-    let x = Tensor(randn: [1000, 100])
-    let y = Tensor(randn: [1000, 100], generator: try await Backend.defaultBackend.createRandom())
-    let xMean = try await x.mean().item()
-    let yMean = try await y.mean().item()
-    let xStd = try await (x - xMean).pow(2).mean().sqrt().item()
-    let yStd = try await (y - yMean).pow(2).mean().sqrt().item()
-    XCTAssert(abs(xMean) < 0.03, "unexpected mean of normal: \(xMean)")
-    XCTAssert(abs(yMean) < 0.03, "unexpected mean of normal: \(yMean)")
-    XCTAssert(abs(xStd - 1) < 0.03, "unexpected standard deviation of normal: \(xStd)")
-    XCTAssert(abs(yStd - 1) < 0.03, "unexpected standard deviation of normal: \(yStd)")
+    try await runInBackends {
+      let x = Tensor(randn: [1000, 100])
+      let xMean = try await x.mean().item()
+      let xStd = try await (x - xMean).pow(2).mean().sqrt().item()
+      XCTAssert(abs(xMean) < 0.03, "unexpected mean of normal: \(xMean)")
+      XCTAssert(abs(xStd - 1) < 0.03, "unexpected standard deviation of normal: \(xStd)")
 
-    let z = Tensor(rand: [1000, 100])
-    let zMean = try await z.mean().item()
-    let zStd = try await (z - zMean).pow(2).mean().sqrt().item()
-    XCTAssert(abs(zMean - 0.5) < 0.03, "unexpected mean of uniform: \(zMean)")
-    XCTAssert(abs(zStd - 0.288675135) < 0.03, "unexpected standard deviation of uniform: \(zStd)")
+      let z = Tensor(rand: [1000, 100])
+      let zMean = try await z.mean().item()
+      let zStd = try await (z - zMean).pow(2).mean().sqrt().item()
+      XCTAssert(abs(zMean - 0.5) < 0.03, "unexpected mean of uniform: \(zMean)")
+      XCTAssert(abs(zStd - 0.288675135) < 0.03, "unexpected standard deviation of uniform: \(zStd)")
+
+      do {
+        let rng = try await Backend.current.defaultRandom()
+        let state = try await rng.save()
+        let a = Tensor(randn: [1234])
+        let _ = try await a.data  // avoid a race condition
+        try await rng.restore(state)
+        let b = Tensor(randn: [1234])
+        try await assertDataEqual(a, b)
+      } catch BackendError.notImplemented(_) {
+      }
+    }
   }
 
   func testNoGrad() async throws {
