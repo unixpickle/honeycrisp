@@ -49,6 +49,18 @@ extension Tensor {
     self.init(dataTask: dataTask, shape: shape, dtype: dtype)
   }
 
+  public convenience init(
+    randnLike other: Tensor, generator: RandomGenerator? = nil
+  ) {
+    self.init(rand: other.shape, dist: .normal, dtype: other.dtype, generator: generator)
+  }
+
+  public convenience init(
+    randLike other: Tensor, generator: RandomGenerator? = nil
+  ) {
+    self.init(rand: other.shape, dist: .uniform, dtype: other.dtype, generator: generator)
+  }
+
   private convenience init(
     randInt shape: [Int], in range: Range<Int64>, generator: RandomGenerator? = nil
   ) {

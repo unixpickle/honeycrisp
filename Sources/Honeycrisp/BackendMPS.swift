@@ -273,43 +273,70 @@ open class MPSBackend: CPUBackend {
     async throws
     -> Tensor.Data
   {
+    try await batchedMatmul(
+      matrixCount: 1, a: a, transA: transA, b: b, transB: transB, transOut: transOut, rows: rows,
+      inner: inner, cols: cols, dtype: dtype)
+  }
+
+  override public func batchedMatmul(
+    matrixCount: Int, a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool,
+    rows: Int, inner: Int, cols: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
     guard let mpsDType = dtype.mpsDType else {
-      return try await super.matmul(
-        a: a, transA: transA, b: b, transB: transB, transOut: transOut, rows: rows, inner: inner,
+      return try await super.batchedMatmul(
+        matrixCount: matrixCount, a: a, transA: transA, b: b, transB: transB, transOut: transOut,
+        rows: rows, inner: inner,
         cols: cols, dtype: dtype)
     }
 
     if transOut {
-      return try await matmul(
-        a: b, transA: !transB, b: a, transB: !transA, transOut: false, rows: cols, inner: inner,
+      return try await batchedMatmul(
+        matrixCount: matrixCount, a: b, transA: !transB, b: a, transB: !transA, transOut: false,
+        rows: cols, inner: inner,
         cols: rows, dtype: dtype)
     }
 
     let aShape = transA ? (inner, rows) : (rows, inner)
     let bShape = transB ? (cols, inner) : (inner, cols)
 
-    let output = try await allocate(length: rows * cols * dtype.byteSize)
+    let output = try await allocate(length: matrixCount * rows * cols * dtype.byteSize)
     try await waitForGPUData(a, b)
     return try await serialize {
       let mm = self.createMatmul(
         transA: transA, transB: transB, rows: rows, inner: inner, cols: cols)
       let completion = completionBuffer { buf in
+        assert(
+          a.buffer.allocatedSize >= matrixCount * aShape.0 * aShape.1 * dtype.byteSize,
+          "matrix A buffer underflow")
+        assert(
+          b.buffer.allocatedSize >= matrixCount * bShape.0 * bShape.1 * dtype.byteSize,
+          "matrix B buffer underflow \(matrixCount) * \(bShape) * \(dtype.byteSize) vs \(b.buffer.allocatedSize)"
+        )
+        assert(
+          output.allocatedSize >= matrixCount * rows * cols * dtype.byteSize,
+          "output matrix buffer underflow")
         mm.encode(
           commandBuffer: buf,
           leftMatrix: MPSMatrix(
             buffer: a.buffer,
             descriptor: MPSMatrixDescriptor(
-              rows: aShape.0, columns: aShape.1, rowBytes: aShape.1 * dtype.byteSize,
-              dataType: mpsDType)),
+              rows: aShape.0, columns: aShape.1, matrices: matrixCount,
+              rowBytes: aShape.1 * dtype.byteSize,
+              matrixBytes: aShape.0 * aShape.1 * dtype.byteSize, dataType: mpsDType)),
           rightMatrix: MPSMatrix(
             buffer: b.buffer,
             descriptor: MPSMatrixDescriptor(
-              rows: bShape.0, columns: bShape.1, rowBytes: bShape.1 * dtype.byteSize,
-              dataType: mpsDType)),
+              rows: bShape.0, columns: bShape.1, matrices: matrixCount,
+              rowBytes: bShape.1 * dtype.byteSize,
+              matrixBytes: bShape.0 * bShape.1 * dtype.byteSize, dataType: mpsDType)),
           resultMatrix: MPSMatrix(
             buffer: output,
             descriptor: MPSMatrixDescriptor(
-              rows: rows, columns: cols, rowBytes: cols * dtype.byteSize, dataType: mpsDType))
+              rows: rows, columns: cols, matrices: matrixCount, rowBytes: cols * dtype.byteSize,
+              matrixBytes: rows * cols * dtype.byteSize, dataType: mpsDType))
         )
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)

@@ -176,6 +176,16 @@ open class Backend {
     throw BackendError.notImplemented("matmul")
   }
 
+  public func batchedMatmul(
+    matrixCount: Int, a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool,
+    rows: Int, inner: Int, cols: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("batchedMatmul")
+  }
+
   public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
     async throws
     -> Tensor.Data
@@ -676,7 +686,7 @@ open class CPUBackend: Backend {
     if s.broadcasted {
       let innerSize = s.innerCount * dtype.byteSize
       let outBuffer = try await allocate(
-        length: s.innerCount * flatIndices.count * innerSize)
+        length: s.outerCount * s.innerCount * flatIndices.count * innerSize)
       try await serialize {
         let inData = a.buffer.contents()
         let outData = outBuffer.contents()
@@ -761,8 +771,19 @@ open class CPUBackend: Backend {
 
   override public func matmul(
     a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
-    inner: Int, cols: Int,
-    dtype: Tensor.DType
+    inner: Int, cols: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    return try await batchedMatmul(
+      matrixCount: 1, a: a, transA: transA, b: b, transB: transB, transOut: transOut, rows: rows,
+      inner: inner, cols: cols, dtype: dtype)
+  }
+
+  override public func batchedMatmul(
+    matrixCount: Int, a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool,
+    rows: Int, inner: Int, cols: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -772,55 +793,62 @@ open class CPUBackend: Backend {
     let aCount = rows * inner
     let bCount = inner * cols
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
-      let buffer = try await allocate(length: rows * cols * dtype.byteSize)
+      let buffer = try await allocate(length: matrixCount * rows * cols * dtype.byteSize)
       if !transA && !transB && !transOut && dtype == .float32 {
         try await serialize {
-          let x = UnsafePointer<Float>(
-            a.buffer.contents().bindMemory(to: Float.self, capacity: aCount))
-          let y = UnsafePointer<Float>(
-            b.buffer.contents().bindMemory(to: Float.self, capacity: aCount))
-          let z = buffer.contents().bindMemory(to: Float.self, capacity: rows * cols)
-          vDSP_mmul(x, 1, y, 1, z, 1, vDSP_Length(rows), vDSP_Length(cols), vDSP_Length(inner))
+          for i in 0..<matrixCount {
+            let x = UnsafePointer<Float>(
+              a.buffer.contents().advanced(by: i * aCount * dtype.byteSize).bindMemory(
+                to: Float.self, capacity: aCount))
+            let y = UnsafePointer<Float>(
+              b.buffer.contents().advanced(by: i * bCount * dtype.byteSize).bindMemory(
+                to: Float.self, capacity: aCount))
+            let z = buffer.contents().advanced(by: i * rows * cols * dtype.byteSize).bindMemory(
+              to: Float.self, capacity: rows * cols)
+            vDSP_mmul(x, 1, y, 1, z, 1, vDSP_Length(rows), vDSP_Length(cols), vDSP_Length(inner))
+          }
         }
       } else {
         try await serialize {
-          var arrA = [T](repeating: zero, count: aCount)
-          var arrB = [T](repeating: zero, count: bCount)
+          var arrA = [T](repeating: zero, count: matrixCount * aCount)
+          var arrB = [T](repeating: zero, count: matrixCount * bCount)
           try pointerToArray(a.buffer.contents(), output: &arrA, dtype: dtype)
           try pointerToArray(b.buffer.contents(), output: &arrB, dtype: dtype)
-          var arrC = [T](repeating: zero, count: rows * cols)
+          var arrC = [T](repeating: zero, count: matrixCount * rows * cols)
 
-          func getA(_ i: Int, _ j: Int) -> T {
+          func getA(_ matIdx: Int, _ i: Int, _ j: Int) -> T {
             if transA {
-              arrA[i + j * rows]
+              arrA[matIdx * rows * inner + i + j * rows]
             } else {
-              arrA[i * inner + j]
+              arrA[matIdx * rows * inner + i * inner + j]
             }
           }
 
-          func getB(_ i: Int, _ j: Int) -> T {
+          func getB(_ matIdx: Int, _ i: Int, _ j: Int) -> T {
             if transB {
-              arrB[i + j * inner]
+              arrB[matIdx * cols * inner + i + j * inner]
             } else {
-              arrB[i * cols + j]
+              arrB[matIdx * cols * inner + i * cols + j]
             }
           }
 
-          func setC(_ i: Int, _ j: Int, _ x: T) {
+          func setC(_ matIdx: Int, _ i: Int, _ j: Int, _ x: T) {
             if transOut {
-              arrC[i + j * rows] = x
+              arrC[matIdx * rows * cols + i + j * rows] = x
             } else {
-              arrC[i * cols + j] = x
+              arrC[matIdx * rows * cols + i * cols + j] = x
             }
           }
 
-          for i in 0..<rows {
-            for j in 0..<cols {
-              var acc = T(0.0)
-              for k in 0..<inner {
-                acc = acc + getA(i, k) * getB(k, j)
+          for matIdx in 0..<matrixCount {
+            for i in 0..<rows {
+              for j in 0..<cols {
+                var acc = T(0.0)
+                for k in 0..<inner {
+                  acc = acc + getA(matIdx, i, k) * getB(matIdx, k, j)
+                }
+                setC(matIdx, i, j, acc)
               }
-              setC(i, j, acc)
             }
           }
 

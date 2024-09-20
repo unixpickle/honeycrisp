@@ -274,6 +274,16 @@ final class HoneycrispTests: XCTestCase {
     out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: [1, 2, 3, 1]))
     try await assertDataEqual(out, [-2.0, 3.0, 7.0, 1.0, 2.0, 3.0])
     try await assertDataEqual(xGrad!, [4.0, 5.0, 6.0, 1.0, 2.0, 3.0])
+
+    let transposeMe = Tensor(
+      data: [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12,
+      ], shape: [2, 3, 4])
+    try await assertDataEqual(
+      transposeMe.t(),
+      [1, 5, 9, 2, 6, 10, 3, 7, 11, 4, 8, 12, -1, -5, -9, -2, -6, -10, -3, -7, -11, -4, -8, -12])
+    let buf = try await transposeMe.t().data
+    XCTAssert(buf.buffer.allocatedSize >= transposeMe.dtype.byteSize * transposeMe.shape.product())
   }
 
   func testMatrixMatrixProduct() async throws {
@@ -315,6 +325,49 @@ final class HoneycrispTests: XCTestCase {
         XCTAssertEqual(z.shape, [64, 32])
         try await assertDataEqual(z, [Float](repeating: 128, count: 64 * 32))
       }()
+    }
+  }
+
+  func testBatchedMatmul() async throws {
+    try await runInBackends {
+      for transA in [false, true] {
+        for transB in [false, true] {
+          for transOut in [false, true] {
+            for dtype in [Tensor.DType.float32, Tensor.DType.float16] {
+              let x = Tensor(rand: [3, 2, 3], dtype: dtype)
+              let y = Tensor(rand: [3, 3, 4], dtype: dtype)
+              var xGrad: Tensor?
+              var yGrad: Tensor?
+              let a = x.onGrad { grad in xGrad = grad }
+              let b = y.onGrad { grad in yGrad = grad }
+              let preOut = Tensor.batchedMatmul(
+                a: transA ? a.t() : a, transA: transA,
+                b: transB ? b.t() : b, transB: transB, transOut: transOut)
+              let out = transOut ? preOut.t() : preOut
+              XCTAssertEqual(out.shape, [3, 2, 4])
+              let outGrad = Tensor(randLike: out)
+              out.backward(outGrad)
+
+              for i in 0..<x.shape[0] {
+                let eps = Float(dtype == .float32 ? 1e-4 : 1e-2)
+                var subXGrad: Tensor?
+                var subYGrad: Tensor?
+                let a = x[i].onGrad { grad in subXGrad = grad }
+                let b = y[i].onGrad { grad in subYGrad = grad }
+                let singleOut = Tensor.matmul(
+                  a: transA ? a.t() : a, transA: transA,
+                  b: transB ? b.t() : b, transB: transB, transOut: transOut)
+                let subOut = transOut ? singleOut.t() : singleOut
+                subOut.backward(outGrad[i])
+                XCTAssertEqual(subOut.shape, out[i].shape)
+                try await assertClose(subOut, out[i], atol: eps, rtol: eps)
+                try await assertClose(subXGrad!, xGrad![i], atol: eps, rtol: eps)
+                try await assertClose(subYGrad!, yGrad![i], atol: eps, rtol: eps)
+              }
+            }
+          }
+        }
+      }
     }
   }
 

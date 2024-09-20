@@ -121,7 +121,17 @@ public final class Tensor {
     dataTask: Task<Data, Error>, shape: [Int], dtype: DType,
     backwardImpl: (((Tensor) -> Void))? = nil
   ) {
-    self.dataTask = dataTask
+    #if DEBUG
+      self.dataTask = Task {
+        let result = try await dataTask.value
+        let allocSize = result.buffer.allocatedSize
+        let minSize = shape.product() * dtype.byteSize
+        assert(allocSize >= minSize, "buffer of size \(allocSize) underflows shape \(shape)")
+        return result
+      }
+    #else
+      self.dataTask = dataTask
+    #endif
     self.shape = shape
     self.dtype = dtype
     if Tensor.isGradEnabled {
@@ -556,8 +566,11 @@ public final class Tensor {
     assert(Tensor.isGradEnabled, "backward handle cannot be saved while grads are disabled")
     if !self.needsGrad {
       return BackwardHandle()
+    } else if self.backwardImpl == nil {
+      return BackwardHandle(
+        addGrad: { _ in assert(false, "cannot backward a second time") }, cancel: {})
     }
-    assert(self.backwardImpl != nil, "cannot backward a second time")
+
     numBackwardHandles += 1
 
     return BackwardHandle(
