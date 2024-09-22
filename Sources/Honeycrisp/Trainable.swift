@@ -181,7 +181,7 @@ open class Trainable {
 }
 
 public class TrainableArray<T: Trainable>: Trainable {
-  public let children: [Trainable]
+  public let children: [T]
 
   public init(_ children: [T]) {
     self.children = children
@@ -193,8 +193,8 @@ public class TrainableArray<T: Trainable>: Trainable {
 }
 
 public class Linear: Trainable {
-  @Param(name: "weight") var weight: Tensor
-  @Param(name: "bias") var bias: Tensor?
+  @Param(name: "weight") public var weight: Tensor
+  @Param(name: "bias") public var bias: Tensor?
 
   public init(inCount: Int, outCount: Int, dtype: Tensor.DType = .float32, bias: Bool = true) {
     super.init()
@@ -206,10 +206,55 @@ public class Linear: Trainable {
   }
 
   public func callAsFunction(_ x: Tensor) -> Tensor {
+    if x.shape.count > 2 {
+      let squashedBatch = x.reshape([
+        x.shape[..<(x.shape.count - 1)].product(), x.shape[x.shape.count - 1],
+      ])
+      let out = self(squashedBatch)
+      return out.reshape(x.shape[..<(x.shape.count - 1)] + [out.shape[out.shape.count - 1]])
+    }
     var h = x &* weight
     if let bias = bias {
       h = h + bias.expand(as: h)
     }
     return h
+  }
+}
+
+public class LayerNorm: Trainable {
+  public let shape: [Int]
+  public let eps: Float
+
+  @Param(name: "gain") public var gain: Tensor?
+  @Param(name: "bias") public var bias: Tensor?
+
+  public init(shape: [Int], dtype: Tensor.DType = .float32, eps: Float = 1e-5, affine: Bool = true)
+  {
+    self.shape = shape
+    self.eps = eps
+    super.init()
+    if affine {
+      self.gain = Tensor(zeros: shape, dtype: dtype)
+      self.bias = Tensor(zeros: shape, dtype: dtype)
+    }
+  }
+
+  public func callAsFunction(_ x: Tensor) -> Tensor {
+    assert(
+      x.shape.count >= shape.count && Array(x.shape[(x.shape.count - shape.count)...]) == shape,
+      "LayerNorm shape \(shape) is incompatible with input shape \(x.shape)")
+
+    let batchShape = x.shape[..<(x.shape.count - shape.count)]
+    let innerCount = shape.product()
+    let tmpShape = [batchShape.product(), innerCount]
+    let normedShape = Array(batchShape + Array(repeating: 1, count: shape.count))
+    let mean = x.reshape(tmpShape).mean(axis: 1).reshape(normedShape)
+    let variance = x.reshape(tmpShape).variance(axis: 1).reshape(normedShape)
+    let normalized = (x - mean.expand(as: x)) * (variance.expand(as: x) + eps).rsqrt()
+    if let gain = gain, let bias = bias {
+      return normalized * (gain.expand(as: x) + 1) + bias.expand(as: x)
+    } else {
+      return normalized
+    }
   }
 }

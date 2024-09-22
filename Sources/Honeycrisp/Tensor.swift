@@ -243,7 +243,7 @@ public final class Tensor {
     if shape == newShape {
       return self
     }
-    assert(shape.product() == newShape.product())
+    assert(shape.product() == newShape.product(), "invalid reshape from \(shape) to \(newShape)")
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: dataTask, shape: newShape, dtype: dtype)
     } else {

@@ -38,8 +38,8 @@ let package = Package(
     .executableTarget(
       name: "MNISTExample",
       dependencies: ["MNIST", "Honeycrisp"]),
-    // .executableTarget(
-    //   name: "MatrixBench",
-    //   dependencies: ["Honeycrisp"]),
+    .executableTarget(
+      name: "MNISTGenExample",
+      dependencies: ["MNIST", "Honeycrisp"]),
   ]
 )

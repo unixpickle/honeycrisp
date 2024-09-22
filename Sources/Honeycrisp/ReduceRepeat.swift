@@ -46,6 +46,18 @@ extension Tensor {
     return sum(axis: axis, keepdims: keepdims) / Float(axis != nil ? shape[axis!] : shape.product())
   }
 
+  public func variance(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+    let mean = self.mean(axis: axis, keepdims: true)
+    let result = (self - mean.expand(as: self)).pow(2).mean(axis: axis, keepdims: true)
+    if keepdims {
+      return result
+    } else if let axis = axis {
+      return result.reshape(Array(result.shape[..<axis]) + Array(result.shape[(axis + 1)...]))
+    } else {
+      return result.reshape([])
+    }
+  }
+
   internal func gatherFromReduce(op: ReduceOp, axis: Int?, keepdims: Bool) -> Tensor {
     guard let axis = positiveAxis(axis) else {
       let result = flatten().gatherFromReduce(op: op, axis: 0, keepdims: false)

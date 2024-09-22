@@ -387,6 +387,24 @@ final class HoneycrispTests: XCTestCase {
     XCTAssertEqual(yGrad!.shape, y.shape)
   }
 
+  func testTril() async throws {
+    try await assertDataEqual(
+      Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2]).tril(), [1, 0, 3, 4, 5, 6])
+    try await assertDataEqual(
+      Tensor(data: [1, 2, 3, 4, 5, 6, -1, -2, -3, -4, -5, -6], shape: [2, 3, 2]).tril(),
+      [1, 0, 3, 4, 5, 6, -1, 0, -3, -4, -5, -6])
+    try await assertDataEqual(
+      Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3]).tril(), [1, 0, 0, 4, 5, 0])
+    try await assertDataEqual(
+      Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9], shape: [3, 3]).tril(), [1, 0, 0, 4, 5, 0, 7, 8, 9])
+
+    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2])
+    var xGrad: Tensor?
+    x.onGrad { g in xGrad = g }.tril().backward(
+      Tensor(data: [-1, -2, -3, -4, -5, -6], shape: [3, 2]))
+    try await assertDataEqual(xGrad!, [-1, 0, -3, -4, -5, -6])
+  }
+
   func testIndexing() async throws {
     let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2])
     XCTAssertEqual(x[0].shape, [2])
@@ -488,12 +506,7 @@ final class HoneycrispTests: XCTestCase {
     )
       async throws
     {
-      let oldBackend = Backend.defaultBackend
-      defer {
-        Backend.defaultBackend = oldBackend
-      }
-      for backend in backends {
-        Backend.defaultBackend = backend
+      try await runInBackends {
         for dtype in [Tensor.DType.float32, Tensor.DType.float16] {
           var actualGrad: Tensor?
           let tensorIn = Tensor(data: input, shape: [input.count], dtype: dtype) { g in
@@ -826,13 +839,13 @@ final class HoneycrispTests: XCTestCase {
     try await runInBackends {
       let x = Tensor(randn: [1000, 100])
       let xMean = try await x.mean().item()
-      let xStd = try await (x - xMean).pow(2).mean().sqrt().item()
+      let xStd = try await x.variance().sqrt().item()
       XCTAssert(abs(xMean) < 0.03, "unexpected mean of normal: \(xMean)")
       XCTAssert(abs(xStd - 1) < 0.03, "unexpected standard deviation of normal: \(xStd)")
 
       let z = Tensor(rand: [1000, 100])
       let zMean = try await z.mean().item()
-      let zStd = try await (z - zMean).pow(2).mean().sqrt().item()
+      let zStd = try await z.variance().sqrt().item()
       XCTAssert(abs(zMean - 0.5) < 0.03, "unexpected mean of uniform: \(zMean)")
       XCTAssert(abs(zStd - 0.288675135) < 0.03, "unexpected standard deviation of uniform: \(zStd)")
 

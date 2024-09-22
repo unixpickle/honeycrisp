@@ -10,6 +10,99 @@ public enum BackendError: Error {
   case kernelFailed(String)
 }
 
+public class DedicatedThread {
+  private var backgroundWork: [() -> Void] = []
+  private var backgroundLock: NSLock = NSLock()
+  private var backgroundSem: DispatchSemaphore = DispatchSemaphore(value: 0)
+  private var backgroundCancel: Bool = false
+  private var backgroundThread: Thread?
+
+  public init() {
+    backgroundThread = Thread { [self] in
+      while true {
+        backgroundSem.wait()
+        while true {
+          backgroundLock.lock()
+          if backgroundCancel {
+            backgroundLock.unlock()
+            return
+          }
+          if let workItem = backgroundWork.popLast() {
+            backgroundLock.unlock()
+            autoreleasepool {
+              workItem()
+            }
+          } else {
+            backgroundLock.unlock()
+            break
+          }
+        }
+      }
+    }
+    backgroundThread!.name = "dedicated-thread"
+    backgroundThread!.start()
+  }
+
+  deinit {
+    backgroundLock.lock()
+    backgroundCancel = true
+    backgroundLock.unlock()
+    backgroundSem.signal()
+  }
+
+  public func serialize<T>(_ work: @escaping () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+      backgroundLock.lock()
+      backgroundWork.insert(
+        {
+          var result: Result<T, Error>?
+          do {
+            result = Result.success(try work())
+          } catch {
+            result = Result.failure(error)
+          }
+          let constResult = result!
+          continuation.resume(with: constResult)
+        }, at: 0)
+      backgroundLock.unlock()
+      backgroundSem.signal()
+    }
+  }
+
+  public func async(_ work: @escaping () -> Void) {
+    backgroundLock.lock()
+    backgroundWork.insert(work, at: 0)
+    backgroundLock.unlock()
+    backgroundSem.signal()
+  }
+
+  private class ResultWrapper<T> {
+    var result: Result<T, Error>? = nil
+  }
+
+  public func sync<T>(_ work: @escaping () throws -> T) throws -> T {
+    let result = ResultWrapper<T>()
+    let sem = DispatchSemaphore(value: 0)
+    backgroundLock.lock()
+    backgroundWork.insert(
+      {
+        do {
+          result.result = .success(try work())
+        } catch {
+          result.result = .failure(error)
+        }
+        sem.signal()
+      }, at: 0)
+    backgroundLock.unlock()
+    backgroundSem.signal()
+    sem.wait()
+    switch result.result! {
+    case .success(let x): return x
+    case .failure(let e): throw e
+    }
+  }
+}
+
 open class Backend {
 
   private static let ThreadKey = "HONEYCRISP_CURRENT_BACKEND"
@@ -41,18 +134,10 @@ open class Backend {
     }
   }
 
-  private var queue = DispatchQueue(label: "backend-worker")
+  private let cpuThread = DedicatedThread()
 
-  internal func serialize<T>(_ work: () throws -> T) async throws -> T {
-    return try await withCheckedThrowingContinuation { continuation in
-      queue.sync {
-        do {
-          continuation.resume(returning: try work())
-        } catch {
-          continuation.resume(throwing: error)
-        }
-      }
-    }
+  internal func serialize<T>(_ work: @escaping () throws -> T) async throws -> T {
+    try await cpuThread.serialize(work)
   }
 
   public func allocate(length: Int) async throws -> MTLBuffer {
@@ -186,6 +271,12 @@ open class Backend {
     throw BackendError.notImplemented("batchedMatmul")
   }
 
+  public func tril(_ a: Tensor.Data, batch: Int, rows: Int, cols: Int, dtype: Tensor.DType)
+    async throws -> Tensor.Data
+  {
+    throw BackendError.notImplemented("tril")
+  }
+
   public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
     async throws
     -> Tensor.Data
@@ -213,7 +304,6 @@ open class Backend {
   public func createRandom() async throws -> RandomGenerator {
     throw BackendError.notImplemented("createRandom")
   }
-
 }
 
 open class CPUBackend: Backend {
@@ -308,7 +398,7 @@ open class CPUBackend: Backend {
   }
 
   override public func allocate(length: Int) async throws -> MTLBuffer {
-    return try await serialize {
+    return try await serialize { [self] in
       guard
         let result = (try device).makeBuffer(length: max(1, length), options: [.storageModeShared])
       else {
@@ -581,6 +671,23 @@ open class CPUBackend: Backend {
   {
     try await waitForData(a)
 
+    if dtype == .float32 && op == .sum {
+      let buffer = try await allocate(length: dims.outCount * dtype.byteSize)
+      for i in 0..<dims.outerCount {
+        for j in 0..<dims.innerCount {
+          let inPtr = UnsafePointer<Float>(
+            a.buffer.contents().advanced(by: 4 * (j + i * dims.reduceCount * dims.innerCount))
+              .bindMemory(
+                to: Float.self, capacity: dims.reduceCount))
+          let y = UnsafeMutablePointer<Float>(
+            buffer.contents().advanced(by: 4 * (i * dims.innerCount + j)).bindMemory(
+              to: Float.self, capacity: dims.reduceCount))
+          vDSP_sve(inPtr, vDSP_Stride(dims.innerCount), y, vDSP_Length(dims.reduceCount))
+        }
+      }
+      return Tensor.Data(backend: self, buffer: buffer)
+    }
+
     func apply<T: NumericTensorElement>(_ x: T) async throws -> Tensor.Data {
       let arr = try await serialize {
         var arr = [T](repeating: x, count: dims.inCount)
@@ -685,8 +792,7 @@ open class CPUBackend: Backend {
 
     if s.broadcasted {
       let innerSize = s.innerCount * dtype.byteSize
-      let outBuffer = try await allocate(
-        length: s.outerCount * s.innerCount * flatIndices.count * innerSize)
+      let outBuffer = try await allocate(length: s.outerCount * flatIndices.count * innerSize)
       try await serialize {
         let inData = a.buffer.contents()
         let outData = outBuffer.contents()
@@ -862,6 +968,28 @@ open class CPUBackend: Backend {
     } else {
       return try await apply(Float(0))
     }
+  }
+
+  override public func tril(_ a: Tensor.Data, batch: Int, rows: Int, cols: Int, dtype: Tensor.DType)
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a)
+
+    let outBuf = try await allocate(length: batch * rows * cols * dtype.byteSize)
+    try await serialize {
+      let inPtr = a.buffer.contents()
+      let outPtr = outBuf.contents()
+      for i in 0..<batch {
+        for j in 0..<rows {
+          let copyBytes = min(j + 1, cols) * dtype.byteSize
+          let offset = (j + i * rows) * cols * dtype.byteSize
+          outPtr.advanced(by: offset).copyMemory(
+            from: inPtr.advanced(by: offset), byteCount: copyBytes)
+        }
+      }
+    }
+    return Tensor.Data(backend: self, buffer: outBuf)
   }
 
   override public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)

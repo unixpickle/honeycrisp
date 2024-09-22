@@ -1,4 +1,5 @@
 extension Tensor {
+
   public static func outer(_ a: Tensor, _ b: Tensor) -> Tensor {
     assert(
       a.shape.count == 1 && b.shape.count == 1,
@@ -98,4 +99,24 @@ extension Tensor {
   public static func &* (_ lhs: Tensor, _ rhs: Tensor) -> Tensor {
     return matmul(a: lhs, transA: false, b: rhs, transB: false, transOut: false)
   }
+
+  public func tril() -> Tensor {
+    let backend = Backend.current
+    let newData = Task {
+      return try await backend.tril(
+        try await self.data,
+        batch: shape[..<(shape.count - 2)].product(),
+        rows: shape[shape.count - 2],
+        cols: shape[shape.count - 1], dtype: dtype)
+    }
+    if !needsGrad || !Tensor.isGradEnabled {
+      return Tensor(dataTask: newData, shape: shape, dtype: dtype)
+    } else {
+      let handle = saveForBackward()
+      return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
+        handle.backward(grad.tril())
+      }
+    }
+  }
+
 }

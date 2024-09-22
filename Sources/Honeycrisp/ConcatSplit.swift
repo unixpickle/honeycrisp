@@ -1,5 +1,5 @@
 extension Tensor {
-  convenience init(concat tensors: [Tensor], axis: Int = 0) {
+  public convenience init(concat tensors: [Tensor], axis: Int = 0) {
     let backend = Backend.current
 
     assert(tensors.count > 0, "cannot concatenate zero tensors")
