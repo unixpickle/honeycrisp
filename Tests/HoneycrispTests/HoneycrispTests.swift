@@ -175,6 +175,11 @@ final class HoneycrispTests: XCTestCase {
     try await assertDataEqual(sum, [14.0])
     try await assertDataEqual(xGrad!, [1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
 
+    let ndData = Tensor(
+      data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], shape: [2, 2, 3], dtype: .float32)
+    let ndSum = ndData.sum(axis: 1)
+    try await assertDataEqual(ndSum, [5, 7, 9, 17, 19, 21])
+
     // Older tests are below
 
     let input = Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9], shape: [3, 3])

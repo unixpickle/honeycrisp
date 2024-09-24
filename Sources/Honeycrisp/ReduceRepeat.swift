@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ReduceDims {
+public struct ReduceDims: Hashable {
   let outerCount: Int
   let reduceCount: Int
   let innerCount: Int
@@ -11,6 +11,10 @@ public struct ReduceDims {
 
   var outCount: Int {
     outerCount * innerCount
+  }
+
+  var mpsShape: [NSNumber] {
+    [NSNumber(value: outerCount), NSNumber(value: reduceCount), NSNumber(value: innerCount)]
   }
 }
 

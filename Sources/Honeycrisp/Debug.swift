@@ -20,7 +20,7 @@ extension Tensor {
     }
   }
 
-  public func checkNaNInf(onForward: String? = nil, onGrad: String? = nil) -> Tensor {
+  public func checkNaN(onForward: String? = nil, onGrad: String? = nil) -> Tensor {
     assert(dtype == .float32)
     if onForward == nil && onGrad == nil {
       return self
@@ -33,7 +33,7 @@ extension Tensor {
       var floats = [Float](repeating: 0, count: shape.product())
       try pointerToArray(result.buffer.contents(), output: &floats, dtype: dtype)
       if let onForward = onForward, !floats.allSatisfy({ !$0.isNaN }) {
-        print("nan/inf detected: \(onForward)")
+        print("nan detected: \(onForward)")
       }
       return result
     }
@@ -42,7 +42,7 @@ extension Tensor {
     } else {
       let handle = saveForBackward()
       return Tensor(dataTask: task, shape: shape, dtype: dtype) { grad in
-        handle.backward(grad.checkNaNInf(onForward: onGrad))
+        handle.backward(grad.checkNaN(onForward: onGrad))
       }
     }
   }

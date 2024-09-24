@@ -23,6 +23,18 @@ open class MPSBackend: CPUBackend {
     let matOut: MPSGraphTensor
   }
 
+  private struct ReduceKey: Hashable {
+    let op: ReduceOp
+    let dims: ReduceDims
+    let dtype: MPSDataType
+  }
+
+  private struct ReduceGraph {
+    let graph: MPSGraph
+    let input: MPSGraphTensor
+    let output: MPSGraphTensor
+  }
+
   public class MPSRandomGenerator: NativeRandomGenerator {
     public let mpsBackend: MPSBackend
     private var seed: UInt64
@@ -78,21 +90,19 @@ open class MPSBackend: CPUBackend {
       let output = try await mpsBackend.allocate(length: count * dtype.byteSize)
 
       return try await mpsBackend.serialize { [self] in
-        let seedBuf0 = try mpsBackend.makeUIntBuffer(UInt32(seed))
-        let seedBuf1 = try mpsBackend.makeUIntBuffer(UInt32(seed >> 32))
-        let offsetBuf = try mpsBackend.makeUIntBuffer(UInt32(offset))
-        let countBuf = try mpsBackend.makeUIntBuffer(UInt32(count))
-
-        let completion = try mpsBackend.completionBuffer { [self] buf in
+        let completion = try mpsBackend.completionBuffer { buf in
           let state = try mpsBackend.getFunction(name: functionName)
           guard let computeEncoder = buf.makeComputeCommandEncoder() else {
             throw BackendError.kernelFailed("could not create compute encoder")
           }
           computeEncoder.setBuffer(output, offset: 0, index: 0)
-          computeEncoder.setBuffer(seedBuf0, offset: 0, index: 1)
-          computeEncoder.setBuffer(seedBuf1, offset: 0, index: 2)
-          computeEncoder.setBuffer(offsetBuf, offset: 0, index: 3)
-          computeEncoder.setBuffer(countBuf, offset: 0, index: 4)
+          computeEncoder.setBuffer(try mpsBackend.makeUIntBuffer(UInt32(seed)), offset: 0, index: 1)
+          computeEncoder.setBuffer(
+            try mpsBackend.makeUIntBuffer(UInt32(seed >> 32)), offset: 0, index: 2)
+          computeEncoder.setBuffer(
+            try mpsBackend.makeUIntBuffer(UInt32(offset)), offset: 0, index: 3)
+          computeEncoder.setBuffer(
+            try mpsBackend.makeUIntBuffer(UInt32(count)), offset: 0, index: 4)
 
           let chunkSize = dist == .normal ? 2 : 4
           let totalThreads = (count + chunkSize - 1) / chunkSize
@@ -111,64 +121,52 @@ open class MPSBackend: CPUBackend {
     }
   }
 
-  private let gpuThread = DedicatedThread()
-
-  internal func serializeGPU<T>(_ work: @escaping () throws -> T) async throws -> T {
-    try await gpuThread.serialize(work)
-  }
-
+  private var queue = DispatchQueue(label: "mps-backend-worker")
   private var commandQueue: MTLCommandQueue? = nil
   private var matmuls: [MatmulKey: MatmulGraph] = [:]
+  private var reductions: [ReduceKey: ReduceGraph] = [:]
   private var defaultRNG: MPSRandomGenerator? = nil
   private var functions: [String: MTLComputePipelineState] = [:]
 
   public init(device: MTLDevice? = nil, commandQueue: MTLCommandQueue? = nil) throws {
     super.init()
-    let _ = try gpuThread.sync { [self] in
-      if let device = device {
-        self._device = device
-        if let commandQueue = commandQueue {
-          self.commandQueue = commandQueue
-        } else {
-          if let q = device.makeCommandQueue() {
-            self.commandQueue = q
-          } else {
-            throw BackendError.failedToCreateCommandQueue
-          }
-        }
+    if let device = device {
+      self._device = device
+      if let commandQueue = commandQueue {
+        self.commandQueue = commandQueue
       } else {
-        guard let d = MTLCreateSystemDefaultDevice() else {
-          throw BackendError.failedToCreateMTLDevice
-        }
-        self._device = d
-        guard let q = d.makeCommandQueue() else {
+        if let q = device.makeCommandQueue() {
+          self.commandQueue = q
+        } else {
           throw BackendError.failedToCreateCommandQueue
         }
-        self.commandQueue = q
       }
-      let library = try (self._device!).makeLibrary(
-        source: MPSBackend.KernelCode, options: MTLCompileOptions())
-      for name in [
-        "vector_pow_fp16", "vector_pow_fp32", "log_fp16", "log_fp32", "recip_fp16", "recip_fp32",
-        "exp_fp16", "exp_fp32", "sigmoid_fp16", "sigmoid_fp32", "sigmoid_grad_fp16",
-        "sigmoid_grad_fp32", "gelu_fp32", "gelu_fp16", "gelu_grad_fp32", "gelu_grad_fp16",
-        "sin_fp32", "sin_fp16", "cos_fp32", "cos_fp16", "minus_sin_fp32", "minus_sin_fp16",
-        "relu_fp32", "relu_fp16", "relu_grad_fp32", "relu_grad_fp16", "repeat", "rand_fp32",
-        "rand_fp16", "randn_fp32", "randn_fp16",
-      ] {
-        guard let f = library.makeFunction(name: name) else {
-          throw BackendError.kernelFailed("could not create kernel with name '\(name)'")
-        }
-        functions[name] = try (self._device!).makeComputePipelineState(function: f)
+    } else {
+      guard let d = MTLCreateSystemDefaultDevice() else {
+        throw BackendError.failedToCreateMTLDevice
       }
+      self._device = d
+      guard let q = d.makeCommandQueue() else {
+        throw BackendError.failedToCreateCommandQueue
+      }
+      self.commandQueue = q
     }
-  }
-
-  internal func getFunction(name: String) throws -> MTLComputePipelineState {
-    guard let f = functions[name] else {
-      throw BackendError.kernelFailed("no kernel with name '\(name)'")
+    let library = try (self._device!).makeLibrary(
+      source: MPSBackend.KernelCode, options: MTLCompileOptions())
+    for name in [
+      "addvv_fp16", "addvv_fp32", "addvs_fp16", "addvs_fp32", "mulvv_fp16", "mulvv_fp32",
+      "mulvs_fp16", "mulvs_fp32", "vector_pow_fp16", "vector_pow_fp32", "log_fp16", "log_fp32",
+      "recip_fp16", "recip_fp32", "exp_fp16", "exp_fp32", "sigmoid_fp16", "sigmoid_fp32",
+      "sigmoid_grad_fp16", "sigmoid_grad_fp32", "gelu_fp32", "gelu_fp16", "gelu_grad_fp32",
+      "gelu_grad_fp16", "sin_fp32", "sin_fp16", "cos_fp32", "cos_fp16", "minus_sin_fp32",
+      "minus_sin_fp16", "relu_fp32", "relu_fp16", "relu_grad_fp32", "relu_grad_fp16", "repeat",
+      "rand_fp32", "rand_fp16", "randn_fp32", "randn_fp16",
+    ] {
+      guard let f = library.makeFunction(name: name) else {
+        throw BackendError.kernelFailed("could not create kernel with name '\(name)'")
+      }
+      functions[name] = try (self._device!).makeComputePipelineState(function: f)
     }
-    return f
   }
 
   internal func waitForGPUData(_ xs: Tensor.Data...) async throws {
@@ -178,6 +176,13 @@ open class MPSBackend: CPUBackend {
       }
       try await waitForData(x)
     }
+  }
+
+  internal func getFunction(name: String) throws -> MTLComputePipelineState {
+    guard let f = functions[name] else {
+      throw BackendError.kernelFailed("no kernel with name '\(name)'")
+    }
+    return f
   }
 
   override public func pow<T: NumericTensorElement>(
@@ -195,10 +200,7 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let bBuf = try makeFloatBuffer(b.toFloat())
-      let countBuf = try makeUIntBuffer(UInt32(count))
-
-      let completion = try completionBuffer { [self] buf in
+      let completion = try completionBuffer { buf in
         let funcName = "vector_pow_\(dtype == .float16 ? "fp16" : "fp32")"
         let state = try getFunction(name: funcName)
         guard let computeEncoder = buf.makeComputeCommandEncoder() else {
@@ -206,8 +208,8 @@ open class MPSBackend: CPUBackend {
         }
         computeEncoder.setBuffer(a.buffer, offset: 0, index: 0)
         computeEncoder.setBuffer(output, offset: 0, index: 1)
-        computeEncoder.setBuffer(bBuf, offset: 0, index: 2)
-        computeEncoder.setBuffer(countBuf, offset: 0, index: 3)
+        computeEncoder.setBuffer(try makeFloatBuffer(b.toFloat()), offset: 0, index: 2)
+        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(count)), offset: 0, index: 3)
 
         let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(count, min: 32))
         let gridSize = MTLSize(width: nextMultiple(count, divisor: groupSize), height: 1, depth: 1)
@@ -263,15 +265,14 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let countBuf = try makeUIntBuffer(UInt32(count))
-      let completion = try completionBuffer { [self] buf in
+      let completion = try completionBuffer { buf in
         let state = try getFunction(name: functionName)
         guard let computeEncoder = buf.makeComputeCommandEncoder() else {
           throw BackendError.kernelFailed("could not create compute encoder")
         }
         computeEncoder.setBuffer(a.buffer, offset: 0, index: 0)
         computeEncoder.setBuffer(output, offset: 0, index: 1)
-        computeEncoder.setBuffer(countBuf, offset: 0, index: 2)
+        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(count)), offset: 0, index: 2)
 
         let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(count, min: 32))
         let gridSize = MTLSize(width: nextMultiple(count, divisor: groupSize), height: 1, depth: 1)
@@ -279,10 +280,114 @@ open class MPSBackend: CPUBackend {
         computeEncoder.setComputePipelineState(state)
         computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
         computeEncoder.endEncoding()
-
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
     }
+  }
+
+  override public func binaryOp(
+    _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    if dtype != .float16 && dtype != .float32 {
+      return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
+    }
+
+    assert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+
+    let opName =
+      switch op {
+      case .add:
+        "add"
+      case .mul:
+        "mul"
+      }
+    let functionName = "\(opName)vv_\(dtype == .float16 ? "fp16" : "fp32")"
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    try await waitForGPUData(a)
+    return try await serialize { [self] in
+      let completion = try completionBuffer { buf in
+        let state = try getFunction(name: functionName)
+        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
+          throw BackendError.kernelFailed("could not create compute encoder")
+        }
+        computeEncoder.setBuffer(a.buffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(b.buffer, offset: 0, index: 1)
+        computeEncoder.setBuffer(output, offset: 0, index: 2)
+        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(count)), offset: 0, index: 3)
+
+        let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(count, min: 32))
+        let gridSize = MTLSize(width: nextMultiple(count, divisor: groupSize), height: 1, depth: 1)
+        let threadGroupSize = MTLSize(width: groupSize, height: 1, depth: 1)
+        computeEncoder.setComputePipelineState(state)
+        computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        computeEncoder.endEncoding()
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  override public func binaryOp<T: NumericTensorElement>(
+    _ a: Tensor.Data, _ b: T, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    if dtype != .float16 && dtype != .float32 {
+      return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
+    }
+
+    assert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+
+    let opName =
+      switch op {
+      case .add:
+        "add"
+      case .mul:
+        "mul"
+      }
+    let functionName = "\(opName)vs_\(dtype == .float16 ? "fp16" : "fp32")"
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    try await waitForGPUData(a)
+    return try await serialize { [self] in
+      let completion = try completionBuffer { buf in
+        let state = try getFunction(name: functionName)
+        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
+          throw BackendError.kernelFailed("could not create compute encoder")
+        }
+        computeEncoder.setBuffer(a.buffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(try makeFloatBuffer(b.toFloat()), offset: 0, index: 1)
+        computeEncoder.setBuffer(output, offset: 0, index: 2)
+        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(count)), offset: 0, index: 3)
+
+        let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(count, min: 32))
+        let gridSize = MTLSize(width: nextMultiple(count, divisor: groupSize), height: 1, depth: 1)
+        let threadGroupSize = MTLSize(width: groupSize, height: 1, depth: 1)
+        computeEncoder.setComputePipelineState(state)
+        computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        computeEncoder.endEncoding()
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  override public func binaryOp<T: NumericTensorElement>(
+    _ a: T, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    if (op != .add && op != .mul) || dtype != .float16 && dtype != .float32 {
+      return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
+    }
+
+    assert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+
+    return try await binaryOp(b, a, op: op, count: count, dtype: dtype)
   }
 
   override public func repeated(
@@ -300,19 +405,17 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let innerCountBuf = try makeUIntBuffer(UInt32(innerCount * dtype.byteSize))
-      let outerCountBuf = try makeUIntBuffer(UInt32(outerCount))
-      let repeatsBuf = try makeUIntBuffer(UInt32(repeats))
-      let completion = try completionBuffer { [self] buf in
+      let completion = try completionBuffer { buf in
         let state = try getFunction(name: "repeat")
         guard let computeEncoder = buf.makeComputeCommandEncoder() else {
           throw BackendError.kernelFailed("could not create compute encoder")
         }
         computeEncoder.setBuffer(a.buffer, offset: 0, index: 0)
         computeEncoder.setBuffer(output, offset: 0, index: 1)
-        computeEncoder.setBuffer(innerCountBuf, offset: 0, index: 2)
-        computeEncoder.setBuffer(outerCountBuf, offset: 0, index: 3)
-        computeEncoder.setBuffer(repeatsBuf, offset: 0, index: 4)
+        computeEncoder.setBuffer(
+          try makeUIntBuffer(UInt32(innerCount * dtype.byteSize)), offset: 0, index: 2)
+        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(outerCount)), offset: 0, index: 3)
+        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(repeats)), offset: 0, index: 4)
 
         let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(outBytes, min: 32))
         let gridSize = MTLSize(
@@ -323,6 +426,61 @@ open class MPSBackend: CPUBackend {
         computeEncoder.endEncoding()
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  override public func reduce(
+    _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    guard let mpsDType = dtype.mpsDType, op == .sum else {
+      return try await super.reduce(a, op: op, dims: dims, dtype: dtype)
+    }
+
+    let output = try await allocate(length: dims.outCount * dtype.byteSize)
+    try await waitForGPUData(a)
+    return try await serialize { [self] in
+      let red = self.createReduction(op: op, dims: dims, dtype: mpsDType)
+      let completion = completionBuffer { buf in
+        red.graph.encode(
+          to: buf as! MPSCommandBuffer,
+          feeds: [
+            red.input: MPSGraphTensorData(
+              MPSVector(
+                buffer: a.buffer,
+                descriptor: MPSVectorDescriptor(
+                  length: dims.inCount, dataType: mpsDType)))
+          ],
+          targetOperations: nil,
+          resultsDictionary: [
+            red.output: MPSGraphTensorData(
+              MPSVector(
+                buffer: output,
+                descriptor: MPSVectorDescriptor(length: dims.outCount, dataType: mpsDType)))
+          ],
+          executionDescriptor: nil)
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  private func createReduction(op: ReduceOp, dims: ReduceDims, dtype: MPSDataType) -> ReduceGraph {
+    let key = ReduceKey(op: op, dims: dims, dtype: dtype)
+    if let r = reductions[key] {
+      return r
+    } else {
+      let graph = MPSGraph()
+      let input = graph.placeholder(
+        shape: [NSNumber(value: dims.inCount)], dataType: dtype, name: "input")
+      let reshaped = graph.reshape(input, shape: dims.mpsShape, name: "reshaped")
+      let unshapedOutput = graph.reductionSum(with: reshaped, axis: 1, name: "unshapedOutput")
+      let output = graph.reshape(
+        unshapedOutput, shape: [NSNumber(value: dims.outCount)], name: "output")
+      let r = ReduceGraph(graph: graph, input: input, output: output)
+      reductions[key] = r
+      return r
     }
   }
 
@@ -504,29 +662,56 @@ open class MPSBackend: CPUBackend {
     return result
   }
 
-  internal func completionBuffer(_ action: @escaping (MTLCommandBuffer) throws -> Void) rethrows
-    -> Task<
-      (), Error
-    >
-  {
-    return Task.detached { [self] in
-      try await withCheckedThrowingContinuation { [self] continuation in
-        self.gpuThread.async { [self] in
-          let buf = MPSCommandBuffer(commandBuffer: commandQueue!.makeCommandBuffer()!)
-          do {
-            try action(buf)
-          } catch {
-            continuation.resume(throwing: error)
-            return
-          }
-          buf.commit()
-          buf.waitUntilCompleted()
-          if let err = buf.error {
-            continuation.resume(throwing: err)
-          } else {
-            continuation.resume(returning: ())
-          }
+  class CompletionCallback {
+    private var lock: NSLock = NSLock()
+    private var _result: Result<(), Error>? = nil
+    private var _continue: ((Result<(), Error>) -> Void)? = nil
+
+    init() {
+    }
+
+    func putResult(_ x: Result<(), Error>) {
+      lock.lock()
+      if let c = _continue {
+        lock.unlock()
+        c(x)
+      } else {
+        _result = x
+        lock.unlock()
+      }
+    }
+
+    func putContinuation(_ f: @escaping (Result<(), Error>) -> Void) {
+      lock.lock()
+      if let r = _result {
+        lock.unlock()
+        f(r)
+      } else {
+        _continue = f
+        lock.unlock()
+      }
+    }
+  }
+
+  internal func completionBuffer(_ action: (MTLCommandBuffer) throws -> Void) rethrows -> Task<
+    (), Error
+  > {
+    let buf = MPSCommandBuffer(commandBuffer: commandQueue!.makeCommandBuffer()!)
+    try action(buf)
+    let cb = CompletionCallback()
+    buf.addCompletedHandler { _ in
+      let result: Result<(), Error> =
+        if let e = buf.error {
+          Result.failure(e)
+        } else {
+          Result.success(())
         }
+      cb.putResult(result)
+    }
+    buf.commit()
+    return Task.detached {
+      try await withCheckedThrowingContinuation { continuation in
+        cb.putContinuation(continuation.resume)
       }
     }
   }
@@ -535,15 +720,95 @@ open class MPSBackend: CPUBackend {
       #include <metal_stdlib>
       using namespace metal;
 
-      inline float safeTanh(float x) {
+      inline float safe_tanh(float x) {
           return (x < -10 ? -1 : (x > 10 ? 1 : tanh(x)));
+      }
+
+      kernel void addvv_fp16(device const half* a [[buffer(0)]],
+                             device const half* b [[buffer(1)]],
+                             device half* c [[buffer(2)]],
+                             constant uint &N [[buffer(3)]],
+                             uint id [[thread_position_in_grid]]) {
+        if (id < N) {
+          c[id] = a[id] + b[id];
+        }
+      }
+
+      kernel void addvv_fp32(device const float* a [[buffer(0)]],
+                             device const float* b [[buffer(1)]],
+                             device float* c [[buffer(2)]],
+                             constant uint &N [[buffer(3)]],
+                             uint id [[thread_position_in_grid]]) {
+        if (id < N) {
+          c[id] = a[id] + b[id];
+        }
+      }
+
+      kernel void addvs_fp16(device const half* a [[buffer(0)]],
+                             device const float &b [[buffer(1)]],
+                             device half* c [[buffer(2)]],
+                             constant uint &N [[buffer(3)]],
+                             uint id [[thread_position_in_grid]]) {
+        if (id < N) {
+          c[id] = a[id] + b;
+        }
+      }
+
+      kernel void addvs_fp32(device const float* a [[buffer(0)]],
+                             device const float &b [[buffer(1)]],
+                             device float* c [[buffer(2)]],
+                             constant uint &N [[buffer(3)]],
+                             uint id [[thread_position_in_grid]]) {
+        if (id < N) {
+          c[id] = a[id] + b;
+        }
+      }
+
+      kernel void mulvv_fp16(device const half* a [[buffer(0)]],
+                             device const half* b [[buffer(1)]],
+                             device half* c [[buffer(2)]],
+                             constant uint &N [[buffer(3)]],
+                             uint id [[thread_position_in_grid]]) {
+        if (id < N) {
+          c[id] = a[id] * b[id];
+        }
+      }
+
+      kernel void mulvv_fp32(device const float* a [[buffer(0)]],
+                             device const float* b [[buffer(1)]],
+                             device float* c [[buffer(2)]],
+                             constant uint &N [[buffer(3)]],
+                             uint id [[thread_position_in_grid]]) {
+        if (id < N) {
+          c[id] = a[id] * b[id];
+        }
+      }
+
+      kernel void mulvs_fp16(device const half* a [[buffer(0)]],
+                             device const float &b [[buffer(1)]],
+                             device half* c [[buffer(2)]],
+                             constant uint &N [[buffer(3)]],
+                             uint id [[thread_position_in_grid]]) {
+        if (id < N) {
+          c[id] = a[id] * b;
+        }
+      }
+
+      kernel void mulvs_fp32(device const float* a [[buffer(0)]],
+                             device const float &b [[buffer(1)]],
+                             device float* c [[buffer(2)]],
+                             constant uint &N [[buffer(3)]],
+                             uint id [[thread_position_in_grid]]) {
+        if (id < N) {
+          c[id] = a[id] * b;
+        }
       }
 
       kernel void vector_pow_fp16(device const half* input [[buffer(0)]],
                                   device half* output [[buffer(1)]],
                                   constant float &exponent [[buffer(2)]],
                                   constant uint &N [[buffer(3)]],
-                           uint id [[thread_position_in_grid]]) {
+                                  uint id [[thread_position_in_grid]]) {
         if (id < N) {
             output[id] = half(pow(float(input[id]), exponent));
         }
@@ -618,7 +883,7 @@ open class MPSBackend: CPUBackend {
                                constant uint &N [[buffer(2)]],
                                uint id [[thread_position_in_grid]]) {
         if (id < N) {
-            output[id] = (safeTanh(input[id] / 2) + 1) / 2;
+            output[id] = (safe_tanh(input[id] / 2) + 1) / 2;
         }
       }
 
@@ -627,7 +892,7 @@ open class MPSBackend: CPUBackend {
                                constant uint &N [[buffer(2)]],
                                uint id [[thread_position_in_grid]]) {
         if (id < N) {
-            output[id] = (safeTanh(input[id] / 2) + 1) / 2;
+            output[id] = (safe_tanh(input[id] / 2) + 1) / 2;
         }
       }
 
@@ -636,7 +901,7 @@ open class MPSBackend: CPUBackend {
                                     constant uint &N [[buffer(2)]],
                                     uint id [[thread_position_in_grid]]) {
         if (id < N) {
-            half s = (safeTanh(input[id] / 2) + 1) / 2;
+            half s = (safe_tanh(input[id] / 2) + 1) / 2;
             output[id] = s * (1 - s);
         }
       }
@@ -646,7 +911,7 @@ open class MPSBackend: CPUBackend {
                                     constant uint &N [[buffer(2)]],
                                     uint id [[thread_position_in_grid]]) {
         if (id < N) {
-            half s = (safeTanh(input[id] / 2) + 1) / 2;
+            half s = (safe_tanh(input[id] / 2) + 1) / 2;
             output[id] = s * (1 - s);
         }
       }
@@ -657,7 +922,7 @@ open class MPSBackend: CPUBackend {
                             uint id [[thread_position_in_grid]]) {
           if (id < N) {
               float x = input[id];
-              output[id] = 0.5 * x * (1.0 + safeTanh(0.797884561 * (x + 0.044715 * pow(x, 3.0))));
+              output[id] = 0.5 * x * (1.0 + safe_tanh(0.797884561 * (x + 0.044715 * pow(x, 3.0))));
           }
       }
 
@@ -667,7 +932,7 @@ open class MPSBackend: CPUBackend {
                             uint id [[thread_position_in_grid]]) {
           if (id < N) {
               float x = float(input[id]);
-              output[id] = half(0.5 * x * (1.0 + safeTanh(0.797884561 * (x + 0.044715 * pow(x, 3.0)))));
+              output[id] = half(0.5 * x * (1.0 + safe_tanh(0.797884561 * (x + 0.044715 * pow(x, 3.0)))));
           }
       }
 
@@ -677,7 +942,7 @@ open class MPSBackend: CPUBackend {
                                  uint id [[thread_position_in_grid]]) {
           if (id < N) {
               float x = input[id];
-              float tanhTerm = safeTanh(0.035677408145115 * pow(x, 3.0) + 0.797884561 * x);
+              float tanhTerm = safe_tanh(0.035677408145115 * pow(x, 3.0) + 0.797884561 * x);
               output[id] = 0.5 * x * (1.0 - pow(tanhTerm, 2.0)) * (0.107032224435345 * pow(x, 2.0) + 0.797884561)
                           + 0.5 * tanhTerm + 0.5;
           }
@@ -689,7 +954,7 @@ open class MPSBackend: CPUBackend {
                                  uint id [[thread_position_in_grid]]) {
           if (id < N) {
               float x = float(input[id]);
-              float tanhTerm = safeTanh(0.035677408145115 * pow(x, 3.0) + 0.797884561 * x);
+              float tanhTerm = safe_tanh(0.035677408145115 * pow(x, 3.0) + 0.797884561 * x);
               output[id] = half(
                   0.5 * x * (1.0 - pow(tanhTerm, 2.0)) * (0.107032224435345 * pow(x, 2.0) + 0.797884561)
                   + 0.5 * tanhTerm + 0.5);

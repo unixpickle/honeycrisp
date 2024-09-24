@@ -2,10 +2,13 @@ import Foundation
 import Honeycrisp
 import MNIST
 
-let TokenCount: Int = 28 * 28
+let PatchSize: Int = 2
+let TokenCount: Int = (28 / PatchSize) * (28 / PatchSize)
 let ModelDim: Int = 128
 let HeadDim: Int = 64
 let LayerCount: Int = 4
+let NumLabels: Int = 10
+let VocabSize: Int = NumLabels + (1 << (PatchSize * PatchSize))
 
 class Attention: Trainable {
   let causalMask: Tensor
@@ -16,7 +19,8 @@ class Attention: Trainable {
   @Child var outProj: Linear
 
   override init() {
-    causalMask = Tensor(constant: -1e8, shape: [TokenCount, TokenCount]).tril()
+    causalMask = Tensor(constant: 1e8, shape: [TokenCount, TokenCount]).tril() - 1e8
+    assert(!causalMask.needsGrad)
     super.init()
     self.qProj = Linear(inCount: ModelDim, outCount: ModelDim)
     self.kProj = Linear(inCount: ModelDim, outCount: ModelDim)
@@ -40,8 +44,8 @@ class Attention: Trainable {
     let k = moveHeadsToOuter(kProj(x)) / sqrt(sqrt(Float(HeadDim)))
     let v = moveHeadsToOuter(vProj(x))
 
-    let energy =
-      Tensor.batchedMatmul(a: k, transA: false, b: q, transB: true, transOut: false)
+    let energy = Tensor.batchedMatmul(a: q, transA: false, b: k, transB: true, transOut: false)
+
     let probs = (energy + causalMask.expand(as: energy)).softmax()
     let reducedValues = Tensor.batchedMatmul(
       a: probs, transA: false, b: v, transB: false, transOut: false)
@@ -82,20 +86,20 @@ class Transformer: Trainable {
 
   override init() {
     super.init()
-    embed = Tensor(randn: [12, ModelDim])
+    embed = Tensor(randn: [VocabSize, ModelDim])
     posEmbed = Tensor(randn: [TokenCount, ModelDim])
     layers = TrainableArray((0..<LayerCount).map { _ in Block() })
     normOut = LayerNorm(shape: [ModelDim])
 
-    unembed = Linear(inCount: ModelDim, outCount: 2)
+    unembed = Linear(inCount: ModelDim, outCount: VocabSize - NumLabels)
 
     // Uniform initial probability
-    unembed.weight = unembed.weight * 0
+    unembed.weight = unembed.weight.noGrad() * 0
   }
 
   func callAsFunction(_ x: Tensor) -> Tensor {
     // Input should be a [N x T] tensor of indices
-    var h = embed.expand(shape: [x.shape[0], x.shape[1], 12, ModelDim]).gather(
+    var h = embed.expand(shape: [x.shape[0], x.shape[1], VocabSize, ModelDim]).gather(
       axis: 2,
       indices: x.reshape([x.shape[0], x.shape[1], 1, 1]).repeating(axis: -1, count: ModelDim)
     ).reshape([x.shape[0], x.shape[1], ModelDim])
@@ -144,10 +148,24 @@ struct DataIterator: Sequence, IteratorProtocol {
       outputLabels.append(img.label)
       offset += 1
     }
-    let probs = Tensor(data: inputData, shape: [batchSize, 28 * 28], dtype: .float32)
+    let probs = Tensor(data: inputData, shape: [batchSize, 28, 28], dtype: .float32)
+    let pixels = (probs > Tensor(randLike: probs)).cast(.int64)
+    var patches: Tensor?
+    for i in 0..<PatchSize {
+      for j in 0..<PatchSize {
+        let subPatch = pixels[
+          ..., stride(from: i, to: 28, by: PatchSize), stride(from: j, to: 28, by: PatchSize)]
+        let scale = 1 << (i * PatchSize + j)
+        if let p = patches {
+          patches = p + subPatch * scale
+        } else {
+          patches = subPatch * scale
+        }
+      }
+    }
+    let flatPatches = patches!.reshape([patches!.shape[0], patches!.shape[1] * patches!.shape[2]])
     let label = Tensor(data: outputLabels, shape: [batchSize, 1], dtype: .int64) + 2
-    let samples = (probs > Tensor(randLike: probs)).cast(.int64)
-    return Tensor(concat: [label, samples], axis: 1)
+    return Tensor(concat: [label, flatPatches], axis: 1)
   }
 }
 
@@ -164,7 +182,7 @@ struct Main {
 
     print("creating model and optimizer...")
     let model = Transformer()
-    let opt = Adam(model.parameters, lr: 0.001, eps: 1e-4)
+    let opt = Adam(model.parameters, lr: 0.0001, eps: 1e-5)
 
     do {
       print(" => initial param norm: \(try await model.paramNorm())")
@@ -181,8 +199,12 @@ struct Main {
       print("Error downloading dataset: \(error)")
       return
     }
-    let train = DataIterator(images: dataset.train, batchSize: bs)
-    let test = DataIterator(images: dataset.test, batchSize: bs)
+    var trainShuffle = dataset.train
+    trainShuffle.shuffle()
+    var testShuffle = dataset.test
+    testShuffle.shuffle()
+    let train = DataIterator(images: trainShuffle, batchSize: bs)
+    let test = DataIterator(images: testShuffle, batchSize: bs)
 
     func computeLoss(_ seq: Tensor) -> Tensor {
       let inSeq = seq[..., ..<(-1)]

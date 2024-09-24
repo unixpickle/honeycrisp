@@ -10,99 +10,6 @@ public enum BackendError: Error {
   case kernelFailed(String)
 }
 
-public class DedicatedThread {
-  private var backgroundWork: [() -> Void] = []
-  private var backgroundLock: NSLock = NSLock()
-  private var backgroundSem: DispatchSemaphore = DispatchSemaphore(value: 0)
-  private var backgroundCancel: Bool = false
-  private var backgroundThread: Thread?
-
-  public init() {
-    backgroundThread = Thread { [self] in
-      while true {
-        backgroundSem.wait()
-        while true {
-          backgroundLock.lock()
-          if backgroundCancel {
-            backgroundLock.unlock()
-            return
-          }
-          if let workItem = backgroundWork.popLast() {
-            backgroundLock.unlock()
-            autoreleasepool {
-              workItem()
-            }
-          } else {
-            backgroundLock.unlock()
-            break
-          }
-        }
-      }
-    }
-    backgroundThread!.name = "dedicated-thread"
-    backgroundThread!.start()
-  }
-
-  deinit {
-    backgroundLock.lock()
-    backgroundCancel = true
-    backgroundLock.unlock()
-    backgroundSem.signal()
-  }
-
-  public func serialize<T>(_ work: @escaping () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-      backgroundLock.lock()
-      backgroundWork.insert(
-        {
-          var result: Result<T, Error>?
-          do {
-            result = Result.success(try work())
-          } catch {
-            result = Result.failure(error)
-          }
-          let constResult = result!
-          continuation.resume(with: constResult)
-        }, at: 0)
-      backgroundLock.unlock()
-      backgroundSem.signal()
-    }
-  }
-
-  public func async(_ work: @escaping () -> Void) {
-    backgroundLock.lock()
-    backgroundWork.insert(work, at: 0)
-    backgroundLock.unlock()
-    backgroundSem.signal()
-  }
-
-  private class ResultWrapper<T> {
-    var result: Result<T, Error>? = nil
-  }
-
-  public func sync<T>(_ work: @escaping () throws -> T) throws -> T {
-    let result = ResultWrapper<T>()
-    let sem = DispatchSemaphore(value: 0)
-    backgroundLock.lock()
-    backgroundWork.insert(
-      {
-        do {
-          result.result = .success(try work())
-        } catch {
-          result.result = .failure(error)
-        }
-        sem.signal()
-      }, at: 0)
-    backgroundLock.unlock()
-    backgroundSem.signal()
-    sem.wait()
-    switch result.result! {
-    case .success(let x): return x
-    case .failure(let e): throw e
-    }
-  }
-}
-
 open class Backend {
 
   private static let ThreadKey = "HONEYCRISP_CURRENT_BACKEND"
@@ -134,10 +41,63 @@ open class Backend {
     }
   }
 
-  private let cpuThread = DedicatedThread()
+  private var backgroundWork: [() -> Void] = []
+  private var backgroundLock: NSLock = NSLock()
+  private var backgroundSem: DispatchSemaphore = DispatchSemaphore(value: 0)
+  private var backgroundCancel: Bool = false
+  private var backgroundThread: Thread?
+
+  public init() {
+    backgroundThread = Thread { [self] in
+      while true {
+        backgroundSem.wait()
+        while true {
+          backgroundLock.lock()
+          if backgroundCancel {
+            backgroundLock.unlock()
+            return
+          }
+          if let workItem = backgroundWork.popLast() {
+            backgroundLock.unlock()
+            autoreleasepool {
+              workItem()
+            }
+          } else {
+            backgroundLock.unlock()
+            break
+          }
+        }
+      }
+    }
+    backgroundThread!.start()
+  }
+
+  deinit {
+    backgroundLock.lock()
+    backgroundCancel = true
+    backgroundSem.signal()
+    backgroundLock.unlock()
+  }
 
   internal func serialize<T>(_ work: @escaping () throws -> T) async throws -> T {
-    try await cpuThread.serialize(work)
+    try await withCheckedThrowingContinuation { continuation in
+      backgroundLock.lock()
+      backgroundWork.insert(
+        {
+          var result: Result<T, Error>?
+          do {
+            result = Result.success(try work())
+          } catch {
+            result = Result.failure(error)
+          }
+          let constResult = result!
+          // Task.detached {
+          continuation.resume(with: constResult)
+          // }
+        }, at: 0)
+      backgroundLock.unlock()
+      backgroundSem.signal()
+    }
   }
 
   public func allocate(length: Int) async throws -> MTLBuffer {
@@ -304,6 +264,7 @@ open class Backend {
   public func createRandom() async throws -> RandomGenerator {
     throw BackendError.notImplemented("createRandom")
   }
+
 }
 
 open class CPUBackend: Backend {
@@ -371,7 +332,6 @@ open class CPUBackend: Backend {
     }
   }
 
-  private var queue = DispatchQueue(label: "cpu-backend-worker")
   private static var _global = CPUBackend()
   public static var global: CPUBackend { CPUBackend._global }
 

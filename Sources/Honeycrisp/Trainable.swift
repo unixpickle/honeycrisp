@@ -79,6 +79,7 @@ open class Trainable {
         if param.maybeName == nil {
           param.maybeName = String("\(storageKeyPath)".split(separator: ".").last!)
         }
+        assert(!(newValue.maybeTensor()?.needsGrad ?? false), "parameter value cannot need grad")
         param.maybeData = newValue
         if newValue.isNil {
           instance.registeredParams.removeValue(forKey: param.name!)

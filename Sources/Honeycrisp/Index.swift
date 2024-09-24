@@ -69,6 +69,23 @@ extension Range<Int>: TensorIndex {
   }
 }
 
+extension StrideTo<Int>: TensorIndex {
+  public var minTensorIndexDims: Int { 1 }
+
+  public func tensorIndex(forShape inShape: [Int]) -> TensorIndexResult {
+    assert(inShape.count > 0)
+    let indices = Array(self)
+    assert(
+      indices.allSatisfy({ $0 < inShape[0] && $0 >= 0 }),
+      "stride \(indices) out of bounds for shape \(inShape)")
+    return TensorIndexResult(
+      reshape: inShape,
+      indices: Tensor(data: indices, shape: [indices.count], dtype: .int64),
+      gatherAxis: 0,
+      gatherReshape: nil)
+  }
+}
+
 extension ClosedRange<Int>: TensorIndex {
   public var minTensorIndexDims: Int { 1 }
 
