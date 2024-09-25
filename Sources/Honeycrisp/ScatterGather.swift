@@ -11,15 +11,15 @@ public struct ScatterGatherIndices {
     if broadcasted {
       outCount
     } else {
-      scatterOutCount
+      gatherOutCount
     }
   }
 
-  public var scatterInCount: Int {
+  public var gatherInCount: Int {
     outerCount * middleCount * innerCount
   }
 
-  public var scatterOutCount: Int {
+  public var gatherOutCount: Int {
     outerCount * outCount * innerCount
   }
 }

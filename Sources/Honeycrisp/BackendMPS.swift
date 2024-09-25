@@ -106,13 +106,7 @@ open class MPSBackend: CPUBackend {
 
           let chunkSize = dist == .normal ? 2 : 4
           let totalThreads = (count + chunkSize - 1) / chunkSize
-          let groupSize = min(
-            state.maxTotalThreadsPerThreadgroup, mpsBackend.nextPowerOf2(totalThreads, min: 32))
-          let gridSize = MTLSize(
-            width: mpsBackend.nextMultiple(totalThreads, divisor: groupSize), height: 1, depth: 1)
-          let threadGroupSize = MTLSize(width: groupSize, height: 1, depth: 1)
-          computeEncoder.setComputePipelineState(state)
-          computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+          mpsBackend.dispatch1D(computeEncoder, state: state, threadCount: totalThreads)
           computeEncoder.endEncoding()
           offset += UInt64(totalThreads)
         }
@@ -153,7 +147,9 @@ open class MPSBackend: CPUBackend {
     }
     let library = try (self._device!).makeLibrary(
       source: MPSBackend.KernelCode, options: MTLCompileOptions())
-    for name in [
+
+    // Lookup all functions in the library.
+    var names = [
       "addvv_fp16", "addvv_fp32", "addvs_fp16", "addvs_fp32", "mulvv_fp16", "mulvv_fp32",
       "mulvs_fp16", "mulvs_fp32", "vector_pow_fp16", "vector_pow_fp32", "log_fp16", "log_fp32",
       "recip_fp16", "recip_fp32", "exp_fp16", "exp_fp32", "sigmoid_fp16", "sigmoid_fp32",
@@ -161,7 +157,15 @@ open class MPSBackend: CPUBackend {
       "gelu_grad_fp16", "sin_fp32", "sin_fp16", "cos_fp32", "cos_fp16", "minus_sin_fp32",
       "minus_sin_fp16", "relu_fp32", "relu_fp16", "relu_grad_fp32", "relu_grad_fp16", "repeat",
       "rand_fp32", "rand_fp16", "randn_fp32", "randn_fp16",
-    ] {
+    ]
+    for type in ["char", "short", "int", "long"] {
+      for mode in ["", "_bcast"] {
+        for op in ["gather", "scatter"] {
+          names.append("\(op)\(mode)_\(type)")
+        }
+      }
+    }
+    for name in names {
       guard let f = library.makeFunction(name: name) else {
         throw BackendError.kernelFailed("could not create kernel with name '\(name)'")
       }
@@ -206,16 +210,10 @@ open class MPSBackend: CPUBackend {
         guard let computeEncoder = buf.makeComputeCommandEncoder() else {
           throw BackendError.kernelFailed("could not create compute encoder")
         }
-        computeEncoder.setBuffer(a.buffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(output, offset: 0, index: 1)
-        computeEncoder.setBuffer(try makeFloatBuffer(b.toFloat()), offset: 0, index: 2)
-        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(count)), offset: 0, index: 3)
-
-        let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(count, min: 32))
-        let gridSize = MTLSize(width: nextMultiple(count, divisor: groupSize), height: 1, depth: 1)
-        let threadGroupSize = MTLSize(width: groupSize, height: 1, depth: 1)
-        computeEncoder.setComputePipelineState(state)
-        computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        try setArguments(
+          computeEncoder, .buffer(a.buffer), .buffer(output), .float(b.toFloat()),
+          .uint(UInt32(count)))
+        dispatch1D(computeEncoder, state: state, threadCount: count)
         computeEncoder.endEncoding()
 
       }
@@ -270,15 +268,8 @@ open class MPSBackend: CPUBackend {
         guard let computeEncoder = buf.makeComputeCommandEncoder() else {
           throw BackendError.kernelFailed("could not create compute encoder")
         }
-        computeEncoder.setBuffer(a.buffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(output, offset: 0, index: 1)
-        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(count)), offset: 0, index: 2)
-
-        let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(count, min: 32))
-        let gridSize = MTLSize(width: nextMultiple(count, divisor: groupSize), height: 1, depth: 1)
-        let threadGroupSize = MTLSize(width: groupSize, height: 1, depth: 1)
-        computeEncoder.setComputePipelineState(state)
-        computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        try setArguments(computeEncoder, .buffer(a.buffer), .buffer(output), .uint(UInt32(count)))
+        dispatch1D(computeEncoder, state: state, threadCount: count)
         computeEncoder.endEncoding()
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
@@ -314,16 +305,10 @@ open class MPSBackend: CPUBackend {
         guard let computeEncoder = buf.makeComputeCommandEncoder() else {
           throw BackendError.kernelFailed("could not create compute encoder")
         }
-        computeEncoder.setBuffer(a.buffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(b.buffer, offset: 0, index: 1)
-        computeEncoder.setBuffer(output, offset: 0, index: 2)
-        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(count)), offset: 0, index: 3)
-
-        let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(count, min: 32))
-        let gridSize = MTLSize(width: nextMultiple(count, divisor: groupSize), height: 1, depth: 1)
-        let threadGroupSize = MTLSize(width: groupSize, height: 1, depth: 1)
-        computeEncoder.setComputePipelineState(state)
-        computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        try setArguments(
+          computeEncoder, .buffer(a.buffer), .buffer(b.buffer), .buffer(output),
+          .uint(UInt32(count)))
+        dispatch1D(computeEncoder, state: state, threadCount: count)
         computeEncoder.endEncoding()
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
@@ -359,16 +344,10 @@ open class MPSBackend: CPUBackend {
         guard let computeEncoder = buf.makeComputeCommandEncoder() else {
           throw BackendError.kernelFailed("could not create compute encoder")
         }
-        computeEncoder.setBuffer(a.buffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(try makeFloatBuffer(b.toFloat()), offset: 0, index: 1)
-        computeEncoder.setBuffer(output, offset: 0, index: 2)
-        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(count)), offset: 0, index: 3)
-
-        let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(count, min: 32))
-        let gridSize = MTLSize(width: nextMultiple(count, divisor: groupSize), height: 1, depth: 1)
-        let threadGroupSize = MTLSize(width: groupSize, height: 1, depth: 1)
-        computeEncoder.setComputePipelineState(state)
-        computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        try setArguments(
+          computeEncoder, .buffer(a.buffer), .float(b.toFloat()), .buffer(output),
+          .uint(UInt32(count)))
+        dispatch1D(computeEncoder, state: state, threadCount: count)
         computeEncoder.endEncoding()
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
@@ -410,22 +389,102 @@ open class MPSBackend: CPUBackend {
         guard let computeEncoder = buf.makeComputeCommandEncoder() else {
           throw BackendError.kernelFailed("could not create compute encoder")
         }
-        computeEncoder.setBuffer(a.buffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(output, offset: 0, index: 1)
-        computeEncoder.setBuffer(
-          try makeUIntBuffer(UInt32(innerCount * dtype.byteSize)), offset: 0, index: 2)
-        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(outerCount)), offset: 0, index: 3)
-        computeEncoder.setBuffer(try makeUIntBuffer(UInt32(repeats)), offset: 0, index: 4)
-
-        let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(outBytes, min: 32))
-        let gridSize = MTLSize(
-          width: nextMultiple(outBytes, divisor: groupSize), height: 1, depth: 1)
-        let threadGroupSize = MTLSize(width: groupSize, height: 1, depth: 1)
-        computeEncoder.setComputePipelineState(state)
-        computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        try setArguments(
+          computeEncoder, .buffer(a.buffer), .buffer(output),
+          .uint(UInt32(innerCount * dtype.byteSize)), .uint(UInt32(outerCount)),
+          .uint(UInt32(repeats)))
+        dispatch1D(computeEncoder, state: state, threadCount: outBytes)
         computeEncoder.endEncoding()
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  override public func gather(
+    _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForGPUData(a, s.indices)
+    let output = try await allocate(length: s.gatherOutCount * dtype.byteSize)
+    return try await serialize { [self] in
+      let completion = try completionBuffer { buf in
+        let typeName =
+          switch dtype {
+          case .bool:
+            "char"
+          case .float16:
+            "short"
+          case .float32:
+            "int"
+          case .int64:
+            "long"
+          }
+        let functionName = "gather\(s.broadcasted ? "_bcast" : "")_\(typeName)"
+        let state = try getFunction(name: functionName)
+
+        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
+          throw BackendError.kernelFailed("could not create compute encoder")
+        }
+        try setArguments(
+          computeEncoder, .buffer(a.buffer), .buffer(s.indices.buffer), .buffer(output),
+          .uint(UInt32(s.outerCount)), .uint(UInt32(s.outCount)), .uint(UInt32(s.middleCount)),
+          .uint(UInt32(s.innerCount)))
+        dispatch1D(computeEncoder, state: state, threadCount: s.gatherOutCount)
+        computeEncoder.endEncoding()
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  override public func scatter(
+    _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForGPUData(a, s.indices)
+    let output = try await allocate(length: s.gatherInCount * dtype.byteSize)
+    let counts = try await allocate(length: s.gatherInCount * 4)
+    let needsAddition = try await allocate(length: 4)
+
+    let result = try await serialize { [self] in
+      let completion = try completionBuffer { buf in
+        let typeName =
+          switch dtype {
+          case .bool:
+            "char"
+          case .float16:
+            "short"
+          case .float32:
+            "int"
+          case .int64:
+            "long"
+          }
+        let functionName = "scatter\(s.broadcasted ? "_bcast" : "")_\(typeName)"
+        let state = try getFunction(name: functionName)
+
+        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
+          throw BackendError.kernelFailed("could not create compute encoder")
+        }
+        try setArguments(
+          computeEncoder, .buffer(a.buffer), .buffer(s.indices.buffer), .buffer(output),
+          .buffer(counts), .buffer(needsAddition), .uint(UInt32(s.outerCount)),
+          .uint(UInt32(s.outCount)), .uint(UInt32(s.middleCount)), .uint(UInt32(s.innerCount)))
+        dispatch1D(computeEncoder, state: state, threadCount: s.gatherOutCount)
+        computeEncoder.endEncoding()
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+
+    // We may need to fallback to the CPU implementation
+    // if summation is required.
+    let _ = try await result.completeOnAllDevices!.value
+    if needsAddition.contents().load(as: UInt32.self) != 0 {
+      return try await super.scatter(a, s, dtype: dtype)
+    } else {
+      return Tensor.Data(backend: self, buffer: result.buffer)
     }
   }
 
@@ -628,6 +687,39 @@ open class MPSBackend: CPUBackend {
     try await serialize {
       MPSRandomGenerator(mpsBackend: self, seed: Int.random(in: 0..<1_000_000_000))
     }
+  }
+
+  internal enum KernelArgument {
+    case uint(UInt32)
+    case float(Float)
+    case buffer(any MTLBuffer)
+
+    internal func intoBuffer(_ b: MPSBackend) throws -> MTLBuffer {
+      switch self {
+      case .uint(let x):
+        try b.makeUIntBuffer(x)
+      case .float(let x):
+        try b.makeFloatBuffer(x)
+      case .buffer(let x):
+        x
+      }
+    }
+  }
+
+  internal func setArguments(_ c: MTLComputeCommandEncoder, _ args: KernelArgument...) throws {
+    for (i, arg) in args.enumerated() {
+      c.setBuffer(try arg.intoBuffer(self), offset: 0, index: i)
+    }
+  }
+
+  internal func dispatch1D(
+    _ c: MTLComputeCommandEncoder, state: MTLComputePipelineState, threadCount count: Int
+  ) {
+    let groupSize = min(state.maxTotalThreadsPerThreadgroup, nextPowerOf2(count, min: 32))
+    let gridSize = MTLSize(width: nextMultiple(count, divisor: groupSize), height: 1, depth: 1)
+    let threadGroupSize = MTLSize(width: groupSize, height: 1, depth: 1)
+    c.setComputePipelineState(state)
+    c.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
   }
 
   internal func nextPowerOf2(_ x: Int, min: Int = 1) -> Int {
@@ -1196,6 +1288,138 @@ open class MPSBackend: CPUBackend {
               }
           }
       }
+
+      template <typename T>
+      void gather_bcast_impl(device const T* input,
+                             device const ulong* indices,
+                             device T* output,
+                             uint outerCount,
+                             uint indexCount,
+                             uint middleCount,
+                             uint innerCount,
+                             uint id) {
+          uint innerIdx = id % innerCount;
+          uint indexIdx = (id / innerCount) % indexCount;
+          uint outerIdx = (id / innerCount) / indexCount;
+          if (outerIdx < outerCount) {
+              ulong index = indices[indexIdx];
+              ulong srcIndex = innerIdx + index*innerCount + outerIdx*innerCount*middleCount;
+              output[id] = input[srcIndex];
+          }
+      }
+
+      template <typename T>
+      void gather_impl(device const T* input,
+                       device const ulong* indices,
+                       device T* output,
+                       uint outerCount,
+                       uint indexCount,
+                       uint middleCount,
+                       uint innerCount,
+                       uint id) {
+          uint innerIdx = id % innerCount;
+          uint indexIdx = (id / innerCount) % indexCount;
+          uint outerIdx = (id / innerCount) / indexCount;
+          if (outerIdx < outerCount) {
+              ulong index = indices[innerIdx + indexIdx*innerCount + outerIdx*innerCount*indexCount];
+              ulong srcIndex = innerIdx + index*innerCount + outerIdx*innerCount*middleCount;
+              output[id] = input[srcIndex];
+          }
+      }
+
+      #define DEFINE_GATHER(gather, type) \
+      kernel void gather##_##type(device const type* input [[buffer(0)]], \
+                                  device const ulong* indices [[buffer(1)]], \
+                                  device type* output [[buffer(2)]], \
+                                  constant uint &outerCount [[buffer(3)]], \
+                                  constant uint &indexCount [[buffer(4)]], \
+                                  constant uint &middleCount [[buffer(5)]], \
+                                  constant uint &innerCount [[buffer(6)]], \
+                                  uint id [[thread_position_in_grid]]) { \
+          gather##_impl<type>(input, indices, output, outerCount, indexCount, middleCount, \
+                                innerCount, id); \
+      }
+
+      DEFINE_GATHER(gather, char)
+      DEFINE_GATHER(gather_bcast, char)
+      DEFINE_GATHER(gather, short)
+      DEFINE_GATHER(gather_bcast, short)
+      DEFINE_GATHER(gather, int)
+      DEFINE_GATHER(gather_bcast, int)
+      DEFINE_GATHER(gather, long)
+      DEFINE_GATHER(gather_bcast, long)
+
+      template <typename T>
+      void scatter_bcast_impl(device const T* input,
+                              device const ulong* indices,
+                              device T* output,
+                              device atomic_int* counts,
+                              device int* needsAddition,
+                              uint outerCount,
+                              uint indexCount,
+                              uint middleCount,
+                              uint innerCount,
+                              uint id) {
+          uint innerIdx = id % innerCount;
+          uint indexIdx = (id / innerCount) % indexCount;
+          uint outerIdx = (id / innerCount) / indexCount;
+          if (outerIdx < outerCount) {
+              ulong index = indices[indexIdx];
+              ulong dstIndex = innerIdx + index*innerCount + outerIdx*innerCount*middleCount;
+              output[dstIndex] = input[id];
+              if (atomic_fetch_add_explicit(&counts[dstIndex], 1, memory_order_relaxed)) {
+                  *needsAddition = 1;
+              }
+          }
+      }
+
+      template <typename T>
+      void scatter_impl(device const T* input,
+                        device const ulong* indices,
+                        device T* output,
+                        device atomic_int* counts,
+                        device int* needsAddition,
+                        uint outerCount,
+                        uint indexCount,
+                        uint middleCount,
+                        uint innerCount,
+                        uint id) {
+          uint innerIdx = id % innerCount;
+          uint indexIdx = (id / innerCount) % indexCount;
+          uint outerIdx = (id / innerCount) / indexCount;
+          if (outerIdx < outerCount) {
+              ulong index = indices[innerIdx + indexIdx*innerCount + outerIdx*innerCount*indexCount];
+              ulong dstIndex = innerIdx + index*innerCount + outerIdx*innerCount*middleCount;
+              output[dstIndex] = input[id];
+              if (atomic_fetch_add_explicit(&counts[dstIndex], 1, memory_order_relaxed)) {
+                  *needsAddition = 1;
+              }
+          }
+      }
+
+      #define DEFINE_SCATTER(scatter, type) \
+      kernel void scatter##_##type(device const type* input [[buffer(0)]], \
+                                   device const ulong* indices [[buffer(1)]], \
+                                   device type* output [[buffer(2)]], \
+                                   device atomic_int* counts [[buffer(3)]], \
+                                   device int* needsAddition [[buffer(4)]], \
+                                   constant uint &outerCount [[buffer(5)]], \
+                                   constant uint &indexCount [[buffer(6)]], \
+                                   constant uint &middleCount [[buffer(7)]], \
+                                   constant uint &innerCount [[buffer(8)]], \
+                                   uint id [[thread_position_in_grid]]) { \
+          scatter##_impl<type>(input, indices, output, counts, needsAddition, outerCount, \
+                               indexCount, middleCount, innerCount, id); \
+      }
+
+      DEFINE_SCATTER(scatter, char)
+      DEFINE_SCATTER(scatter_bcast, char)
+      DEFINE_SCATTER(scatter, short)
+      DEFINE_SCATTER(scatter_bcast, short)
+      DEFINE_SCATTER(scatter, int)
+      DEFINE_SCATTER(scatter_bcast, int)
+      DEFINE_SCATTER(scatter, long)
+      DEFINE_SCATTER(scatter_bcast, long)
     """
 
 }

@@ -769,11 +769,11 @@ open class CPUBackend: Backend {
     }
 
     func apply<T: TensorElement>(_ zero: T) async throws -> Tensor.Data {
-      let buffer = try await allocate(length: s.scatterOutCount * dtype.byteSize)
+      let buffer = try await allocate(length: s.gatherOutCount * dtype.byteSize)
       try await serialize {
-        var inArr = [T](repeating: zero, count: s.scatterInCount)
+        var inArr = [T](repeating: zero, count: s.gatherInCount)
         try pointerToArray(a.buffer.contents(), output: &inArr, dtype: dtype)
-        var outArr = [T](repeating: zero, count: s.scatterOutCount)
+        var outArr = [T](repeating: zero, count: s.gatherOutCount)
         for i in 0..<s.outerCount {
           for j in 0..<s.outCount {
             for k in 0..<s.innerCount {
@@ -808,11 +808,11 @@ open class CPUBackend: Backend {
       return flatIndices
     }
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
-      let buffer = try await allocate(length: s.scatterInCount * dtype.byteSize)
+      let buffer = try await allocate(length: s.gatherInCount * dtype.byteSize)
       try await serialize {
-        var inArr = [T](repeating: zero, count: s.scatterOutCount)
+        var inArr = [T](repeating: zero, count: s.gatherOutCount)
         try pointerToArray(a.buffer.contents(), output: &inArr, dtype: dtype)
-        var outArr = [T](repeating: zero, count: s.scatterInCount)
+        var outArr = [T](repeating: zero, count: s.gatherInCount)
         for i in 0..<s.outerCount {
           for j in 0..<s.outCount {
             for k in 0..<s.innerCount {

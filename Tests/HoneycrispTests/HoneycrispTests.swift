@@ -234,61 +234,76 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testGather() async throws {
-    let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0, 7.0], shape: [1, 2, 3, 1])
-    var xGrad: Tensor?
+    try await runInBackends {
+      for dtype: Tensor.DType in [.float16, .float32] {
+        let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0, 7.0], shape: [1, 2, 3, 1], dtype: dtype)
+        var xGrad: Tensor?
 
-    func useX() -> Tensor {
-      x.onGrad { xGrad = $0 }
+        func useX() -> Tensor {
+          x.onGrad { xGrad = $0 }
+        }
+
+        // Unbroadcasted gather along inner axis
+        var out = useX().gather(
+          axis: 2, indices: Tensor(data: [2, 0, 1, 2], shape: [1, 2, 2, 1], dtype: .int64))
+        XCTAssertEqual(out.shape, [1, 2, 2, 1])
+        out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [1, 2, 2, 1], dtype: dtype))
+        try await assertDataEqual(out, [3.0, 1.0, 3.0, 7.0])
+        try await assertDataEqual(xGrad!, [2.0, 0.0, 1.0, 0.0, 3.0, 4.0])
+
+        // Broadcasted gather along inner axis
+        out = useX().gather(
+          axis: 2, indices: Tensor(data: [2, 0], shape: [2], dtype: .int64))
+        XCTAssertEqual(out.shape, [1, 2, 2, 1])
+        out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [1, 2, 2, 1], dtype: dtype))
+        try await assertDataEqual(out, [3.0, 1.0, 7.0, -2.0])
+        try await assertDataEqual(xGrad!, [2.0, 0.0, 1.0, 4.0, 0.0, 3.0])
+
+        // Unbroadcasted gather along outer axis
+        out = useX().gather(
+          axis: 1, indices: Tensor(data: [0, 1, 0, 1, 0, 0], shape: [1, 2, 3, 1], dtype: .int64))
+        XCTAssertEqual(out.shape, [1, 2, 3, 1])
+        out.backward(
+          Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: [1, 2, 3, 1], dtype: dtype))
+        try await assertDataEqual(out, [1.0, 3.0, 3.0, -2.0, 2.0, 3.0])
+        try await assertDataEqual(xGrad!, [1.0, 5.0, 9.0, 4.0, 2.0, 0.0])
+
+        // Broadcasted scatter along outer axis
+        let permuteMe = Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: [1, 2, 3, 1])
+        let permuted = try await permuteMe.scatter(
+          axis: 1, count: 2, indices: Tensor(data: [1, 0], shape: [2])
+        ).floats()
+        XCTAssertEqual(permuted, [4.0, 5.0, 6.0, 1.0, 2.0, 3.0])
+
+        // Broadcasted gather along outer axis
+        out = useX().gather(
+          axis: 1, indices: Tensor(data: [1, 0], shape: [2], dtype: .int64))
+        XCTAssertEqual(out.shape, [1, 2, 3, 1])
+        out.backward(
+          Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: [1, 2, 3, 1], dtype: dtype))
+        try await assertDataEqual(out, [-2.0, 3.0, 7.0, 1.0, 2.0, 3.0])
+        try await assertDataEqual(xGrad!, [4.0, 5.0, 6.0, 1.0, 2.0, 3.0])
+      }
+      for dtype: Tensor.DType in [.float16, .float32, .int64] {
+        let transposeMe = Tensor(
+          data: [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11,
+            -12,
+          ], shape: [2, 3, 4], dtype: dtype)
+        try await assertDataEqual(
+          transposeMe.t(),
+          [
+            1, 5, 9, 2, 6, 10, 3, 7, 11, 4, 8, 12, -1, -5, -9, -2, -6, -10, -3, -7, -11, -4, -8,
+            -12,
+          ])
+        let buf = try await transposeMe.t().data
+        XCTAssert(
+          buf.buffer.allocatedSize >= transposeMe.dtype.byteSize * transposeMe.shape.product())
+
+        // Subtle test for boolean gather
+        try await assertDataEqual(transposeMe.t() == 0, (transposeMe == 0).t())
+      }
     }
-
-    // Unbroadcasted gather along inner axis
-    var out = useX().gather(
-      axis: 2, indices: Tensor(data: [2, 0, 1, 2], shape: [1, 2, 2, 1], dtype: .int64))
-    XCTAssertEqual(out.shape, [1, 2, 2, 1])
-    out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [1, 2, 2, 1]))
-    try await assertDataEqual(out, [3.0, 1.0, 3.0, 7.0])
-    try await assertDataEqual(xGrad!, [2.0, 0.0, 1.0, 0.0, 3.0, 4.0])
-
-    // Broadcasted gather along inner axis
-    out = useX().gather(
-      axis: 2, indices: Tensor(data: [2, 0], shape: [2], dtype: .int64))
-    XCTAssertEqual(out.shape, [1, 2, 2, 1])
-    out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [1, 2, 2, 1]))
-    try await assertDataEqual(out, [3.0, 1.0, 7.0, -2.0])
-    try await assertDataEqual(xGrad!, [2.0, 0.0, 1.0, 4.0, 0.0, 3.0])
-
-    // Unbroadcasted gather along outer axis
-    out = useX().gather(
-      axis: 1, indices: Tensor(data: [0, 1, 0, 1, 0, 0], shape: [1, 2, 3, 1], dtype: .int64))
-    XCTAssertEqual(out.shape, [1, 2, 3, 1])
-    out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: [1, 2, 3, 1]))
-    try await assertDataEqual(out, [1.0, 3.0, 3.0, -2.0, 2.0, 3.0])
-    try await assertDataEqual(xGrad!, [1.0, 5.0, 9.0, 4.0, 2.0, 0.0])
-
-    // Broadcasted scatter along outer axis
-    let permuteMe = Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: [1, 2, 3, 1])
-    let permuted = try await permuteMe.scatter(
-      axis: 1, count: 2, indices: Tensor(data: [1, 0], shape: [2])
-    ).floats()
-    XCTAssertEqual(permuted, [4.0, 5.0, 6.0, 1.0, 2.0, 3.0])
-
-    // Broadcasted gather along outer axis
-    out = useX().gather(
-      axis: 1, indices: Tensor(data: [1, 0], shape: [2], dtype: .int64))
-    XCTAssertEqual(out.shape, [1, 2, 3, 1])
-    out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: [1, 2, 3, 1]))
-    try await assertDataEqual(out, [-2.0, 3.0, 7.0, 1.0, 2.0, 3.0])
-    try await assertDataEqual(xGrad!, [4.0, 5.0, 6.0, 1.0, 2.0, 3.0])
-
-    let transposeMe = Tensor(
-      data: [
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12,
-      ], shape: [2, 3, 4])
-    try await assertDataEqual(
-      transposeMe.t(),
-      [1, 5, 9, 2, 6, 10, 3, 7, 11, 4, 8, 12, -1, -5, -9, -2, -6, -10, -3, -7, -11, -4, -8, -12])
-    let buf = try await transposeMe.t().data
-    XCTAssert(buf.buffer.allocatedSize >= transposeMe.dtype.byteSize * transposeMe.shape.product())
   }
 
   func testMatrixMatrixProduct() async throws {
