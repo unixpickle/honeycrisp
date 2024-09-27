@@ -61,6 +61,9 @@ extension Range<Int>: TensorIndex {
       end >= 0 && end <= inShape[0],
       "index \(self.upperBound) out of range for size \(inShape[0])"
     )
+    if start == 0 && end == inShape[0] {
+      return FullRange().tensorIndex(forShape: inShape)
+    }
     return TensorIndexResult(
       reshape: inShape,
       indices: Tensor(range: start..<end, dtype: .int64),

@@ -1,14 +1,55 @@
+import Cocoa
 import Foundation
 import Honeycrisp
 import MNIST
 
+// Dataset configuration
 let PatchSize: Int = 2
 let TokenCount: Int = (28 / PatchSize) * (28 / PatchSize)
-let ModelDim: Int = 128
-let HeadDim: Int = 64
-let LayerCount: Int = 4
 let NumLabels: Int = 10
 let VocabSize: Int = NumLabels + (1 << (PatchSize * PatchSize))
+
+// Model architecture settings
+let ModelDim: Int = 128
+let HeadDim: Int = 64  // must divide ModelDim
+let LayerCount: Int = 4
+
+// Training hyperparameters
+let BatchSize: Int = 8
+let LearningRate: Float = 0.0001
+
+// Sampling hyperparameters
+let SampleCount = 10
+let SampleInterval = 1000
+
+class KVCache {
+  class Layer {
+    var k: Tensor
+    var v: Tensor
+
+    var tokenCount: Int {
+      k.shape[1]
+    }
+
+    init(batchSize: Int) {
+      k = Tensor(zeros: [batchSize, 0, ModelDim])
+      v = Tensor(zeros: [batchSize, 0, ModelDim])
+    }
+  }
+
+  var layers: [Layer]
+
+  var tokenCount: Int {
+    layers[0].tokenCount
+  }
+
+  init(batchSize: Int, layerCount: Int) {
+    layers = []
+    for _ in 0..<layerCount {
+      layers.append(Layer(batchSize: batchSize))
+    }
+  }
+}
 
 class Attention: Trainable {
   let causalMask: Tensor
@@ -28,7 +69,7 @@ class Attention: Trainable {
     self.outProj = Linear(inCount: ModelDim, outCount: ModelDim)
   }
 
-  func callAsFunction(_ x: Tensor) -> Tensor {
+  func callAsFunction(_ x: Tensor, kvCache: KVCache.Layer? = nil) -> Tensor {
     // Go from [B x T x C] -> [B x H x T x C/H]
     func moveHeadsToOuter(_ x: Tensor) -> Tensor {
       x.reshape([x.shape[0], x.shape[1], ModelDim / HeadDim, HeadDim])[
@@ -40,13 +81,27 @@ class Attention: Trainable {
       x[FullRange(), PermuteAxes(1, 0)].reshape([x.shape[0], x.shape[2], x.shape[1] * x.shape[3]])
     }
 
+    let tokenOffset = kvCache?.tokenCount ?? 0
+
+    let (k, v) =
+      if let kvCache = kvCache {
+        {
+          let innerK = Tensor(concat: [kvCache.k, kProj(x)], axis: 1)
+          let innerV = Tensor(concat: [kvCache.v, vProj(x)], axis: 1)
+          let k = moveHeadsToOuter(innerK) / sqrt(sqrt(Float(HeadDim)))
+          let v = moveHeadsToOuter(innerV)
+          kvCache.k = innerK
+          kvCache.v = innerV
+          return (k, v)
+        }()
+      } else {
+        (moveHeadsToOuter(kProj(x)) / sqrt(sqrt(Float(HeadDim))), moveHeadsToOuter(vProj(x)))
+      }
     let q = moveHeadsToOuter(qProj(x)) / sqrt(sqrt(Float(HeadDim)))
-    let k = moveHeadsToOuter(kProj(x)) / sqrt(sqrt(Float(HeadDim)))
-    let v = moveHeadsToOuter(vProj(x))
 
     let energy = Tensor.batchedMatmul(a: q, transA: false, b: k, transB: true, transOut: false)
-
-    let probs = (energy + causalMask.expand(as: energy)).softmax()
+    let probs = (energy + causalMask[tokenOffset..<k.shape[2], 0..<k.shape[2]].expand(as: energy))
+      .softmax()
     let reducedValues = Tensor.batchedMatmul(
       a: probs, transA: false, b: v, transB: false, transOut: false)
     return outProj(moveHeadsToInner(reducedValues))
@@ -69,9 +124,9 @@ class Block: Trainable {
     self.lin2 = Linear(inCount: ModelDim * 2, outCount: ModelDim)
   }
 
-  func callAsFunction(_ x: Tensor) -> Tensor {
+  func callAsFunction(_ x: Tensor, kvCache: KVCache.Layer? = nil) -> Tensor {
     var h = x
-    h = h + attn(norm1(h))
+    h = h + attn(norm1(h), kvCache: kvCache)
     h = h + lin2(lin1(norm2(h)).gelu())
     return h
   }
@@ -97,19 +152,43 @@ class Transformer: Trainable {
     unembed.weight = unembed.weight.noGrad() * 0
   }
 
-  func callAsFunction(_ x: Tensor) -> Tensor {
+  func callAsFunction(_ x: Tensor, kvCache: KVCache? = nil) -> Tensor {
     // Input should be a [N x T] tensor of indices
     var h = embed.expand(shape: [x.shape[0], x.shape[1], VocabSize, ModelDim]).gather(
       axis: 2,
       indices: x.reshape([x.shape[0], x.shape[1], 1, 1]).repeating(axis: -1, count: ModelDim)
     ).reshape([x.shape[0], x.shape[1], ModelDim])
-    h = h + posEmbed.expand(as: h)
-    for layer in layers.children {
-      h = layer(h)
+
+    let posOffset = kvCache?.tokenCount ?? 0
+    h = h + posEmbed[posOffset..<(posOffset + x.shape[1])].expand(as: h)
+
+    for (i, layer) in layers.children.enumerated() {
+      let cacheLayer: KVCache.Layer? =
+        if let kvCache = kvCache {
+          kvCache.layers[i]
+        } else {
+          nil
+        }
+      h = layer(h, kvCache: cacheLayer)
     }
     h = normOut(h)
     h = unembed(h)
     return h
+  }
+
+  func sample(firstTokens: Tensor) async throws -> Tensor {
+    assert(firstTokens.shape.count == 2, "\(firstTokens.shape)")
+    assert(firstTokens.shape[1] == 1, "\(firstTokens.shape)")
+    let kvCache = KVCache(batchSize: firstTokens.shape[0], layerCount: LayerCount)
+    var outputs: [Tensor] = []
+    var prevToken = firstTokens
+    for _ in 0..<TokenCount {
+      let logits = self(prevToken, kvCache: kvCache)
+      let gumbels = -(-Tensor(randLike: logits).log()).log()
+      prevToken = (logits + gumbels).argmax(axis: -1)
+      outputs.append(prevToken)
+    }
+    return Tensor(concat: outputs, axis: 1)
   }
 
   func paramNorm() async throws -> Float {
@@ -150,21 +229,10 @@ struct DataIterator: Sequence, IteratorProtocol {
     }
     let probs = Tensor(data: inputData, shape: [batchSize, 28, 28], dtype: .float32)
     let pixels = (probs > Tensor(randLike: probs)).cast(.int64)
-    var patches: Tensor?
-    for i in 0..<PatchSize {
-      for j in 0..<PatchSize {
-        let subPatch = pixels[
-          ..., stride(from: i, to: 28, by: PatchSize), stride(from: j, to: 28, by: PatchSize)]
-        let scale = 1 << (i * PatchSize + j)
-        if let p = patches {
-          patches = p + subPatch * scale
-        } else {
-          patches = subPatch * scale
-        }
-      }
-    }
-    let flatPatches = patches!.reshape([patches!.shape[0], patches!.shape[1] * patches!.shape[2]])
-    let label = Tensor(data: outputLabels, shape: [batchSize, 1], dtype: .int64) + 2
+    let patches = packPixelsIntoTokens(pixels: pixels, patchSize: PatchSize)
+    let flatPatches = patches.flatten(startAxis: 1)
+    let label =
+      Tensor(data: outputLabels, shape: [batchSize, 1], dtype: .int64) + (VocabSize - NumLabels)
     return Tensor(concat: [label, flatPatches], axis: 1)
   }
 }
@@ -172,8 +240,6 @@ struct DataIterator: Sequence, IteratorProtocol {
 @main
 struct Main {
   static func main() async {
-    let bs = 8
-
     do {
       Backend.defaultBackend = try MPSBackend()
     } catch {
@@ -182,7 +248,7 @@ struct Main {
 
     print("creating model and optimizer...")
     let model = Transformer()
-    let opt = Adam(model.parameters, lr: 0.0001, eps: 1e-5)
+    let opt = Adam(model.parameters, lr: LearningRate, eps: 1e-5)
 
     do {
       print(" => initial param norm: \(try await model.paramNorm())")
@@ -203,8 +269,8 @@ struct Main {
     trainShuffle.shuffle()
     var testShuffle = dataset.test
     testShuffle.shuffle()
-    let train = DataIterator(images: trainShuffle, batchSize: bs)
-    let test = DataIterator(images: testShuffle, batchSize: bs)
+    let train = DataIterator(images: trainShuffle, batchSize: BatchSize)
+    let test = DataIterator(images: testShuffle, batchSize: BatchSize)
 
     func computeLoss(_ seq: Tensor) -> Tensor {
       let inSeq = seq[..., ..<(-1)]
@@ -234,7 +300,7 @@ struct Main {
         let t2 = DispatchTime.now().uptimeNanoseconds
         print(
           "step \(i): loss=\(formatFloat(try await trainLoss.item())) "
-            + "testLoss=\(formatFloat(try await testLoss.item())) "
+            + "test_loss=\(formatFloat(try await testLoss.item())) "
             + "epochs=\(formatFloat(epochs)) "
             + "param_norm=\(paramNorm) grad_norm=\(gradNorm) "
             + "time=\(formatFloat(Float(t2 - t1) / 1_000_000_000))"
@@ -242,6 +308,26 @@ struct Main {
       } catch {
         print("fatal error: \(error)")
         return
+      }
+      if (i + 1) % SampleInterval == 0 {
+        print("sampling...")
+        do {
+          let firstTokens =
+            Tensor(range: 0..<(NumLabels * SampleCount), dtype: .int64).reshape([
+              NumLabels * SampleCount, 1,
+            ])
+            / SampleCount + (VocabSize - NumLabels)
+          let samples = try await model.sample(firstTokens: firstTokens)
+          let pixelBatch = try await unpackPixelsInTokens(bitmaps: samples, patchSize: PatchSize)
+          let pixels =
+            pixelBatch.reshape([10, SampleCount, 28, 28])[
+              PermuteAxes(0, 2, 1, 3)
+            ].reshape([10 * 28, SampleCount * 28, 1]) * 255
+          try await saveGrayscaleBitmap(pixels: pixels, to: URL(filePath: "samples.png"))
+        } catch {
+          print("failed to create samples: \(error)")
+          return
+        }
       }
     }
   }

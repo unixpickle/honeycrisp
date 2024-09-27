@@ -215,6 +215,12 @@ public final class Tensor {
     return out
   }
 
+  public func ints() async throws -> [Int] {
+    var out = [Int](repeating: 0, count: shape.product())
+    try await copyToArray(&out)
+    return out
+  }
+
   public func item() async throws -> Float {
     assert(shape.product() == 1, "cannot call item() on Tensor of shape \(shape)")
     let data = try await floats()
@@ -254,8 +260,8 @@ public final class Tensor {
     }
   }
 
-  public func flatten() -> Tensor {
-    return reshape([shape.product()])
+  public func flatten(startAxis: Int = 0) -> Tensor {
+    return reshape(shape[..<startAxis] + [shape[startAxis...].product()])
   }
 
   public func squeeze(axis: Int) -> Tensor {
