@@ -389,6 +389,10 @@ open class CPUBackend: Backend {
             vDSP_vadd(x, 1, y, 1, z, 1, vDSP_Length(count))
           case .mul:
             vDSP_vmul(x, 1, y, 1, z, 1, vDSP_Length(count))
+          case .div:
+            vDSP_vdiv(x, 1, y, 1, z, 1, vDSP_Length(count))
+          case .sub:
+            vDSP_vsub(x, 1, y, 1, z, 1, vDSP_Length(count))
           }
         } else {
           var aData = [T](repeating: T(0.0), count: count)
@@ -422,15 +426,19 @@ open class CPUBackend: Backend {
         if dtype == .float32 && (op == .add || op == .mul) {
           let x = UnsafePointer<Float>(
             a.buffer.contents().bindMemory(to: Float.self, capacity: count))
-          [b.toFloat()].withUnsafeBufferPointer({ y in
-            let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
+          var bScalar =
             switch op {
-            case .add:
-              vDSP_vsadd(x, 1, y.baseAddress!, z, 1, vDSP_Length(count))
-            case .mul:
-              vDSP_vsmul(x, 1, y.baseAddress!, z, 1, vDSP_Length(count))
+            case .add, .mul: b.toFloat()
+            case .div: 1 / b.toFloat()
+            case .sub: -b.toFloat()
             }
-          })
+          let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
+          switch op {
+          case .add, .sub:
+            vDSP_vsadd(x, 1, &bScalar, z, 1, vDSP_Length(count))
+          case .mul, .div:
+            vDSP_vsmul(x, 1, &bScalar, z, 1, vDSP_Length(count))
+          }
         } else {
           var aData = [T1](repeating: T1(0.0), count: count)
           try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
@@ -460,15 +468,19 @@ open class CPUBackend: Backend {
         if dtype == .float32 && (op == .add || op == .mul) {
           let x = UnsafePointer<Float>(
             b.buffer.contents().bindMemory(to: Float.self, capacity: count))
-          [a.toFloat()].withUnsafeBufferPointer({ y in
-            let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
-            switch op {
-            case .add:
-              vDSP_vsadd(x, 1, y.baseAddress!, z, 1, vDSP_Length(count))
-            case .mul:
-              vDSP_vsmul(x, 1, y.baseAddress!, z, 1, vDSP_Length(count))
-            }
-          })
+          var aFloat = a.toFloat()
+          var neg1 = Float(-1)
+          let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
+          switch op {
+          case .add:
+            vDSP_vsadd(x, 1, &aFloat, z, 1, vDSP_Length(count))
+          case .mul:
+            vDSP_vsmul(x, 1, &aFloat, z, 1, vDSP_Length(count))
+          case .div:
+            vDSP_svdiv(&aFloat, x, 1, z, 1, vDSP_Length(count))
+          case .sub:
+            vDSP_vsmsa(x, 1, &neg1, &aFloat, z, 1, vDSP_Length(count))
+          }
         } else {
           var bData = [T1](repeating: T1(0.0), count: count)
           try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
@@ -670,12 +682,12 @@ open class CPUBackend: Backend {
               arrOut.append(sum)
             }
           }
-          assert(arrOut.count == dims.outCount)
+          alwaysAssert(arrOut.count == dims.outCount)
           try arrayToPointer(arrOut, output: buffer.contents(), dtype: dtype)
         }
         return Tensor.Data(backend: self, buffer: buffer)
       case .argmin, .argmax:
-        assert(dims.outCount > 0, "cannot apply op \(self) to empty dimension")
+        alwaysAssert(dims.outCount > 0, "cannot apply op \(self) to empty dimension")
         var arrOut = [Int64]()
         let buffer = try await allocate(length: dims.outCount * Tensor.DType.int64.byteSize)
         try await serialize {
@@ -700,7 +712,7 @@ open class CPUBackend: Backend {
               arrOut.append(index)
             }
           }
-          assert(arrOut.count == dims.outCount)
+          alwaysAssert(arrOut.count == dims.outCount)
           try arrayToPointer(arrOut, output: buffer.contents(), dtype: .int64)
         }
         return Tensor.Data(backend: self, buffer: buffer)
@@ -973,7 +985,7 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    assert(inputs.count == innerCounts.count)
+    alwaysAssert(inputs.count == innerCounts.count)
     for input in inputs {
       try await waitForData(input)
     }
@@ -1007,7 +1019,8 @@ open class CPUBackend: Backend {
       for i in 0..<newIndices.count {
         let newIndex = zip(newStrides, newShape).map { stride, shape in (i / stride) % shape }
         let flatIndex = zip(newIndex, permutedStrides).map { $0 * $1 }.sum()
-        assert(flatIndex >= 0 && flatIndex < newIndices.count, "bad flat index for \(newIndex)")
+        alwaysAssert(
+          flatIndex >= 0 && flatIndex < newIndices.count, "bad flat index for \(newIndex)")
         newIndices[i] = flatIndex
       }
       try arrayToPointer(newIndices, output: buffer.contents(), dtype: .int64)

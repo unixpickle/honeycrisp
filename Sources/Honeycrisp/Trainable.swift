@@ -79,7 +79,8 @@ open class Trainable {
         if param.maybeName == nil {
           param.maybeName = String("\(storageKeyPath)".split(separator: ".").last!)
         }
-        assert(!(newValue.maybeTensor()?.needsGrad ?? false), "parameter value cannot need grad")
+        alwaysAssert(
+          !(newValue.maybeTensor()?.needsGrad ?? false), "parameter value cannot need grad")
         param.maybeData = newValue
         if newValue.isNil {
           instance.registeredParams.removeValue(forKey: param.name!)
@@ -111,7 +112,7 @@ open class Trainable {
         if let t = newValue {
           maybeData = TensorType.fromTensor(t)
         } else {
-          assert(
+          alwaysAssert(
             false, "Cannot unset parameter data. Consider setting the property itself to nil.")
         }
       }
@@ -241,7 +242,7 @@ public class LayerNorm: Trainable {
   }
 
   public func callAsFunction(_ x: Tensor) -> Tensor {
-    assert(
+    alwaysAssert(
       x.shape.count >= shape.count && Array(x.shape[(x.shape.count - shape.count)...]) == shape,
       "LayerNorm shape \(shape) is incompatible with input shape \(x.shape)")
 

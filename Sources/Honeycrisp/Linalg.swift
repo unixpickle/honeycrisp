@@ -1,10 +1,10 @@
 extension Tensor {
 
   public static func outer(_ a: Tensor, _ b: Tensor) -> Tensor {
-    assert(
+    alwaysAssert(
       a.shape.count == 1 && b.shape.count == 1,
       "invalid shapes for outer product: \(a.shape), \(b.shape)")
-    assert(a.dtype == b.dtype, "dtype mismatch for outer product: \(a.dtype), \(b.dtype)")
+    alwaysAssert(a.dtype == b.dtype, "dtype mismatch for outer product: \(a.dtype), \(b.dtype)")
     return matmul(
       a: a.reshape([a.shape[0], 1]), transA: false, b: b.reshape([1, b.shape[0]]), transB: false,
       transOut: false)
@@ -15,13 +15,13 @@ extension Tensor {
   )
     -> Tensor
   {
-    assert(
+    alwaysAssert(
       a.shape.count == 2 && b.shape.count == 2,
       "invalid shapes for matmul: \(a.shape), \(b.shape)")
-    assert(a.dtype == b.dtype, "mismatched dtypes for matmul: \(a.dtype) and \(b.dtype)")
+    alwaysAssert(a.dtype == b.dtype, "mismatched dtypes for matmul: \(a.dtype) and \(b.dtype)")
     let aShape = transA ? [a.shape[1], a.shape[0]] : a.shape
     let bShape = transB ? [b.shape[1], b.shape[0]] : b.shape
-    assert(
+    alwaysAssert(
       aShape[1] == bShape[0], "shape mismatch for matmul (with transposes): \(aShape), \(bShape)")
     let outShape = transOut ? [bShape[1], aShape[0]] : [aShape[0], bShape[1]]
     let backend = Backend.current
@@ -54,17 +54,18 @@ extension Tensor {
   )
     -> Tensor
   {
-    assert(
+    alwaysAssert(
       a.shape.count > 2 && b.shape.count > 2
         && a.shape[..<(a.shape.count - 2)] == b.shape[..<(b.shape.count - 2)],
       "invalid shapes for batched matmul: \(a.shape), \(b.shape)")
-    assert(a.dtype == b.dtype, "mismatched dtypes for batched matmul: \(a.dtype) and \(b.dtype)")
+    alwaysAssert(
+      a.dtype == b.dtype, "mismatched dtypes for batched matmul: \(a.dtype) and \(b.dtype)")
     let batchShape: [Int] = Array(a.shape[..<(a.shape.count - 2)])
     let d0 = a.shape.count - 2
     let d1 = a.shape.count - 1
     let aShape = transA ? [a.shape[d1], a.shape[d0]] : [a.shape[d0], a.shape[d1]]
     let bShape = transB ? [b.shape[d1], b.shape[d0]] : [b.shape[d0], b.shape[d1]]
-    assert(
+    alwaysAssert(
       aShape[1] == bShape[0],
       "shape mismatch for batched matmul: \(a.shape) (trans=\(transA)), \(b.shape) (trans\(transB))"
     )

@@ -37,33 +37,79 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testAdd() async throws {
-    let x = Tensor(data: [1.0, 2.0, 0.0], shape: [3], dtype: .float32)
-    let y = Tensor(data: [-1.0, 2.0, -3.0], shape: [3], dtype: .float32)
-    try await assertDataEqual(x + y, [0.0, 4.0, -3.0])
-    try await assertDataEqual(x.cast(.int64) + y.cast(.int64), [0.0, 4.0, -3.0])
-    try await assertDataEqual(x.cast(.float16) + y.cast(.float16), [0.0, 4.0, -3.0])
-    try await assertDataEqual(x + 3, [4.0, 5.0, 3.0])
-    try await assertDataEqual(x.cast(.int64) + 3, [4.0, 5.0, 3.0])
-    try await assertDataEqual(x.cast(.float16) + 3, [4.0, 5.0, 3.0])
-    try await assertDataEqual(3 + x, [4.0, 5.0, 3.0])
-    try await assertDataEqual(3 + x.cast(.int64), [4.0, 5.0, 3.0])
-    try await assertDataEqual(3 + x.cast(.float16), [4.0, 5.0, 3.0])
-    try await assertDataEqual(x + 1.5, [2.5, 3.5, 1.5])
-    try await assertDataEqual(1.5 + x, [2.5, 3.5, 1.5])
+    try await runInBackends {
+      let x = Tensor(data: [1.0, 2.0, 0.0], shape: [3], dtype: .float32)
+      let y = Tensor(data: [-1.0, 2.0, -3.0], shape: [3], dtype: .float32)
+      try await assertDataEqual(x + y, [0.0, 4.0, -3.0])
+      try await assertDataEqual(x.cast(.int64) + y.cast(.int64), [0.0, 4.0, -3.0])
+      try await assertDataEqual(x.cast(.float16) + y.cast(.float16), [0.0, 4.0, -3.0])
+      try await assertDataEqual(x + 3, [4.0, 5.0, 3.0])
+      try await assertDataEqual(x.cast(.int64) + 3, [4.0, 5.0, 3.0])
+      try await assertDataEqual(x.cast(.float16) + 3, [4.0, 5.0, 3.0])
+      try await assertDataEqual(3 + x, [4.0, 5.0, 3.0])
+      try await assertDataEqual(3 + x.cast(.int64), [4.0, 5.0, 3.0])
+      try await assertDataEqual(3 + x.cast(.float16), [4.0, 5.0, 3.0])
+      try await assertDataEqual(x + 1.5, [2.5, 3.5, 1.5])
+      try await assertDataEqual(1.5 + x, [2.5, 3.5, 1.5])
+    }
+  }
+
+  func testSub() async throws {
+    try await runInBackends {
+      let x = Tensor(data: [1.0, 2.0, 0.0], shape: [3], dtype: .float32)
+      let y = Tensor(data: [-1.0, 2.0, -3.0], shape: [3], dtype: .float32)
+      try await assertDataEqual(x - y, [2.0, 0.0, 3.0])
+      try await assertDataEqual(x.cast(.int64) - y.cast(.int64), [2.0, 0.0, 3.0])
+      try await assertDataEqual(x.cast(.float16) - y.cast(.float16), [2.0, 0.0, 3.0])
+      try await assertDataEqual(x - (-3), [4.0, 5.0, 3.0])
+      try await assertDataEqual(x.cast(.int64) - (-3), [4.0, 5.0, 3.0])
+      try await assertDataEqual(x.cast(.float16) - (-3), [4.0, 5.0, 3.0])
+      try await assertDataEqual(3 - x, [2.0, 1.0, 3.0])
+      try await assertDataEqual(3 - x.cast(.int64), [2.0, 1.0, 3.0])
+      try await assertDataEqual(3 - x.cast(.float16), [2.0, 1.0, 3.0])
+      try await assertDataEqual(x - 1.5, [-0.5, 0.5, -1.5])
+      try await assertDataEqual(1.5 - x, [0.5, -0.5, 1.5])
+    }
   }
 
   func testMul() async throws {
-    let x = Tensor(data: [1.0, 2.0, 3.0, 0.0], shape: [4], dtype: .float32)
-    let y = Tensor(data: [-1.0, 2.0, 2.0, -3.0], shape: [4], dtype: .float32)
-    try await assertDataEqual(x * y, [-1.0, 4.0, 6.0, 0.0])
-    try await assertDataEqual(x.cast(.float16) * y.cast(.float16), [-1.0, 4.0, 6.0, 0.0])
-    try await assertDataEqual(x.cast(.int64) * y.cast(.int64), [-1.0, 4.0, 6.0, 0.0])
-    try await assertDataEqual(x * 2, [2.0, 4.0, 6.0, 0.0])
-    try await assertDataEqual(x.cast(.float16) * 2, [2.0, 4.0, 6.0, 0.0])
-    try await assertDataEqual(x.cast(.int64) * 2, [2.0, 4.0, 6.0, 0.0])
-    try await assertDataEqual(2 * x, [2.0, 4.0, 6.0, 0.0])
-    try await assertDataEqual(2 * x.cast(.float16), [2.0, 4.0, 6.0, 0.0])
-    try await assertDataEqual(2 * x.cast(.int64), [2.0, 4.0, 6.0, 0.0])
+    try await runInBackends {
+      let x = Tensor(data: [1.0, 2.0, 3.0, 0.0], shape: [4], dtype: .float32)
+      let y = Tensor(data: [-1.0, 2.0, 2.0, -3.0], shape: [4], dtype: .float32)
+      try await assertDataEqual(x * y, [-1.0, 4.0, 6.0, 0.0])
+      try await assertDataEqual(x.cast(.float16) * y.cast(.float16), [-1.0, 4.0, 6.0, 0.0])
+      try await assertDataEqual(x.cast(.int64) * y.cast(.int64), [-1.0, 4.0, 6.0, 0.0])
+      try await assertDataEqual(x * 2, [2.0, 4.0, 6.0, 0.0])
+      try await assertDataEqual(x.cast(.float16) * 2, [2.0, 4.0, 6.0, 0.0])
+      try await assertDataEqual(x.cast(.int64) * 2, [2.0, 4.0, 6.0, 0.0])
+      try await assertDataEqual(2 * x, [2.0, 4.0, 6.0, 0.0])
+      try await assertDataEqual(2 * x.cast(.float16), [2.0, 4.0, 6.0, 0.0])
+      try await assertDataEqual(2 * x.cast(.int64), [2.0, 4.0, 6.0, 0.0])
+    }
+  }
+
+  func testDiv() async throws {
+    try await runInBackends {
+      let x = Tensor(data: [1.0, 2.0, 6.0, 0.0], shape: [4], dtype: .float32)
+      let y = Tensor(data: [-1.0, 2.0, 2.0, 3.0], shape: [4], dtype: .float32)
+      try await assertDataEqual(x / y, [-1.0, 1.0, 3.0, 0.0])
+      try await assertDataEqual(x.cast(.float16) / y.cast(.float16), [-1.0, 1.0, 3.0, 0.0])
+      try await assertDataEqual(x.cast(.int64) / y.cast(.int64), [-1.0, 1.0, 3.0, 0.0])
+      try await assertDataEqual(x / 2, [0.5, 1.0, 3.0, 0.0])
+      try await assertDataEqual(x.cast(.float16) / 2, [0.5, 1.0, 3.0, 0.0])
+      try await assertDataEqual(x.cast(.int64) / 2, [0.0, 1.0, 3.0, 0.0])
+      try await assertDataEqual(6 / y, [-6.0, 3.0, 3.0, 2.0])
+      try await assertDataEqual(6 / y.cast(.float16), [-6.0, 3.0, 3.0, 2.0])
+      try await assertDataEqual(6 / y.cast(.int64), [-6.0, 3.0, 3.0, 2.0])
+      try await assertDataEqual(2 / y.cast(.int64), [-2.0, 1.0, 1.0, 0.0])
+
+      var xGrad: Tensor?
+      var yGrad: Tensor?
+      let divided = (x.onGrad { g in xGrad = g }) / (y.onGrad { g in yGrad = g })
+      divided.backward(Tensor(data: [-1.0, 2.0, 3.0, 4.0], shape: [4]))
+      try await assertClose(xGrad!, [1.0, 1.0, 1.5, 1.3333333333])
+      try await assertClose(yGrad!, [1.0, -1.0, -4.5, -0.0])
+    }
   }
 
   func testMulGrad() async throws {
@@ -116,7 +162,7 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testSum() async throws {
-    let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0, 7.0], shape: [1, 2, 3, 1])
+    let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0, 7.0], shape: [1, 2, 3, 1], dtype: .float32)
     var xGrad: Tensor?
 
     func useX() -> Tensor {
@@ -125,25 +171,25 @@ final class HoneycrispTests: XCTestCase {
 
     var sum = useX().sum(axis: 2)
     XCTAssertEqual(sum.shape, [1, 2, 1])
-    sum.backward(Tensor(data: [-1.0, -2.0], shape: [1, 2, 1]))
+    sum.backward(Tensor(data: [-1.0, -2.0], shape: [1, 2, 1], dtype: .float32))
     try await assertDataEqual(sum, [6.0, 8.0])
     try await assertDataEqual(xGrad!, [-1.0, -1.0, -1.0, -2.0, -2.0, -2.0])
 
     sum = useX().sum(axis: 2, keepdims: true)
     XCTAssertEqual(sum.shape, [1, 2, 1, 1])
-    sum.backward(Tensor(data: [-1.0, -2.0], shape: [1, 2, 1, 1]))
+    sum.backward(Tensor(data: [-1.0, -2.0], shape: [1, 2, 1, 1], dtype: .float32))
     try await assertDataEqual(sum, [6.0, 8.0])
     try await assertDataEqual(xGrad!, [-1.0, -1.0, -1.0, -2.0, -2.0, -2.0])
 
     sum = useX().sum(axis: 1)
     XCTAssertEqual(sum.shape, [1, 3, 1])
-    sum.backward(Tensor(data: [-1.0, -2.0, -3.0], shape: [1, 3, 1]))
+    sum.backward(Tensor(data: [-1.0, -2.0, -3.0], shape: [1, 3, 1], dtype: .float32))
     try await assertDataEqual(sum, [-1.0, 5.0, 10.0])
     try await assertDataEqual(xGrad!, [-1.0, -2.0, -3.0, -1.0, -2.0, -3.0])
 
     sum = useX().sum(axis: 1, keepdims: true)
     XCTAssertEqual(sum.shape, [1, 1, 3, 1])
-    sum.backward(Tensor(data: [-1.0, -2.0, -3.0], shape: [1, 1, 3, 1]))
+    sum.backward(Tensor(data: [-1.0, -2.0, -3.0], shape: [1, 1, 3, 1], dtype: .float32))
     try await assertDataEqual(sum, [-1.0, 5.0, 10.0])
     try await assertDataEqual(xGrad!, [-1.0, -2.0, -3.0, -1.0, -2.0, -3.0])
 
@@ -157,7 +203,8 @@ final class HoneycrispTests: XCTestCase {
         } else {
           XCTAssertEqual(sum.shape, [1, 2, 3])
         }
-        sum.backward(Tensor(data: [-1.0, -2.0, -3.0, 1.0, 2.0, 3.0], shape: sum.shape))
+        sum.backward(
+          Tensor(data: [-1.0, -2.0, -3.0, 1.0, 2.0, 3.0], shape: sum.shape, dtype: .float32))
         try await assertDataEqual(sum, x)
         try await assertDataEqual(xGrad!, [-1.0, -2.0, -3.0, 1.0, 2.0, 3.0])
       }
@@ -182,31 +229,31 @@ final class HoneycrispTests: XCTestCase {
 
     // Older tests are below
 
-    let input = Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9], shape: [3, 3])
+    let input = Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9], shape: [3, 3], dtype: .float32)
     var gradA: Tensor?
     let sumA = input.onGrad({ g in gradA = g }).sum(axis: 1)
     try await assertDataEqual(sumA, [6, 15, 24])
-    sumA.backward(Tensor(data: [-1, -2, -3], shape: [3]))
+    sumA.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
     try await assertDataEqual(gradA!, [-1, -1, -1, -2, -2, -2, -3, -3, -3])
 
     var gradB: Tensor?
     let sumB = input.onGrad({ g in gradB = g }).sum(axis: 0)
     try await assertDataEqual(sumB, [12, 15, 18])
-    sumB.backward(Tensor(data: [-1, -2, -3], shape: [3]))
+    sumB.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
     try await assertDataEqual(gradB!, [-1, -2, -3, -1, -2, -3, -1, -2, -3])
 
-    let input1 = Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8], shape: [2, 2, 2])
+    let input1 = Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8], shape: [2, 2, 2], dtype: .float32)
 
     var gradC: Tensor?
     let sumC = input1.onGrad({ g in gradC = g }).sum(axis: 1)
     try await assertDataEqual(sumC, Array([1 + 3, 2 + 4, 5 + 7, 6 + 8].map { Float($0) }))
-    sumC.backward(Tensor(data: [-1, -2, -3, -4], shape: [2, 2]))
+    sumC.backward(Tensor(data: [-1, -2, -3, -4], shape: [2, 2], dtype: .float32))
     try await assertDataEqual(gradC!, [-1, -2, -1, -2, -3, -4, -3, -4])
 
     var gradD: Tensor?
     let sumD = input1.onGrad({ g in gradD = g }).sum()
     try await assertDataEqual(sumD, [[1, 2, 3, 4, 5, 6, 7, 8].sum()])
-    sumD.backward(Tensor(data: [-1], shape: []))
+    sumD.backward(Tensor(data: [-1], shape: [], dtype: .float32))
     try await assertDataEqual(gradD!, Array(repeating: Float(-1), count: 8))
 
     XCTAssertEqual(input1.sum(keepdims: true).shape, [1, 1, 1])
@@ -392,8 +439,8 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testMatrixVectorProduct() async throws {
-    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3])
-    let y = Tensor(data: [-1, -3, 2], shape: [3, 1])
+    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3], dtype: .float32)
+    let y = Tensor(data: [-1, -3, 2], shape: [3, 1], dtype: .float32)
     var xGrad: Tensor?
     var yGrad: Tensor?
     let xParam = x.onGrad { grad in xGrad = grad }
@@ -418,10 +465,10 @@ final class HoneycrispTests: XCTestCase {
     try await assertDataEqual(
       Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9], shape: [3, 3]).tril(), [1, 0, 0, 4, 5, 0, 7, 8, 9])
 
-    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2])
+    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2], dtype: .float32)
     var xGrad: Tensor?
     x.onGrad { g in xGrad = g }.tril().backward(
-      Tensor(data: [-1, -2, -3, -4, -5, -6], shape: [3, 2]))
+      Tensor(data: [-1, -2, -3, -4, -5, -6], shape: [3, 2], dtype: .float32))
     try await assertDataEqual(xGrad!, [-1, 0, -3, -4, -5, -6])
   }
 
@@ -439,7 +486,8 @@ final class HoneycrispTests: XCTestCase {
     try await assertDataEqual(x[...(-2)], [1, 2, 3, 4])
     try await assertDataEqual(x[..<(-2)], [1, 2])
 
-    let y = Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], shape: [3, 1, 4])
+    let y = Tensor(
+      data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], shape: [3, 1, 4], dtype: .float32)
     XCTAssertEqual(y[..., 0].shape, [3, 4])
     try await assertDataEqual(y[..., 0], y)
     XCTAssertEqual(y[0, ..., 0].shape, [1])
@@ -471,12 +519,13 @@ final class HoneycrispTests: XCTestCase {
 
     var yGrad: Tensor?
     let yParam = y.onGrad { grad in yGrad = grad }
-    yParam[1...2, ..., 2...3].backward(Tensor(data: [1, 2, 3, 4], shape: [2, 1, 2]))
+    yParam[1...2, ..., 2...3].backward(
+      Tensor(data: [1, 2, 3, 4], shape: [2, 1, 2], dtype: .float32))
     XCTAssertEqual(yGrad!.shape, y.shape)
     try await assertDataEqual(yGrad!, [0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 4])
 
     let yParam1 = y.onGrad { grad in yGrad = grad }
-    yParam1[..., 0, 3].backward(Tensor(data: [1, 2, 3], shape: [3]))
+    yParam1[..., 0, 3].backward(Tensor(data: [1, 2, 3], shape: [3], dtype: .float32))
     XCTAssertEqual(yGrad!.shape, y.shape)
     try await assertDataEqual(yGrad!, [0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3])
 
@@ -599,37 +648,37 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testMinMax() async throws {
-    let input = Tensor(data: [1, 10, 2, 7, 8, 9, 6, 4, 5], shape: [3, 3])
+    let input = Tensor(data: [1, 10, 2, 7, 8, 9, 6, 4, 5], shape: [3, 3], dtype: .float32)
     var gradA: Tensor?
     let maxA = input.onGrad({ g in gradA = g }).max(axis: 1)
     try await assertDataEqual(maxA, [10, 9, 6])
-    maxA.backward(Tensor(data: [-1, -2, -3], shape: [3]))
+    maxA.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
     try await assertDataEqual(gradA!, [0, -1, 0, 0, 0, -2, -3, 0, 0])
 
     var gradB: Tensor?
     let maxB = input.onGrad({ g in gradB = g }).max(axis: 0)
     try await assertDataEqual(maxB, [7, 10, 9])
-    maxB.backward(Tensor(data: [-1, -2, -3], shape: [3]))
+    maxB.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
     try await assertDataEqual(gradB!, [0, -2, 0, -1, 0, -3, 0, 0, 0])
 
     var gradC: Tensor?
     let minC = input.onGrad({ g in gradC = g }).min(axis: 0)
     try await assertDataEqual(minC, [1, 4, 2])
-    minC.backward(Tensor(data: [-1, -2, -3], shape: [3]))
+    minC.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
     try await assertDataEqual(gradC!, [-1, 0, -3, 0, 0, 0, 0, -2, 0])
 
     var gradD: Tensor?
     let maxD = input.onGrad({ g in gradD = g }).max()
     XCTAssertEqual(maxD.shape, [])
     try await assertDataEqual(maxD, [10])
-    maxD.backward(Tensor(data: [-1], shape: []))
+    maxD.backward(Tensor(data: [-1], shape: [], dtype: .float32))
     try await assertDataEqual(gradD!, [0, -1, 0, 0, 0, 0, 0, 0, 0])
 
     var gradE: Tensor?
     let maxE = input.onGrad({ g in gradE = g }).min()
     XCTAssertEqual(maxE.shape, [])
     try await assertDataEqual(maxE, [1])
-    maxE.backward(Tensor(data: [-1], shape: []))
+    maxE.backward(Tensor(data: [-1], shape: [], dtype: .float32))
     try await assertDataEqual(gradE!, [-1.0, 0, 0, 0, 0, 0, 0, 0, 0])
 
     XCTAssertEqual(input.max(keepdims: true).shape, [1, 1])
@@ -905,6 +954,22 @@ func assertClose(
   var allGood = true
   let xData = try await x.floats()
   let yData = try await y.floats()
+  for (a, b) in zip(xData, yData) {
+    if a.isNaN != b.isNaN || (abs(a - b) > atol && (b == 0 || abs(a / b - 1) > rtol)) {
+      allGood = false
+    }
+  }
+  XCTAssert(allGood, "tensors \(xData) and \(yData) are not equal", file: file, line: line)
+}
+
+func assertClose(
+  _ x: Tensor, _ yData: [Float], atol: Float = 1e-4, rtol: Float = 1e-4,
+  file: StaticString = #filePath,
+  line: UInt = #line
+) async throws {
+  XCTAssertEqual(x.shape.product(), yData.count)
+  var allGood = true
+  let xData = try await x.floats()
   for (a, b) in zip(xData, yData) {
     if a.isNaN != b.isNaN || (abs(a - b) > atol && (b == 0 || abs(a / b - 1) > rtol)) {
       allGood = false

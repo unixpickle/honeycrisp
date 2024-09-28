@@ -28,6 +28,16 @@ public final class Tensor {
         4
       }
     }
+
+    internal func canUseScalarType<T: TensorElement>(_: T.Type) -> Bool {
+      if !isNumeric {
+        false
+      } else if self == .int64 && T.isInt64Lossy {
+        false
+      } else {
+        true
+      }
+    }
   }
 
   public struct Data {
@@ -58,8 +68,8 @@ public final class Tensor {
     }
 
     public func backward(_ grad: Tensor) {
-      assert(!grad.needsGrad, "second-order gradients are not supported")
-      assert(addGrad != nil, "cannot re-use backward handle")
+      alwaysAssert(!grad.needsGrad, "second-order gradients are not supported")
+      alwaysAssert(addGrad != nil, "cannot re-use backward handle")
       let ag = addGrad!
       addGrad = nil
       cancel = nil
@@ -126,7 +136,7 @@ public final class Tensor {
         let result = try await dataTask.value
         let allocSize = result.buffer.allocatedSize
         let minSize = shape.product() * dtype.byteSize
-        assert(allocSize >= minSize, "buffer of size \(allocSize) underflows shape \(shape)")
+        alwaysAssert(allocSize >= minSize, "buffer of size \(allocSize) underflows shape \(shape)")
         return result
       }
     #else
@@ -147,9 +157,13 @@ public final class Tensor {
   ) {
     let dtype = dtype ?? T.dtype
     if !dtype.supportsGrad {
-      assert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
+      alwaysAssert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
     }
-    assert(data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
+    alwaysAssert(
+      data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
+    alwaysAssert(
+      dtype.canUseScalarType(T.self),
+      "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
     let backend = Backend.current
     self.dataTask = Task {
       let buf = try await backend.allocate(length: dtype.byteSize * shape.product())
@@ -174,19 +188,19 @@ public final class Tensor {
   }
 
   public convenience init(zerosLike: Tensor) {
-    self.init(constant: Float(0), like: zerosLike)
+    self.init(constant: 0, like: zerosLike)
   }
 
   public convenience init(onesLike: Tensor) {
-    self.init(constant: Float(1), like: onesLike)
+    self.init(constant: 1, like: onesLike)
   }
 
   public convenience init(zeros shape: [Int], dtype: DType = .float32) {
-    self.init(constant: Float(0), shape: shape, dtype: dtype)
+    self.init(constant: 0, shape: shape, dtype: dtype)
   }
 
   public convenience init(ones shape: [Int], dtype: DType = .float32) {
-    self.init(constant: Float(1), shape: shape, dtype: dtype)
+    self.init(constant: 1, shape: shape, dtype: dtype)
   }
 
   public convenience init<T: TensorElement>(constant: T, like: Tensor) {
@@ -201,7 +215,7 @@ public final class Tensor {
   }
 
   public func copyToArray<T: TensorElement>(_ out: inout [T]) async throws {
-    assert(out.count == shape.product(), "out size must match our size")
+    alwaysAssert(out.count == shape.product(), "out size must match our size")
     let data = try await data
     if let c = data.completeOnAllDevices {
       try await c.value
@@ -222,7 +236,7 @@ public final class Tensor {
   }
 
   public func item() async throws -> Float {
-    assert(shape.product() == 1, "cannot call item() on Tensor of shape \(shape)")
+    alwaysAssert(shape.product() == 1, "cannot call item() on Tensor of shape \(shape)")
     let data = try await floats()
     return data[0]
   }
@@ -232,6 +246,7 @@ public final class Tensor {
   }
 
   public func onGrad(_ action: @escaping ((Tensor) -> Void)) -> Tensor {
+    alwaysAssert(dtype.supportsGrad, "cannot compute gradients for dtype \(dtype)")
     if !Tensor.isGradEnabled {
       return Tensor(dataTask: dataTask, shape: shape, dtype: dtype)
     }
@@ -249,7 +264,8 @@ public final class Tensor {
     if shape == newShape {
       return self
     }
-    assert(shape.product() == newShape.product(), "invalid reshape from \(shape) to \(newShape)")
+    alwaysAssert(
+      shape.product() == newShape.product(), "invalid reshape from \(shape) to \(newShape)")
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: dataTask, shape: newShape, dtype: dtype)
     } else {
@@ -265,7 +281,7 @@ public final class Tensor {
   }
 
   public func squeeze(axis: Int) -> Tensor {
-    assert(shape[positiveAxis(axis)] == 1, "cannot squeeze axis \(axis) for shape \(shape)")
+    alwaysAssert(shape[positiveAxis(axis)] == 1, "cannot squeeze axis \(axis) for shape \(shape)")
     var newShape = shape
     newShape.remove(at: axis)
     return reshape(newShape)
@@ -295,7 +311,10 @@ public final class Tensor {
   }
 
   public static func + <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
-    assert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
+    alwaysAssert(
+      lhs.dtype.canUseScalarType(T.self),
+      "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
+    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
     let backend = Backend.current
     let newData = Task {
       try await backend.binaryOp(
@@ -315,12 +334,12 @@ public final class Tensor {
   }
 
   public static func + (lhs: Tensor, rhs: Tensor) -> Tensor {
-    assert(
+    alwaysAssert(
       lhs.shape == rhs.shape,
       "shape mismatch for + operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
     )
-    assert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
-    assert(
+    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
+    alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for + operator do not match: \(lhs.dtype) and \(rhs.dtype)")
     let backend = Backend.current
     let newData = Task {
@@ -341,6 +360,9 @@ public final class Tensor {
   }
 
   public static func * <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+    alwaysAssert(
+      lhs.dtype.canUseScalarType(T.self),
+      "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
     let backend = Backend.current
     let newData = Task {
       try await backend.binaryOp(
@@ -361,12 +383,12 @@ public final class Tensor {
   }
 
   public static func * (lhs: Tensor, rhs: Tensor) -> Tensor {
-    assert(
+    alwaysAssert(
       lhs.shape == rhs.shape,
       "shape mismatch for * operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
     )
-    assert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with * operator")
-    assert(
+    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with * operator")
+    alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for * operator do not match: \(lhs.dtype) and \(rhs.dtype)")
     let backend = Backend.current
     let newData = Task {
@@ -386,25 +408,143 @@ public final class Tensor {
     }
   }
 
-  prefix public static func - (t: Tensor) -> Tensor {
-    assert(t.dtype.isNumeric, "dtype \(t.dtype) cannot be used with - operator")
-    return t * -1
-  }
-
-  public static func - (lhs: Tensor, rhs: Tensor) -> Tensor {
-    return lhs + -1 * rhs
-  }
-
   public static func - <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
-    return lhs + -rhs
+    alwaysAssert(
+      lhs.dtype.canUseScalarType(T.self),
+      "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
+    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with - operator")
+    let backend = Backend.current
+    let newData = Task {
+      try await backend.binaryOp(
+        try await lhs.data, rhs, op: .sub, count: lhs.shape.product(), dtype: lhs.dtype)
+    }
+    if !lhs.needsGrad || !Tensor.isGradEnabled {
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+    } else {
+      let lhsHandle = lhs.saveForBackward()
+      return Tensor(
+        dataTask: newData, shape: lhs.shape, dtype: lhs.dtype, backwardImpl: lhsHandle.backward)
+    }
   }
 
   public static func - <T: NumericTensorElement>(lhs: T, rhs: Tensor) -> Tensor {
-    return lhs + -rhs
+    alwaysAssert(
+      rhs.dtype.canUseScalarType(T.self),
+      "scalar type \(T.self) cannot be used with dtype \(rhs.dtype)")
+    let backend = Backend.current
+    let newData = Task {
+      try await backend.binaryOp(
+        lhs, try await rhs.data, op: .sub, count: rhs.shape.product(), dtype: rhs.dtype)
+    }
+    if !rhs.needsGrad || !Tensor.isGradEnabled {
+      return Tensor(dataTask: newData, shape: rhs.shape, dtype: rhs.dtype)
+    } else {
+      let rhsHandle = rhs.saveForBackward()
+      return Tensor(dataTask: newData, shape: rhs.shape, dtype: rhs.dtype) { grad in
+        rhsHandle.backward(-grad)
+      }
+    }
+  }
+
+  public static func - (lhs: Tensor, rhs: Tensor) -> Tensor {
+    alwaysAssert(
+      lhs.shape == rhs.shape,
+      "shape mismatch for - operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
+    )
+    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
+    alwaysAssert(
+      lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+    let backend = Backend.current
+    let newData = Task {
+      try await backend.binaryOp(
+        try await lhs.data, try await rhs.data, op: .sub, count: lhs.shape.product(),
+        dtype: lhs.dtype)
+    }
+    if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+    } else {
+      let lhsHandle = lhs.saveForBackward()
+      let rhsHandle = rhs.saveForBackward()
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
+        lhsHandle.backward(grad)
+        rhsHandle.backward(-grad)
+      }
+    }
+  }
+
+  prefix public static func - (t: Tensor) -> Tensor {
+    alwaysAssert(t.dtype.isNumeric, "dtype \(t.dtype) cannot be used with - operator")
+    return t * -1
+  }
+
+  public static func / <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+    alwaysAssert(
+      lhs.dtype.canUseScalarType(T.self),
+      "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
+    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with / operator")
+    let backend = Backend.current
+    let newData = Task {
+      try await backend.binaryOp(
+        try await lhs.data, rhs, op: .div, count: lhs.shape.product(), dtype: lhs.dtype)
+    }
+    if !lhs.needsGrad || !Tensor.isGradEnabled {
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+    } else {
+      let lhsHandle = lhs.saveForBackward()
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
+        lhsHandle.backward(grad / rhs)
+      }
+    }
+  }
+
+  public static func / <T: NumericTensorElement>(lhs: T, rhs: Tensor) -> Tensor {
+    alwaysAssert(
+      rhs.dtype.canUseScalarType(T.self),
+      "scalar type \(T.self) cannot be used with dtype \(rhs.dtype)")
+    alwaysAssert(rhs.dtype.isNumeric, "dtype \(rhs.dtype) cannot be used with / operator")
+    let backend = Backend.current
+    let newData = Task {
+      try await backend.binaryOp(
+        lhs, try await rhs.data, op: .div, count: rhs.shape.product(), dtype: rhs.dtype)
+    }
+    if !rhs.needsGrad || !Tensor.isGradEnabled {
+      return Tensor(dataTask: newData, shape: rhs.shape, dtype: rhs.dtype)
+    } else {
+      let rhsHandle = rhs.saveForBackward()
+      return Tensor(dataTask: newData, shape: rhs.shape, dtype: rhs.dtype) { grad in
+        rhsHandle.backward(-lhs * rhs.noGrad().pow(-2) * grad)
+      }
+    }
+  }
+
+  public static func / (lhs: Tensor, rhs: Tensor) -> Tensor {
+    alwaysAssert(
+      lhs.shape == rhs.shape,
+      "shape mismatch for / operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
+    )
+    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
+    alwaysAssert(
+      lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+    let backend = Backend.current
+    let newData = Task {
+      try await backend.binaryOp(
+        try await lhs.data, try await rhs.data, op: .div, count: lhs.shape.product(),
+        dtype: lhs.dtype)
+    }
+    if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+    } else {
+      let lhsHandle = lhs.saveForBackward()
+      let rhsHandle = rhs.saveForBackward()
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
+        lhsHandle.backward(grad / rhs.noGrad())
+        rhsHandle.backward(-lhs.noGrad() * rhs.noGrad().pow(-2) * grad)
+      }
+    }
   }
 
   public func pow<T: NumericTensorElement>(_ exponent: T) -> Tensor {
-    assert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
+    alwaysAssert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
     let backend = Backend.current
     let newData = Task {
       try await backend.pow(
@@ -421,24 +561,12 @@ public final class Tensor {
     }
   }
 
-  public static func / (lhs: Tensor, rhs: Tensor) -> Tensor {
-    return lhs * rhs.pow(-1)
-  }
-
-  public static func / <T: NumericTensorElement>(lhs: T, rhs: Tensor) -> Tensor {
-    return lhs * rhs.pow(-1)
-  }
-
-  public static func / <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
-    return lhs * (T(1.0) / rhs)
-  }
-
   internal static func compare(lhs: Tensor, rhs: Tensor, op: ComparisonOp) -> Tensor {
-    assert(
+    alwaysAssert(
       lhs.shape == rhs.shape,
       "shape mismatch for == operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
     )
-    assert(
+    alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for == operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
     let backend = Backend.current
@@ -556,7 +684,7 @@ public final class Tensor {
   }
 
   public func backward(_ grad: Tensor? = nil) {
-    assert(needsGrad, "backward called on Tensor that does not need grad")
+    alwaysAssert(needsGrad, "backward called on Tensor that does not need grad")
     let grad =
       if let grad = grad {
         grad
@@ -564,29 +692,30 @@ public final class Tensor {
         Tensor(onesLike: self)
       }
 
-    assert(numBackwardHandles == 0, "cannot call backward() on tensor that is used elsewhere")
+    alwaysAssert(numBackwardHandles == 0, "cannot call backward() on tensor that is used elsewhere")
     Tensor.withGrad(enabled: true) { self.saveForBackward() }.backward(grad)
   }
 
   public func saveForBackward() -> BackwardHandle {
-    assert(Tensor.isGradEnabled, "backward handle cannot be saved while grads are disabled")
+    alwaysAssert(Tensor.isGradEnabled, "backward handle cannot be saved while grads are disabled")
     if !self.needsGrad {
       return BackwardHandle()
     } else if self.backwardImpl == nil {
       return BackwardHandle(
-        addGrad: { _ in assert(false, "cannot backward a second time") }, cancel: {})
+        addGrad: { _ in alwaysAssert(false, "cannot backward a second time") }, cancel: {})
     }
 
     numBackwardHandles += 1
 
     return BackwardHandle(
       addGrad: { [self] grad in
-        assert(numBackwardHandles > 0)
-        assert(
+        alwaysAssert(numBackwardHandles > 0)
+        alwaysAssert(
           grad.shape == shape,
           "gradient shape \(grad.shape) must match tensor shape \(shape)"
         )
-        assert(grad.dtype == dtype, "gradient dtype \(grad.dtype) must match tensor dtype \(dtype)")
+        alwaysAssert(
+          grad.dtype == dtype, "gradient dtype \(grad.dtype) must match tensor dtype \(dtype)")
         if let cg = curGrad {
           curGrad = cg + grad
         } else {
@@ -603,7 +732,7 @@ public final class Tensor {
       cancel: { [self] in
         numBackwardHandles -= 1
         if self.curGrad != nil && numBackwardHandles == 0 {
-          assert(false, "backward pass was incompleted due to an unused reference")
+          alwaysAssert(false, "backward pass was incompleted due to an unused reference")
         }
       })
   }
@@ -619,7 +748,7 @@ public final class Tensor {
   }
   internal func positiveAxis(_ axis: Int) -> Int {
     let result = axis < 0 ? axis + shape.count : axis
-    assert(result >= 0, "axis \(axis) out of bounds for shape \(shape)")
+    alwaysAssert(result >= 0, "axis \(axis) out of bounds for shape \(shape)")
     return result
   }
 

@@ -34,7 +34,7 @@ extension Tensor {
     rand shape: [Int], dist: RandomDist, dtype: DType = .float32, generator: RandomGenerator? = nil
   ) {
     let backend = Backend.current
-    assert(
+    alwaysAssert(
       generator == nil || generator!.backend === backend,
       "backend for provided generator is not the current backend")
     let dataTask = Task {
@@ -65,7 +65,7 @@ extension Tensor {
     randInt shape: [Int], in range: Range<Int64>, generator: RandomGenerator? = nil
   ) {
     let backend = Backend.current
-    assert(
+    alwaysAssert(
       generator == nil || generator!.backend === backend,
       "backend for provided generator is not the current backend")
     let dataTask = Task {

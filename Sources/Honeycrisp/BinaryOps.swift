@@ -1,6 +1,8 @@
 public enum NumericBinaryOp {
   case add
   case mul
+  case sub
+  case div
 
   public func apply<T: NumericTensorElement>(_ a: T, _ b: T) -> T {
     switch self {
@@ -8,6 +10,10 @@ public enum NumericBinaryOp {
       a + b
     case .mul:
       a * b
+    case .sub:
+      a - b
+    case .div:
+      a / b
     }
   }
 }

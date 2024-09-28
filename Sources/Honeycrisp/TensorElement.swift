@@ -9,6 +9,7 @@ enum ConversionError: Error {
 
 public protocol TensorElement: Comparable {
   static var isFloatLossy: Bool { get }
+  static var isInt64Lossy: Bool { get }
   static var dtype: Tensor.DType { get }
 
   init(_ value: Float)
@@ -30,6 +31,7 @@ public protocol NumericTensorElement: TensorElement {
 }
 
 extension Double: NumericTensorElement {
+  public static var isInt64Lossy: Bool { true }
   public static var isFloatLossy: Bool { false }
   public static var dtype: Tensor.DType { .float32 }
 
@@ -47,6 +49,7 @@ extension Double: NumericTensorElement {
 }
 
 extension Int: NumericTensorElement {
+  public static var isInt64Lossy: Bool { false }
   public static var isFloatLossy: Bool { false }
   public static var dtype: Tensor.DType { .int64 }
 
@@ -64,6 +67,7 @@ extension Int: NumericTensorElement {
 }
 
 extension Float: NumericTensorElement {
+  public static var isInt64Lossy: Bool { true }
   public static var isFloatLossy: Bool { false }
   public static var dtype: Tensor.DType { .float32 }
 
@@ -81,6 +85,7 @@ extension Float: NumericTensorElement {
 }
 
 extension Bool: TensorElement {
+  public static var isInt64Lossy: Bool { false }
   public static var isFloatLossy: Bool { false }
   public static var dtype: Tensor.DType { .bool }
 
@@ -118,6 +123,7 @@ extension Bool: TensorElement {
 }
 
 extension Int64: NumericTensorElement {
+  public static var isInt64Lossy: Bool { false }
   public static var isFloatLossy: Bool { true }
   public static var dtype: Tensor.DType { .int64 }
 

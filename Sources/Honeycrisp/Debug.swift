@@ -1,3 +1,5 @@
+import Foundation
+
 extension Tensor {
   public func printing(onForward: String? = nil, onGrad: String? = nil) -> Tensor {
     if onForward == nil && onGrad == nil {
@@ -21,7 +23,7 @@ extension Tensor {
   }
 
   public func checkNaN(onForward: String? = nil, onGrad: String? = nil) -> Tensor {
-    assert(dtype == .float32)
+    alwaysAssert(dtype == .float32)
     if onForward == nil && onGrad == nil {
       return self
     }
@@ -45,5 +47,19 @@ extension Tensor {
         handle.backward(grad.checkNaN(onForward: onGrad))
       }
     }
+  }
+}
+
+func alwaysAssert(
+  _ condition: Bool, _ message: String? = nil, file: StaticString = #filePath, line: UInt = #line
+) {
+  if !condition {
+    let msg =
+      if let message = message {
+        "Assertion failure at \(file):\(line) with message: \(message)"
+      } else {
+        "Assertion failure at \(file):\(line)"
+      }
+    fatalError(msg)
   }
 }

@@ -313,10 +313,8 @@ struct Main {
         print("sampling...")
         do {
           let firstTokens =
-            Tensor(range: 0..<(NumLabels * SampleCount), dtype: .int64).reshape([
-              NumLabels * SampleCount, 1,
-            ])
-            / SampleCount + (VocabSize - NumLabels)
+            (Tensor(range: 0..<(NumLabels * SampleCount)) / SampleCount + (VocabSize - NumLabels))
+            .reshape([NumLabels * SampleCount, 1])
           let samples = try await model.sample(firstTokens: firstTokens)
           let pixelBatch = try await unpackPixelsInTokens(bitmaps: samples, patchSize: PatchSize)
           let pixels =

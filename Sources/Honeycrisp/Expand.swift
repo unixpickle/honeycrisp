@@ -5,7 +5,7 @@ extension Tensor {
   }
 
   public func expand(shape newShape: [Int]) -> Tensor {
-    assert(
+    alwaysAssert(
       newShape.count >= shape.count,
       "cannot broadcast shape \(shape) to shorter shape \(newShape)"
     )
@@ -15,7 +15,7 @@ extension Tensor {
       let oldValue = shape[axis]
       let newValue = newShape[newShape.count - (i + 1)]
       if newValue != oldValue {
-        assert(
+        alwaysAssert(
           oldValue == 1,
           "axis \(axis) cannot expand from size \(oldValue) to \(newValue)"
         )

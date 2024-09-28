@@ -27,15 +27,15 @@ public struct ScatterGatherIndices {
 extension Tensor {
   public func gather(axis: Int, indices: Tensor) -> Tensor {
     let axis = positiveAxis(axis)
-    assert(indices.dtype == .int64, "can only gather with indices of dtype \(indices.dtype)")
-    assert(
+    alwaysAssert(indices.dtype == .int64, "can only gather with indices of dtype \(indices.dtype)")
+    alwaysAssert(
       shape.count == indices.shape.count || indices.shape.count == 1,
       "incompatible indices shape \(indices.shape) for tensor shape \(shape)")
 
     var newShape = shape
     newShape[axis] = indices.shape.count == 1 ? indices.shape[0] : indices.shape[axis]
     if indices.shape.count != 1 {
-      assert(
+      alwaysAssert(
         newShape == indices.shape,
         "tensor shape \(shape) must match indices shape \(indices) except at axis \(axis)")
     }
@@ -69,8 +69,8 @@ extension Tensor {
 
   public func scatter(axis: Int, count: Int, indices: Tensor) -> Tensor {
     let axis = positiveAxis(axis)
-    assert(indices.dtype == .int64, "can only scatter with indices of dtype \(indices.dtype)")
-    assert(
+    alwaysAssert(indices.dtype == .int64, "can only scatter with indices of dtype \(indices.dtype)")
+    alwaysAssert(
       shape == indices.shape || (indices.shape.count == 1 && shape[axis] == indices.shape[0]),
       "incompatible indices shape \(indices.shape) for tensor shape \(shape)")
 

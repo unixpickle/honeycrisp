@@ -2,18 +2,18 @@ extension Tensor {
   public convenience init(concat tensors: [Tensor], axis: Int = 0) {
     let backend = Backend.current
 
-    assert(tensors.count > 0, "cannot concatenate zero tensors")
+    alwaysAssert(tensors.count > 0, "cannot concatenate zero tensors")
 
     let axis = tensors[0].positiveAxis(axis)
-    assert(
+    alwaysAssert(
       axis >= 0 && axis < tensors[0].shape.count,
       "axis \(axis) out of bounds for shape \(tensors[0].shape)")
 
     for (i, t) in tensors.enumerated() {
-      assert(
+      alwaysAssert(
         t.dtype == tensors[0].dtype,
         "tensor at index \(i) has different dtype \(t.dtype) than tensor 0 \(tensors[0].dtype)")
-      assert(
+      alwaysAssert(
         t.shape.count == tensors[0].shape.count && t.shape[..<axis] == tensors[0].shape[..<axis]
           && t.shape[(axis + 1)...] == tensors[0].shape[(axis + 1)...],
         "tensor at index \(i) has shape \(t.shape) which is incompatible with shape at index 0 \(tensors[0].shape)"
@@ -50,8 +50,8 @@ extension Tensor {
 
   public func split(axis: Int, counts: [Int]) -> [Tensor] {
     let axis = positiveAxis(axis)
-    assert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
-    assert(
+    alwaysAssert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
+    alwaysAssert(
       shape[axis] == counts.sum(),
       "split counts \(counts) do not sum to axis \(axis) of shape \(shape)")
     var results: [Tensor] = []

@@ -79,7 +79,7 @@ extension Tensor {
       let outShape = keepdims ? Array(repeating: 1, count: shape.count) : []
       return reshape([shape.product()]).reduce(op: op, axis: 0).reshape(outShape)
     }
-    assert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
+    alwaysAssert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
     let backend = Backend.current
     let newData = Task {
       try await backend.reduce(try await self.data, op: op, dims: reduceDims(axis), dtype: dtype)
@@ -104,7 +104,7 @@ extension Tensor {
   // dimension is added with the value `count`.
   public func repeating(axis: Int, count: Int) -> Tensor {
     let axis = positiveAxis(axis)
-    assert(axis >= 0 && axis <= shape.count, "axis \(axis) out of bounds for shape \(shape)")
+    alwaysAssert(axis >= 0 && axis <= shape.count, "axis \(axis) out of bounds for shape \(shape)")
     let outerCount = shape[..<axis].product()
     let innerCount = shape[axis...].product()
     let backend = Backend.current
@@ -134,7 +134,7 @@ extension Tensor {
   internal func reduceDims(_ axis: Int? = nil) -> ReduceDims {
     if let axis = axis {
       let axis = (axis < 0 ? axis + shape.count : axis)
-      assert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
+      alwaysAssert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
       return ReduceDims(
         outerCount: shape[..<axis].product(),
         reduceCount: shape[axis],

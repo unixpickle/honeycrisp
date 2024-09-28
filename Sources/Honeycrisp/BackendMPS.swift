@@ -83,7 +83,7 @@ open class MPSBackend: CPUBackend {
       if dtype != .float16 && dtype != .float32 {
         return try await super.sample(count: count, dist: dist, dtype: dtype)
       }
-      assert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
+      alwaysAssert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
 
       let functionName =
         "\(dist == .normal ? "randn" : "rand")_\(dtype == .float16 ? "fp16" : "fp32")"
@@ -150,18 +150,24 @@ open class MPSBackend: CPUBackend {
 
     // Lookup all functions in the library.
     var names = [
-      "addvv_fp16", "addvv_fp32", "addvs_fp16", "addvs_fp32", "mulvv_fp16", "mulvv_fp32",
-      "mulvs_fp16", "mulvs_fp32", "vector_pow_fp16", "vector_pow_fp32", "log_fp16", "log_fp32",
-      "recip_fp16", "recip_fp32", "exp_fp16", "exp_fp32", "sigmoid_fp16", "sigmoid_fp32",
-      "sigmoid_grad_fp16", "sigmoid_grad_fp32", "gelu_fp32", "gelu_fp16", "gelu_grad_fp32",
-      "gelu_grad_fp16", "sin_fp32", "sin_fp16", "cos_fp32", "cos_fp16", "minus_sin_fp32",
-      "minus_sin_fp16", "relu_fp32", "relu_fp16", "relu_grad_fp32", "relu_grad_fp16", "repeat",
-      "rand_fp32", "rand_fp16", "randn_fp32", "randn_fp16",
+      "vector_pow_fp16", "vector_pow_fp32", "log_fp16", "log_fp32", "recip_fp16", "recip_fp32",
+      "exp_fp16", "exp_fp32", "sigmoid_fp16", "sigmoid_fp32", "sigmoid_grad_fp16",
+      "sigmoid_grad_fp32", "gelu_fp32", "gelu_fp16", "gelu_grad_fp32", "gelu_grad_fp16", "sin_fp32",
+      "sin_fp16", "cos_fp32", "cos_fp16", "minus_sin_fp32", "minus_sin_fp16", "relu_fp32",
+      "relu_fp16", "relu_grad_fp32", "relu_grad_fp16", "repeat", "rand_fp32", "rand_fp16",
+      "randn_fp32", "randn_fp16",
     ]
     for type in ["char", "short", "int", "long"] {
       for mode in ["", "_bcast"] {
         for op in ["gather", "scatter"] {
           names.append("\(op)\(mode)_\(type)")
+        }
+      }
+    }
+    for op in ["add", "sub", "mul", "div"] {
+      for type in ["fp16", "fp32"] {
+        for args in ["vv", "sv", "vs"] {
+          names.append("\(op)\(args)_\(type)")
         }
       }
     }
@@ -199,7 +205,7 @@ open class MPSBackend: CPUBackend {
       return try await super.pow(a, b, count: count, dtype: dtype)
     }
 
-    assert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
     let output = try await allocate(length: count * dtype.byteSize)
 
     try await waitForGPUData(a)
@@ -229,7 +235,7 @@ open class MPSBackend: CPUBackend {
       return try await super.elemwise(a, op: op, count: count, dtype: dtype)
     }
 
-    assert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let namePrefix =
       switch op {
@@ -286,7 +292,7 @@ open class MPSBackend: CPUBackend {
       return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
     }
 
-    assert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName =
       switch op {
@@ -294,6 +300,10 @@ open class MPSBackend: CPUBackend {
         "add"
       case .mul:
         "mul"
+      case .sub:
+        "sub"
+      case .div:
+        "div"
       }
     let functionName = "\(opName)vv_\(dtype == .float16 ? "fp16" : "fp32")"
     let output = try await allocate(length: count * dtype.byteSize)
@@ -325,7 +335,7 @@ open class MPSBackend: CPUBackend {
       return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
     }
 
-    assert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName =
       switch op {
@@ -333,6 +343,10 @@ open class MPSBackend: CPUBackend {
         "add"
       case .mul:
         "mul"
+      case .sub:
+        "sub"
+      case .div:
+        "div"
       }
     let functionName = "\(opName)vs_\(dtype == .float16 ? "fp16" : "fp32")"
     let output = try await allocate(length: count * dtype.byteSize)
@@ -360,13 +374,41 @@ open class MPSBackend: CPUBackend {
     async throws
     -> Tensor.Data
   {
-    if (op != .add && op != .mul) || dtype != .float16 && dtype != .float32 {
+    if dtype != .float16 && dtype != .float32 {
       return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
     }
 
-    assert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
-    return try await binaryOp(b, a, op: op, count: count, dtype: dtype)
+    let opName =
+      switch op {
+      case .add:
+        "add"
+      case .mul:
+        "mul"
+      case .sub:
+        "sub"
+      case .div:
+        "div"
+      }
+    let functionName = "\(opName)sv_\(dtype == .float16 ? "fp16" : "fp32")"
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    try await waitForGPUData(b)
+    return try await serialize { [self] in
+      let completion = try completionBuffer { buf in
+        let state = try getFunction(name: functionName)
+        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
+          throw BackendError.kernelFailed("could not create compute encoder")
+        }
+        try setArguments(
+          computeEncoder, .float(a.toFloat()), .buffer(b.buffer), .buffer(output),
+          .uint(UInt32(count)))
+        dispatch1D(computeEncoder, state: state, threadCount: count)
+        computeEncoder.endEncoding()
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
   }
 
   override public func repeated(
@@ -376,7 +418,7 @@ open class MPSBackend: CPUBackend {
     -> Tensor.Data
   {
     let outBytes = innerCount * outerCount * repeats * dtype.byteSize
-    assert(
+    alwaysAssert(
       outBytes <= Int(UInt32.max),
       "cannot apply kernel to this many values")
 
@@ -586,14 +628,14 @@ open class MPSBackend: CPUBackend {
         transA: transA, transB: transB, batch: matrixCount, rows: rows, inner: inner, cols: cols,
         dtype: mpsDType)
       let completion = completionBuffer { buf in
-        assert(
+        alwaysAssert(
           a.buffer.allocatedSize >= matrixCount * aShape.0 * aShape.1 * dtype.byteSize,
           "matrix A buffer underflow")
-        assert(
+        alwaysAssert(
           b.buffer.allocatedSize >= matrixCount * bShape.0 * bShape.1 * dtype.byteSize,
           "matrix B buffer underflow \(matrixCount) * \(bShape) * \(dtype.byteSize) vs \(b.buffer.allocatedSize)"
         )
-        assert(
+        alwaysAssert(
           output.allocatedSize >= matrixCount * rows * cols * dtype.byteSize,
           "output matrix buffer underflow")
         mm.graph.encode(
@@ -816,85 +858,66 @@ open class MPSBackend: CPUBackend {
           return (x < -10 ? -1 : (x > 10 ? 1 : tanh(x)));
       }
 
-      kernel void addvv_fp16(device const half* a [[buffer(0)]],
-                             device const half* b [[buffer(1)]],
-                             device half* c [[buffer(2)]],
-                             constant uint &N [[buffer(3)]],
-                             uint id [[thread_position_in_grid]]) {
-        if (id < N) {
-          c[id] = a[id] + b[id];
-        }
-      }
+      #define ELEMWISE_KERNELS(name, operator) \
+          kernel void name##vv_fp16(device const half* a [[buffer(0)]], \
+                                    device const half* b [[buffer(1)]], \
+                                    device half* c [[buffer(2)]], \
+                                    constant uint &N [[buffer(3)]], \
+                                    uint id [[thread_position_in_grid]]) { \
+            if (id < N) { \
+              c[id] = a[id] operator b[id]; \
+            } \
+          } \
+          kernel void name##vv_fp32(device const float* a [[buffer(0)]], \
+                                    device const float* b [[buffer(1)]], \
+                                    device float* c [[buffer(2)]], \
+                                    constant uint &N [[buffer(3)]], \
+                                    uint id [[thread_position_in_grid]]) { \
+            if (id < N) { \
+              c[id] = a[id] operator b[id]; \
+            } \
+          } \
+          kernel void name##vs_fp16(device const half* a [[buffer(0)]], \
+                                    device const float& b [[buffer(1)]], \
+                                    device half* c [[buffer(2)]], \
+                                    constant uint &N [[buffer(3)]], \
+                                    uint id [[thread_position_in_grid]]) { \
+            if (id < N) { \
+              c[id] = a[id] operator (half)b; \
+            } \
+          } \
+          kernel void name##vs_fp32(device const float* a [[buffer(0)]], \
+                                    device const float& b [[buffer(1)]], \
+                                    device float* c [[buffer(2)]], \
+                                    constant uint &N [[buffer(3)]], \
+                                    uint id [[thread_position_in_grid]]) { \
+            if (id < N) { \
+              c[id] = a[id] operator b; \
+            } \
+          } \
+          kernel void name##sv_fp16(device const float& a [[buffer(0)]], \
+                                    device const half* b [[buffer(1)]], \
+                                    device half* c [[buffer(2)]], \
+                                    constant uint &N [[buffer(3)]], \
+                                    uint id [[thread_position_in_grid]]) { \
+            if (id < N) { \
+              c[id] = (half)a operator b[id]; \
+            } \
+          } \
+          kernel void name##sv_fp32(device const float& a [[buffer(0)]], \
+                                    device const float* b [[buffer(1)]], \
+                                    device float* c [[buffer(2)]], \
+                                    constant uint &N [[buffer(3)]], \
+                                    uint id [[thread_position_in_grid]]) { \
+            if (id < N) { \
+              c[id] = a operator b[id]; \
+            } \
+          } \
 
-      kernel void addvv_fp32(device const float* a [[buffer(0)]],
-                             device const float* b [[buffer(1)]],
-                             device float* c [[buffer(2)]],
-                             constant uint &N [[buffer(3)]],
-                             uint id [[thread_position_in_grid]]) {
-        if (id < N) {
-          c[id] = a[id] + b[id];
-        }
-      }
-
-      kernel void addvs_fp16(device const half* a [[buffer(0)]],
-                             device const float &b [[buffer(1)]],
-                             device half* c [[buffer(2)]],
-                             constant uint &N [[buffer(3)]],
-                             uint id [[thread_position_in_grid]]) {
-        if (id < N) {
-          c[id] = a[id] + b;
-        }
-      }
-
-      kernel void addvs_fp32(device const float* a [[buffer(0)]],
-                             device const float &b [[buffer(1)]],
-                             device float* c [[buffer(2)]],
-                             constant uint &N [[buffer(3)]],
-                             uint id [[thread_position_in_grid]]) {
-        if (id < N) {
-          c[id] = a[id] + b;
-        }
-      }
-
-      kernel void mulvv_fp16(device const half* a [[buffer(0)]],
-                             device const half* b [[buffer(1)]],
-                             device half* c [[buffer(2)]],
-                             constant uint &N [[buffer(3)]],
-                             uint id [[thread_position_in_grid]]) {
-        if (id < N) {
-          c[id] = a[id] * b[id];
-        }
-      }
-
-      kernel void mulvv_fp32(device const float* a [[buffer(0)]],
-                             device const float* b [[buffer(1)]],
-                             device float* c [[buffer(2)]],
-                             constant uint &N [[buffer(3)]],
-                             uint id [[thread_position_in_grid]]) {
-        if (id < N) {
-          c[id] = a[id] * b[id];
-        }
-      }
-
-      kernel void mulvs_fp16(device const half* a [[buffer(0)]],
-                             device const float &b [[buffer(1)]],
-                             device half* c [[buffer(2)]],
-                             constant uint &N [[buffer(3)]],
-                             uint id [[thread_position_in_grid]]) {
-        if (id < N) {
-          c[id] = a[id] * b;
-        }
-      }
-
-      kernel void mulvs_fp32(device const float* a [[buffer(0)]],
-                             device const float &b [[buffer(1)]],
-                             device float* c [[buffer(2)]],
-                             constant uint &N [[buffer(3)]],
-                             uint id [[thread_position_in_grid]]) {
-        if (id < N) {
-          c[id] = a[id] * b;
-        }
-      }
+      ELEMWISE_KERNELS(add, +)
+      ELEMWISE_KERNELS(sub, -)
+      ELEMWISE_KERNELS(mul, *)
+      ELEMWISE_KERNELS(div, /)
 
       kernel void vector_pow_fp16(device const half* input [[buffer(0)]],
                                   device half* output [[buffer(1)]],
