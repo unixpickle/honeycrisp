@@ -36,6 +36,18 @@ final class HoneycrispTests: XCTestCase {
     try await assertDataEqual(w, [1.0, 1.0, 0.0])
   }
 
+  func testReshape() async throws {
+    let x = Tensor(ones: [3, 5, 8])
+    XCTAssertEqual(x.reshape([5, 3, 8]).shape, [5, 3, 8])
+    XCTAssertEqual(x.reshape([-1, 3, 8]).shape, [5, 3, 8])
+    XCTAssertEqual(x.reshape([5, -1, 8]).shape, [5, 3, 8])
+    XCTAssertEqual(x.reshape([5, 3, -1]).shape, [5, 3, 8])
+    XCTAssertEqual(x.reshape([5 * 3, -1]).shape, [5 * 3, 8])
+    let y = Tensor(ones: [3, 0, 15])
+    XCTAssertEqual(y.reshape([5 * 3, -1]).shape, [5 * 3, 0])
+    XCTAssertEqual(y.reshape([3, 15, -1]).shape, [3, 15, 0])
+  }
+
   func testAdd() async throws {
     try await runInBackends {
       let x = Tensor(data: [1.0, 2.0, 0.0], shape: [3], dtype: .float32)
@@ -808,6 +820,26 @@ final class HoneycrispTests: XCTestCase {
     try await assertDataEqual(yGrad!, [7, 8, 9])
   }
 
+  func testStack() async throws {
+    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3])
+    let y = Tensor(data: [7, 8, 9, 10, 11, 12], shape: [2, 3])
+    let stack0 = Tensor(stack: [x, y], axis: 0)
+    let stack1 = Tensor(stack: [x, y], axis: 1)
+    let stack2 = Tensor(stack: [x, y], axis: 2)
+    XCTAssertEqual(stack0.shape, [2, 2, 3])
+    XCTAssertEqual(stack1.shape, [2, 2, 3])
+    XCTAssertEqual(stack2.shape, [2, 3, 2])
+    try await assertDataEqual(stack0, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    try await assertDataEqual(stack1, [1, 2, 3, 7, 8, 9, 4, 5, 6, 10, 11, 12])
+    try await assertDataEqual(stack2, [1, 7, 2, 8, 3, 9, 4, 10, 5, 11, 6, 12])
+    XCTAssertEqual(stack0.shape, Tensor(stack: [x, y], axis: -3).shape)
+    try await assertDataEqual(stack0, Tensor(stack: [x, y], axis: -3))
+    XCTAssertEqual(stack1.shape, Tensor(stack: [x, y], axis: -2).shape)
+    try await assertDataEqual(stack1, Tensor(stack: [x, y], axis: -2))
+    XCTAssertEqual(stack2.shape, Tensor(stack: [x, y], axis: -1).shape)
+    try await assertDataEqual(stack2, Tensor(stack: [x, y], axis: -1))
+  }
+
   func testOneHot() async throws {
     try await assertDataEqual(Tensor(oneHot: 3, count: 5), [0, 0, 0, 1, 0])
     try await assertDataEqual(Tensor(oneHot: [3, 1], count: 5), [0, 0, 0, 1, 0, 0, 1, 0, 0, 0])
@@ -943,6 +975,116 @@ final class HoneycrispTests: XCTestCase {
     XCTAssert(x.sum().needsGrad)
     XCTAssert(!Tensor.withGrad(enabled: false) { x * x }.needsGrad)
     XCTAssert((x * x).needsGrad)
+  }
+
+  func testCacheBackendForBackward() async throws {
+    // If any operations are called on this backend, it will raise an error.
+    let unusedBackend = Backend()
+
+    func testArithmetic() async throws {
+      return try await runInBackends {
+        var xGrad: Tensor?
+        let x = Tensor(ones: [1]).onGrad { grad in xGrad = grad }
+        let y1 = x / 3.0
+        let y2 = 3.0 / x
+        let y3 = y1 / y2
+        let y4 = y1 + y3
+        let y5 = 1.0 + y4
+        let y6 = y5 + 1.0
+        let y7 = y6 - 1.0
+        let y8 = 1.0 - y7
+        let y9 = y8 - x
+        let y10 = y9 * x
+        let y11 = y10 * 2.0
+        let y12 = 2.0 * y11
+        let outGrad = Tensor(onesLike: y12)
+        unusedBackend.use { y12.backward(outGrad) }
+        XCTAssert(xGrad != nil)
+        let _ = try await xGrad!.data
+      }
+    }
+
+    func testMatrixMul() async throws {
+      return try await runInBackends {
+        var xGrad: Tensor?
+        let x = Tensor(ones: [3, 3]).onGrad { grad in xGrad = grad }
+        let y = (x &* x) + (x &* x.t())
+        let outGrad = Tensor(onesLike: y)
+        unusedBackend.use { y.backward(outGrad) }
+        XCTAssert(xGrad != nil)
+        let _ = try await xGrad!.data
+      }
+    }
+
+    func testTril() async throws {
+      return try await runInBackends {
+        var xGrad: Tensor?
+        let x = Tensor(ones: [3, 3]).onGrad { grad in xGrad = grad }
+        let y = x.tril()
+        let outGrad = Tensor(onesLike: y)
+        unusedBackend.use { y.backward(outGrad) }
+        XCTAssert(xGrad != nil)
+        let _ = try await xGrad!.data
+      }
+    }
+
+    func testReduceRepeat() async throws {
+      return try await runInBackends {
+        var xGrad: Tensor?
+        let x = Tensor(ones: [3, 3]).onGrad { grad in xGrad = grad }
+        let y = x + x.sum(axis: 1).reshape([3, 1]).repeating(axis: 1, count: 3)
+        let outGrad = Tensor(onesLike: y)
+        unusedBackend.use { y.backward(outGrad) }
+        XCTAssert(xGrad != nil)
+        let _ = try await xGrad!.data
+      }
+    }
+
+    func testConcatSplit() async throws {
+      return try await runInBackends {
+        var xGrad: Tensor?
+        let x = Tensor(ones: [3, 6]).onGrad { grad in xGrad = grad }
+        let ys = x.split(axis: 1, counts: [2, 2, 2])
+        let y = Tensor(concat: ys, axis: 1)
+        let outGrad = Tensor(onesLike: y)
+        unusedBackend.use { y.backward(outGrad) }
+        XCTAssert(xGrad != nil)
+        let _ = try await xGrad!.data
+      }
+    }
+
+    func testElemwise() async throws {
+      return try await runInBackends {
+        var xGrad: Tensor?
+        let x = Tensor(ones: [3, 6]).onGrad { grad in xGrad = grad }
+        let y = x.gelu().pow(2)
+        let outGrad = Tensor(onesLike: y)
+        unusedBackend.use { y.backward(outGrad) }
+        XCTAssert(xGrad != nil)
+        let _ = try await xGrad!.data
+      }
+    }
+
+    func testScatterGather() async throws {
+      return try await runInBackends {
+        var xGrad: Tensor?
+        let x = Tensor(ones: [3, 6]).onGrad { grad in xGrad = grad }
+        let inds = Tensor(data: [1, 0, 5], shape: [3])
+        let y = x.gather(axis: 1, indices: inds).scatter(axis: 1, count: 6, indices: inds)
+        let outGrad = Tensor(onesLike: y)
+        unusedBackend.use { y.backward(outGrad) }
+        XCTAssert(xGrad != nil)
+        let _ = try await xGrad!.data
+      }
+    }
+
+    try await testArithmetic()
+    try await testMatrixMul()
+    try await testTril()
+    try await testReduceRepeat()
+    try await testConcatSplit()
+    try await testElemwise()
+    try await testScatterGather()
   }
 }
 

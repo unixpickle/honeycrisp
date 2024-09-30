@@ -264,16 +264,35 @@ public final class Tensor {
     if shape == newShape {
       return self
     }
+    let useShape = fillNegativeOneInShape(newShape)
     alwaysAssert(
-      shape.product() == newShape.product(), "invalid reshape from \(shape) to \(newShape)")
+      shape.product() == useShape.product(), "invalid reshape from \(shape) to \(newShape)")
     if !needsGrad || !Tensor.isGradEnabled {
-      return Tensor(dataTask: dataTask, shape: newShape, dtype: dtype)
+      return Tensor(dataTask: dataTask, shape: useShape, dtype: dtype)
     } else {
       let handle = self.saveForBackward()
-      return Tensor(dataTask: dataTask, shape: newShape, dtype: dtype) { [self] grad in
+      return Tensor(dataTask: dataTask, shape: useShape, dtype: dtype) { [self] grad in
         handle.backward(grad.reshape(shape))
       }
     }
+  }
+
+  internal func fillNegativeOneInShape(_ newShape: [Int]) -> [Int] {
+    guard let idx = newShape.firstIndex(of: -1) else {
+      return newShape
+    }
+    alwaysAssert(newShape.filter({ x in x < 0 }).count == 1, "invalid shape: \(newShape)")
+    let otherProduct = newShape[..<idx].product() * newShape[(idx + 1)...].product()
+    alwaysAssert(
+      otherProduct != 0,
+      "cannot infer axis \(idx) for shape \(newShape) because value is ambiguous")
+    let fullProduct = shape.product()
+    alwaysAssert(
+      fullProduct % otherProduct == 0,
+      "shape \(newShape) is incompatible with tensor shape \(shape)")
+    var result = newShape
+    result[idx] = fullProduct / otherProduct
+    return result
   }
 
   public func flatten(startAxis: Int = 0) -> Tensor {
@@ -284,6 +303,14 @@ public final class Tensor {
     alwaysAssert(shape[positiveAxis(axis)] == 1, "cannot squeeze axis \(axis) for shape \(shape)")
     var newShape = shape
     newShape.remove(at: axis)
+    return reshape(newShape)
+  }
+
+  public func unsqueeze(axis: Int) -> Tensor {
+    let posAxis = axis < 0 ? axis + shape.count + 1 : axis
+    alwaysAssert(posAxis >= 0, "axis \(axis) out of bounds for shape \(shape)")
+    var newShape = shape
+    newShape.insert(1, at: posAxis)
     return reshape(newShape)
   }
 
@@ -305,7 +332,7 @@ public final class Tensor {
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: shape, dtype: newType) { grad in
-        handle.backward(grad.cast(self.dtype))
+        handle.backward(backend.use { grad.cast(self.dtype) })
       }
     }
   }
@@ -441,7 +468,7 @@ public final class Tensor {
     } else {
       let rhsHandle = rhs.saveForBackward()
       return Tensor(dataTask: newData, shape: rhs.shape, dtype: rhs.dtype) { grad in
-        rhsHandle.backward(-grad)
+        rhsHandle.backward(backend.use { -grad })
       }
     }
   }
@@ -467,7 +494,7 @@ public final class Tensor {
       let rhsHandle = rhs.saveForBackward()
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
         lhsHandle.backward(grad)
-        rhsHandle.backward(-grad)
+        rhsHandle.backward(backend.use { -grad })
       }
     }
   }
@@ -492,7 +519,7 @@ public final class Tensor {
     } else {
       let lhsHandle = lhs.saveForBackward()
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(grad / rhs)
+        lhsHandle.backward(backend.use { grad / rhs })
       }
     }
   }
@@ -512,7 +539,7 @@ public final class Tensor {
     } else {
       let rhsHandle = rhs.saveForBackward()
       return Tensor(dataTask: newData, shape: rhs.shape, dtype: rhs.dtype) { grad in
-        rhsHandle.backward(-lhs * rhs.noGrad().pow(-2) * grad)
+        rhsHandle.backward(backend.use { -lhs * rhs.noGrad().pow(-2) * grad })
       }
     }
   }
@@ -537,8 +564,8 @@ public final class Tensor {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
       return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(grad / rhs.noGrad())
-        rhsHandle.backward(-lhs.noGrad() * rhs.noGrad().pow(-2) * grad)
+        lhsHandle.backward(backend.use { grad / rhs.noGrad() })
+        rhsHandle.backward(backend.use { -lhs.noGrad() * rhs.noGrad().pow(-2) * grad })
       }
     }
   }
@@ -706,6 +733,7 @@ public final class Tensor {
     }
 
     numBackwardHandles += 1
+    let backend = Backend.current
 
     return BackwardHandle(
       addGrad: { [self] grad in
@@ -717,7 +745,7 @@ public final class Tensor {
         alwaysAssert(
           grad.dtype == dtype, "gradient dtype \(grad.dtype) must match tensor dtype \(dtype)")
         if let cg = curGrad {
-          curGrad = cg + grad
+          curGrad = backend.use { cg + grad }
         } else {
           curGrad = grad
         }

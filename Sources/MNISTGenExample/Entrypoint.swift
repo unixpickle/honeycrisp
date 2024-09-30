@@ -277,7 +277,7 @@ struct Main {
       let outSeq = seq[..., 1...]
       let output = model(inSeq).logSoftmax()
       return
-        -(output.gather(axis: -1, indices: outSeq.reshape([outSeq.shape[0], outSeq.shape[1], 1])))
+        -(output.gather(axis: -1, indices: outSeq.unsqueeze(axis: -1)))
         .mean() / log(2.0) * Float(TokenCount)
     }
 
@@ -314,7 +314,7 @@ struct Main {
         do {
           let firstTokens =
             (Tensor(range: 0..<(NumLabels * SampleCount)) / SampleCount + (VocabSize - NumLabels))
-            .reshape([NumLabels * SampleCount, 1])
+            .unsqueeze(axis: -1)
           let samples = try await model.sample(firstTokens: firstTokens)
           let pixelBatch = try await unpackPixelsInTokens(bitmaps: samples, patchSize: PatchSize)
           let pixels =

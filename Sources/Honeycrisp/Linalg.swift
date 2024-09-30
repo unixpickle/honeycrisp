@@ -115,7 +115,7 @@ extension Tensor {
     } else {
       let handle = saveForBackward()
       return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
-        handle.backward(grad.tril())
+        handle.backward(backend.use { grad.tril() })
       }
     }
   }

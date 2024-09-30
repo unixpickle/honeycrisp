@@ -40,12 +40,16 @@ extension Tensor {
     } else {
       let handles = tensors.map { $0.saveForBackward() }
       self.init(dataTask: newData, shape: newShape, dtype: dtype) { grad in
-        let pieces = grad.split(axis: axis, counts: middleCounts)
+        let pieces = backend.use { grad.split(axis: axis, counts: middleCounts) }
         for (handle, piece) in zip(handles, pieces) {
           handle.backward(piece)
         }
       }
     }
+  }
+
+  public convenience init(stack tensors: [Tensor], axis: Int = 0) {
+    self.init(concat: tensors.map { x in x.unsqueeze(axis: axis) }, axis: axis)
   }
 
   public func split(axis: Int, counts: [Int]) -> [Tensor] {
