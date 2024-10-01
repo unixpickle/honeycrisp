@@ -27,7 +27,10 @@ let package = Package(
       name: "Honeycrisp"),
     .testTarget(
       name: "HoneycrispTests",
-      dependencies: ["Honeycrisp"]),
+      dependencies: ["Honeycrisp", .product(name: "Gzip", package: "GzipSwift")],
+      resources: [
+        .process("Resources")
+      ]),
     .target(
       name: "MNIST",
       dependencies: [

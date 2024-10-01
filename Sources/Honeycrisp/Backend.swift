@@ -237,6 +237,16 @@ open class Backend {
     throw BackendError.notImplemented("tril")
   }
 
+  public func conv2d(
+    _ config: Conv2DConfig, batchSize: Int, image: Tensor.Data, kernel: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("conv2d")
+  }
+
   public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
     async throws
     -> Tensor.Data
@@ -962,6 +972,89 @@ open class CPUBackend: Backend {
       }
     }
     return Tensor.Data(backend: self, buffer: outBuf)
+  }
+
+  override public func conv2d(
+    _ config: Conv2DConfig, batchSize: Int, image: Tensor.Data, kernel: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(kernel, image)
+
+    let (outH, outW, outC) = try config.outputShape()
+    let outBuf = try await allocate(length: batchSize * outH * outW * outC * dtype.byteSize)
+
+    func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
+      try await serialize {
+        var arrKernel = [T](
+          repeating: zero,
+          count: config.kernelSize.c * (config.imageSize.c / config.groups) * config.kernelSize.h
+            * config.kernelSize.w)
+        var arrImage = [T](
+          repeating: zero,
+          count: batchSize * config.imageSize.h * config.imageSize.w * config.imageSize.c)
+        assert(kernel.buffer.allocatedSize >= dtype.byteSize * arrKernel.count)
+        assert(image.buffer.allocatedSize >= dtype.byteSize * arrImage.count)
+        try pointerToArray(kernel.buffer.contents(), output: &arrKernel, dtype: dtype)
+        try pointerToArray(image.buffer.contents(), output: &arrImage, dtype: dtype)
+        var arrOut = [T](repeating: zero, count: batchSize * outH * outW * outC)
+
+        func getKernel(_ i: Int, _ j: Int, _ k: Int, _ l: Int) -> T {
+          let strides = (
+            config.imageSize.c / config.groups, config.kernelSize.h, config.kernelSize.w
+          )
+          return arrKernel[
+            i * strides.0 * strides.1 * strides.2 + j * strides.1 * strides.2 + k * strides.2 + l]
+        }
+
+        func getImage(_ i: Int, _ j: Int, _ k: Int, _ l: Int) -> T {
+          let strides =
+            if config.channelsLast {
+              (config.imageSize.h, config.imageSize.w, config.imageSize.c)
+            } else {
+              (config.imageSize.c, config.imageSize.h, config.imageSize.w)
+            }
+          return arrImage[
+            i * strides.0 * strides.1 * strides.2 + j * strides.1 * strides.2 + k * strides.2 + l]
+        }
+
+        let outputFn = try config.lazyForward(batch: batchSize, image: getImage, kernel: getKernel)
+        var idx: Int = 0
+        if config.channelsLast {
+          for i in 0..<batchSize {
+            for j in 0..<outH {
+              for k in 0..<outW {
+                for l in 0..<outC {
+                  arrOut[idx] = outputFn(i, j, k, l)
+                  idx += 1
+                }
+              }
+            }
+          }
+        } else {
+          for i in 0..<batchSize {
+            for j in 0..<outC {
+              for k in 0..<outH {
+                for l in 0..<outW {
+                  arrOut[idx] = outputFn(i, j, k, l)
+                  idx += 1
+                }
+              }
+            }
+          }
+        }
+        assert(idx == arrOut.count)
+        try arrayToPointer(arrOut, output: outBuf.contents(), dtype: dtype)
+      }
+      return Tensor.Data(backend: self, buffer: outBuf)
+    }
+    if dtype == .int64 {
+      return try await apply(Int64(0))
+    } else {
+      return try await apply(Float(0))
+    }
   }
 
   override public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)

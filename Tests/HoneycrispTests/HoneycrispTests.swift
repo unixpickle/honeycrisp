@@ -1,3 +1,4 @@
+import Gzip
 import XCTest
 
 @testable import Honeycrisp
@@ -1085,6 +1086,59 @@ final class HoneycrispTests: XCTestCase {
     try await testConcatSplit()
     try await testElemwise()
     try await testScatterGather()
+  }
+
+  func testConv2D() async throws {
+    try await runInBackends {
+      guard let fileURL = Bundle.module.url(forResource: "conv2d", withExtension: "json.gz") else {
+        XCTFail("Missing file: conv2d.json.gz")
+        return
+      }
+      let data = try (try Data(contentsOf: fileURL)).gunzipped()
+
+      struct ConvTestCaseConfig: Codable {
+        let kernelSize: [Int]
+        let imageSize: [Int]
+        let stride: [Int]
+        let dilation: [Int]
+        let padding: [Int]
+        let groups: Int
+      }
+      struct ConvTestCase: Codable {
+        let conv: ConvTestCaseConfig
+        let outShape: [Int]
+        let output: [Float]
+      }
+      typealias JSONData = [ConvTestCase]
+      let decodedData = try JSONDecoder().decode(JSONData.self, from: data)
+
+      for testCase in decodedData {
+        let c = testCase.conv
+        let conv = Conv2DConfig(
+          kernelSize: (h: c.kernelSize[0], w: c.kernelSize[1], c: c.kernelSize[2]),
+          imageSize: (h: c.imageSize[0], w: c.imageSize[1], c: c.imageSize[2]),
+          stride: (h: c.stride[0], w: c.stride[1]),
+          dilation: (h: c.dilation[0], w: c.dilation[1]),
+          paddingH: (before: c.padding[0], after: c.padding[0]),
+          paddingW: (before: c.padding[1], after: c.padding[1]),
+          groups: c.groups,
+          channelsLast: false)
+        let kernelShape = [
+          c.kernelSize[2], c.imageSize[2] / c.groups, c.kernelSize[0], c.kernelSize[1],
+        ]
+        let imageShape = [1, c.imageSize[2], c.imageSize[0], c.imageSize[1]]
+        let kernel = Tensor(range: 0..<kernelShape.product(), dtype: .float32).reshape(kernelShape)
+        let image = -Tensor(range: 0..<imageShape.product(), dtype: .float32).reshape(imageShape)
+        let output = Tensor.conv2d(conv, image: image, kernel: kernel)
+        XCTAssertEqual(output.shape, testCase.outShape, "\(conv)")
+        var convCLast = conv
+        convCLast.channelsLast = true
+        let outputCLast = Tensor.conv2d(
+          convCLast, image: image[PermuteAxes(0, 2, 3, 1)], kernel: kernel)[PermuteAxes(0, 3, 1, 2)]
+        try await assertDataEqual(output, outputCLast)
+        try await assertDataEqual(output, testCase.output)
+      }
+    }
   }
 }
 
