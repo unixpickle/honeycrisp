@@ -39,6 +39,19 @@ public struct Conv2DConfig {
     return HWCSize(h: outHeight, w: outWidth, c: kernelSize.c)
   }
 
+  internal func paddedNCHWInput<T>(_ nhwcImage: @escaping TensorGetter<T>) -> TensorGetter<T> {
+    { b, y, x, c in
+      assert(c >= 0 && c < imageSize.c)
+      let y = y - paddingH.before
+      let x = x - paddingW.before
+      if y < 0 || y >= imageSize.h || x < 0 || x >= imageSize.w {
+        return T(0.0)
+      } else {
+        return nhwcImage(b, y, x, c)
+      }
+    }
+  }
+
   /// Create a lazy output of the convolution.
   ///
   /// Kernel is always [n_out, n_in/groups, kernel_height, kernel_width]
@@ -51,17 +64,7 @@ public struct Conv2DConfig {
       } else {
         { b, y, x, c in image(b, c, y, x) }
       }
-
-    let paddedImage = { b, y, x, c in
-      assert(c >= 0 && c < imageSize.c)
-      let y = y - paddingH.before
-      let x = x - paddingW.before
-      if y < 0 || y >= imageSize.h || x < 0 || x >= imageSize.w {
-        return T(0.0)
-      } else {
-        return nhwcImage(b, y, x, c)
-      }
-    }
+    let paddedImage = paddedNCHWInput(nhwcImage)
 
     let (outH, outW, outC) = try outputShape()
     let nhwcResult = { (b: Int, y: Int, x: Int, c: Int) in
@@ -95,6 +98,98 @@ public struct Conv2DConfig {
       }
     return result
   }
+
+  public func lazyTranspose<T: NumericTensorElement>(
+    batch: Int, image: @escaping TensorGetter<T>, kernel: @escaping TensorGetter<T>
+  ) throws -> TensorGetter<T> {
+    let nhwcImage =
+      if channelsLast {
+        image
+      } else {
+        { b, y, x, c in image(b, c, y, x) }
+      }
+
+    let (outH, outW, outC) = try outputShape()
+    let nhwcResult = { (b: Int, y: Int, x: Int, c: Int) in
+      assert(y >= 0 && y < imageSize.h, "y \(y) out of out of range [0, \(imageSize.h))")
+      assert(x >= 0 && x < imageSize.w, "x \(x) out of out of range [0, \(imageSize.w))")
+      assert(c >= 0 && c < imageSize.c, "c \(c) out of out of range [0, \(imageSize.c))")
+
+      let inGroupSize = imageSize.c / groups
+      let outGroupSize = outC / groups
+      let groupIdx = c / inGroupSize
+
+      var sum = T(0.0)
+      for kernelY in 0..<kernelSize.h {
+        guard let sourceY = exactDiv(y + paddingH.before - kernelY * dilation.h, stride.h) else {
+          continue
+        }
+        if sourceY < 0 || sourceY >= outH {
+          continue
+        }
+        for kernelX in 0..<kernelSize.w {
+          guard let sourceX = exactDiv(x + paddingW.before - kernelX * dilation.w, stride.w) else {
+            continue
+          }
+          if sourceX < 0 || sourceX >= outW {
+            continue
+          }
+          for sourceC in 0..<outGroupSize {
+            let imageVal = nhwcImage(b, sourceY, sourceX, sourceC + outGroupSize * groupIdx)
+            let kernelVal = kernel(
+              sourceC + outGroupSize * groupIdx, c % inGroupSize, kernelY, kernelX)
+            sum = sum + imageVal * kernelVal
+          }
+        }
+      }
+      return sum
+    }
+    let result =
+      if channelsLast {
+        nhwcResult
+      } else {
+        { b, c, y, x in nhwcResult(b, y, x, c) }
+      }
+    return result
+  }
+
+  public func lazyKernelGrad<T: NumericTensorElement>(
+    batch: Int, image: @escaping TensorGetter<T>, outGrad: @escaping TensorGetter<T>
+  ) throws -> TensorGetter<T> {
+    let (nhwcImage, nhwcOutGrad) =
+      if channelsLast {
+        (image, outGrad)
+      } else {
+        ({ b, y, x, c in image(b, c, y, x) }, { b, y, x, c in outGrad(b, c, y, x) })
+      }
+    let paddedImage = paddedNCHWInput(nhwcImage)
+
+    let (outH, outW, outC) = try outputShape()
+    return { (cOut: Int, cIn: Int, kernelY: Int, kernelX: Int) in
+      assert(cOut >= 0 && cOut < kernelSize.c)
+      assert(cIn >= 0 && cIn < imageSize.c / groups)
+      assert(kernelY >= 0 && kernelY < kernelSize.h)
+      assert(kernelX >= 0 && kernelX < kernelSize.w)
+
+      let outGroupSize = outC / groups
+      let inGroupSize = imageSize.c / groups
+      let groupIdx = cOut / outGroupSize
+
+      var sum = T(0.0)
+      for batchIdx in 0..<batch {
+        for outY in 0..<outH {
+          let imageY = outY * stride.h + kernelY * dilation.h
+          for outX in 0..<outW {
+            let imageX = outX * stride.w + kernelX * dilation.w
+            sum =
+              sum + paddedImage(batchIdx, imageY, imageX, cIn + groupIdx * inGroupSize)
+              * nhwcOutGrad(batchIdx, outY, outX, cOut)
+          }
+        }
+      }
+      return sum
+    }
+  }
 }
 
 extension Tensor {
@@ -103,7 +198,7 @@ extension Tensor {
       image.dtype == kernel.dtype,
       "image and kernel dtypes differ: \(image.dtype) vs \(kernel.dtype)")
     alwaysAssert(image.shape.count == 4, "invalid image shape: \(image.shape)")
-    alwaysAssert(kernel.shape.count == 4, "invalid image shape: \(kernel.shape)")
+    alwaysAssert(kernel.shape.count == 4, "invalid kernel shape: \(kernel.shape)")
     if conv.channelsLast {
       alwaysAssert(
         image.shape[1...] == [conv.imageSize.h, conv.imageSize.w, conv.imageSize.c],
@@ -118,8 +213,13 @@ extension Tensor {
         conv.kernelSize.c, conv.imageSize.c / conv.groups, conv.kernelSize.h, conv.kernelSize.w,
       ],
       "invalid kernel shape \(kernel.shape) for conv \(conv)")
-    guard let (outH, outW, outC) = try? conv.outputShape() else {
-      fatalError("failed to compute output shape for conv: \(conv)")
+    let outH: Int
+    let outW: Int
+    let outC: Int
+    do {
+      (outH, outW, outC) = try conv.outputShape()
+    } catch {
+      fatalError("failed to compute output shape for conv: \(conv): \(error)")
     }
     let outShape =
       if conv.channelsLast {
@@ -136,9 +236,126 @@ extension Tensor {
     if !Tensor.isGradEnabled || (!image.needsGrad && !kernel.needsGrad) {
       return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype)
     } else {
+      let imageHandle = image.saveForBackward()
+      let kernelHandle = kernel.saveForBackward()
       return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype) { grad in
-        alwaysAssert(false, "conv2d gradient is not yet implemented")
+        imageHandle.backward(
+          backend.use { Tensor.conv2dTranspose(conv, image: grad, kernel: kernel.noGrad()) })
+        kernelHandle.backward(
+          backend.use { Tensor.conv2dKernelGrad(conv, image: image.noGrad(), outGrad: grad) })
       }
     }
+  }
+
+  public static func conv2dTranspose(_ conv: Conv2DConfig, image: Tensor, kernel: Tensor) -> Tensor
+  {
+    alwaysAssert(
+      image.dtype == kernel.dtype,
+      "image and kernel dtypes differ: \(image.dtype) vs \(kernel.dtype)")
+    alwaysAssert(image.shape.count == 4, "invalid image shape: \(image.shape)")
+    alwaysAssert(kernel.shape.count == 4, "invalid image shape: \(kernel.shape)")
+    alwaysAssert(
+      kernel.shape == [
+        conv.kernelSize.c, conv.imageSize.c / conv.groups, conv.kernelSize.h, conv.kernelSize.w,
+      ],
+      "invalid kernel shape \(kernel.shape) for conv \(conv)")
+
+    let outH: Int
+    let outW: Int
+    let outC: Int
+    do {
+      (outH, outW, outC) = try conv.outputShape()
+    } catch {
+      fatalError("failed to compute output shape for conv: \(conv): \(error)")
+    }
+
+    if conv.channelsLast {
+      alwaysAssert(
+        image.shape[1...] == [outH, outW, outC],
+        "invalid image shape \(image.shape) for conv \(conv)")
+    } else {
+      alwaysAssert(
+        image.shape[1...] == [outC, outH, outW],
+        "invalid image shape \(image.shape) for conv \(conv)")
+    }
+
+    let backend = Backend.current
+    let newData = Task {
+      try await backend.conv2dTranspose(
+        conv, batchSize: image.shape[0], image: try await image.data, kernel: try await kernel.data,
+        dtype: image.dtype)
+    }
+    let outShape =
+      if conv.channelsLast {
+        [image.shape[0], conv.imageSize.h, conv.imageSize.w, conv.imageSize.c]
+      } else {
+        [image.shape[0], conv.imageSize.c, conv.imageSize.h, conv.imageSize.w]
+      }
+    if !Tensor.isGradEnabled || (!image.needsGrad && !kernel.needsGrad) {
+      return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype)
+    } else {
+      fatalError("conv2dTranspose gradient is not yet implemented")
+    }
+  }
+
+  public static func conv2dKernelGrad(_ conv: Conv2DConfig, image: Tensor, outGrad: Tensor)
+    -> Tensor
+  {
+    alwaysAssert(
+      image.dtype == outGrad.dtype,
+      "image and outGrad dtypes differ: \(image.dtype) vs \(outGrad.dtype)")
+    alwaysAssert(image.shape.count == 4, "invalid image shape: \(image.shape)")
+    alwaysAssert(outGrad.shape.count == 4, "invalid outGrad shape: \(outGrad.shape)")
+    if conv.channelsLast {
+      alwaysAssert(
+        image.shape[1...] == [conv.imageSize.h, conv.imageSize.w, conv.imageSize.c],
+        "invalid image shape \(image.shape) for conv \(conv)")
+    } else {
+      alwaysAssert(
+        image.shape[1...] == [conv.imageSize.c, conv.imageSize.h, conv.imageSize.w],
+        "invalid image shape \(image.shape) for conv \(conv)")
+    }
+
+    let outH: Int
+    let outW: Int
+    let outC: Int
+    do {
+      (outH, outW, outC) = try conv.outputShape()
+    } catch {
+      fatalError("failed to compute output shape for conv: \(conv): \(error)")
+    }
+
+    if conv.channelsLast {
+      alwaysAssert(
+        outGrad.shape[1...] == [outH, outW, outC],
+        "invalid outGrad shape \(outGrad.shape) for conv \(conv)")
+    } else {
+      alwaysAssert(
+        outGrad.shape[1...] == [outC, outH, outW],
+        "invalid outGrad shape \(outGrad.shape) for conv \(conv)")
+    }
+
+    let backend = Backend.current
+    let newData = Task {
+      try await backend.conv2dKernelGrad(
+        conv, batchSize: image.shape[0], image: try await image.data,
+        outGrad: try await outGrad.data, dtype: image.dtype)
+    }
+    let outShape = [
+      conv.kernelSize.c, conv.imageSize.c / conv.groups, conv.kernelSize.h, conv.kernelSize.w,
+    ]
+    if !Tensor.isGradEnabled || (!image.needsGrad && !outGrad.needsGrad) {
+      return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype)
+    } else {
+      fatalError("conv2dKernelGrad gradient is not yet implemented")
+    }
+  }
+}
+
+func exactDiv(_ x: Int, _ y: Int) -> Int? {
+  if x % y != 0 {
+    nil
+  } else {
+    x / y
   }
 }

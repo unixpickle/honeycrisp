@@ -247,6 +247,26 @@ open class Backend {
     throw BackendError.notImplemented("conv2d")
   }
 
+  public func conv2dTranspose(
+    _ config: Conv2DConfig, batchSize: Int, image: Tensor.Data, kernel: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("conv2dTranspose")
+  }
+
+  public func conv2dKernelGrad(
+    _ config: Conv2DConfig, batchSize: Int, image: Tensor.Data, outGrad: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("conv2dKernelGrad")
+  }
+
   public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
     async throws
     -> Tensor.Data
@@ -1041,6 +1061,194 @@ open class CPUBackend: Backend {
                   arrOut[idx] = outputFn(i, j, k, l)
                   idx += 1
                 }
+              }
+            }
+          }
+        }
+        assert(idx == arrOut.count)
+        try arrayToPointer(arrOut, output: outBuf.contents(), dtype: dtype)
+      }
+      return Tensor.Data(backend: self, buffer: outBuf)
+    }
+    if dtype == .int64 {
+      return try await apply(Int64(0))
+    } else {
+      return try await apply(Float(0))
+    }
+  }
+
+  override public func conv2dTranspose(
+    _ config: Conv2DConfig, batchSize: Int, image: Tensor.Data, kernel: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(kernel, image)
+
+    let (outH, outW, outC) = try config.outputShape()
+    let outBuf = try await allocate(
+      length: batchSize * config.imageSize.h * config.imageSize.w * config.imageSize.c
+        * dtype.byteSize)
+
+    func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
+      try await serialize {
+        var arrKernel = [T](
+          repeating: zero,
+          count: config.kernelSize.c * (config.imageSize.c / config.groups) * config.kernelSize.h
+            * config.kernelSize.w)
+        var arrImage = [T](
+          repeating: zero,
+          count: batchSize * outH * outW * outC)
+        assert(kernel.buffer.allocatedSize >= dtype.byteSize * arrKernel.count)
+        assert(image.buffer.allocatedSize >= dtype.byteSize * arrImage.count)
+        try pointerToArray(kernel.buffer.contents(), output: &arrKernel, dtype: dtype)
+        try pointerToArray(image.buffer.contents(), output: &arrImage, dtype: dtype)
+        var arrOut = [T](
+          repeating: zero,
+          count: batchSize * config.imageSize.h * config.imageSize.w * config.imageSize.c)
+
+        func getKernel(_ i: Int, _ j: Int, _ k: Int, _ l: Int) -> T {
+          assert(i >= 0 && i < config.kernelSize.c)
+          assert(j >= 0 && j < config.imageSize.c / config.groups)
+          assert(k >= 0 && k < config.kernelSize.h)
+          assert(l >= 0 && l < config.kernelSize.w)
+          let strides = (
+            config.imageSize.c / config.groups, config.kernelSize.h, config.kernelSize.w
+          )
+          return arrKernel[
+            i * strides.0 * strides.1 * strides.2 + j * strides.1 * strides.2 + k * strides.2 + l]
+        }
+
+        func getImage(_ i: Int, _ j: Int, _ k: Int, _ l: Int) -> T {
+          assert(i >= 0 && i < batchSize)
+          if config.channelsLast {
+            assert(j >= 0 && j < outH)
+            assert(k >= 0 && k < outW)
+            assert(l >= 0 && l < outC)
+          } else {
+            assert(j >= 0 && j < outC)
+            assert(k >= 0 && k < outH)
+            assert(l >= 0 && l < outW)
+          }
+          let strides =
+            if config.channelsLast {
+              (outH, outW, outC)
+            } else {
+              (outC, outH, outW)
+            }
+          return arrImage[
+            i * strides.0 * strides.1 * strides.2 + j * strides.1 * strides.2 + k * strides.2 + l]
+        }
+
+        let outputFn = try config.lazyTranspose(
+          batch: batchSize, image: getImage, kernel: getKernel)
+        var idx: Int = 0
+        if config.channelsLast {
+          for i in 0..<batchSize {
+            for j in 0..<config.imageSize.h {
+              for k in 0..<config.imageSize.w {
+                for l in 0..<config.imageSize.c {
+                  arrOut[idx] = outputFn(i, j, k, l)
+                  idx += 1
+                }
+              }
+            }
+          }
+        } else {
+          for i in 0..<batchSize {
+            for j in 0..<config.imageSize.c {
+              for k in 0..<config.imageSize.h {
+                for l in 0..<config.imageSize.w {
+                  arrOut[idx] = outputFn(i, j, k, l)
+                  idx += 1
+                }
+              }
+            }
+          }
+        }
+        assert(idx == arrOut.count)
+        try arrayToPointer(arrOut, output: outBuf.contents(), dtype: dtype)
+      }
+      return Tensor.Data(backend: self, buffer: outBuf)
+    }
+    if dtype == .int64 {
+      return try await apply(Int64(0))
+    } else {
+      return try await apply(Float(0))
+    }
+  }
+
+  override public func conv2dKernelGrad(
+    _ config: Conv2DConfig, batchSize: Int, image: Tensor.Data, outGrad: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(image, outGrad)
+
+    let (outH, outW, outC) = try config.outputShape()
+    let outBuf = try await allocate(
+      length: (config.imageSize.c / config.groups) * config.kernelSize.c * config.kernelSize.h
+        * config.kernelSize.w * dtype.byteSize)
+
+    func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
+      try await serialize {
+        var arrImage = [T](
+          repeating: zero,
+          count: batchSize * config.imageSize.h * config.imageSize.w * config.imageSize.c)
+        var arrOutGrad = [T](repeating: zero, count: batchSize * outH * outW * outC)
+        assert(image.buffer.allocatedSize >= dtype.byteSize * arrImage.count)
+        assert(outGrad.buffer.allocatedSize >= dtype.byteSize * arrOutGrad.count)
+        try pointerToArray(image.buffer.contents(), output: &arrImage, dtype: dtype)
+        try pointerToArray(outGrad.buffer.contents(), output: &arrOutGrad, dtype: dtype)
+        var arrOut = [T](
+          repeating: zero,
+          count: (config.imageSize.c / config.groups) * config.kernelSize.c * config.kernelSize.h
+            * config.kernelSize.w)
+
+        func getImage(_ i: Int, _ j: Int, _ k: Int, _ l: Int) -> T {
+          let strides =
+            if config.channelsLast {
+              (config.imageSize.h, config.imageSize.w, config.imageSize.c)
+            } else {
+              (config.imageSize.c, config.imageSize.h, config.imageSize.w)
+            }
+          return arrImage[
+            i * strides.0 * strides.1 * strides.2 + j * strides.1 * strides.2 + k * strides.2 + l]
+        }
+
+        func getOutGrad(_ i: Int, _ j: Int, _ k: Int, _ l: Int) -> T {
+          assert(i >= 0 && i < batchSize)
+          if config.channelsLast {
+            assert(j >= 0 && j < outH)
+            assert(k >= 0 && k < outW)
+            assert(l >= 0 && l < outC)
+          } else {
+            assert(j >= 0 && j < outC)
+            assert(k >= 0 && k < outH)
+            assert(l >= 0 && l < outW)
+          }
+          let strides =
+            if config.channelsLast {
+              (outH, outW, outC)
+            } else {
+              (outC, outH, outW)
+            }
+          return arrOutGrad[
+            i * strides.0 * strides.1 * strides.2 + j * strides.1 * strides.2 + k * strides.2 + l]
+        }
+
+        let outputFn = try config.lazyKernelGrad(
+          batch: batchSize, image: getImage, outGrad: getOutGrad)
+        var idx: Int = 0
+        for i in 0..<config.kernelSize.c {
+          for j in 0..<(config.imageSize.c / config.groups) {
+            for k in 0..<config.kernelSize.h {
+              for l in 0..<config.kernelSize.w {
+                arrOut[idx] = outputFn(i, j, k, l)
+                idx += 1
               }
             }
           }

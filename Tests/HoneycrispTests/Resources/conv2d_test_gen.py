@@ -7,6 +7,7 @@ Will print the data to stdout; you must gzip it yourself.
 import json
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 items = []
@@ -30,16 +31,25 @@ for image_size in [(12, 11)]:
                                 image = -torch.arange(
                                     in_channels * image_size[0] * image_size[1]
                                 ).view(1, in_channels, *image_size)
+                                image_param = nn.Parameter(image.float())
+                                kernel_param = nn.Parameter(kernel.float())
                                 try:
                                     out_tensor = F.conv2d(
-                                        image.float(),
-                                        kernel.float(),
+                                        image_param,
+                                        kernel_param,
                                         stride=strides,
                                         padding=padding,
                                         dilation=dilation,
                                         groups=groups,
                                     )
+                                    out_tensor.backward(
+                                        (torch.arange(out_tensor.numel()) * 4)
+                                        .float()
+                                        .reshape(out_tensor.shape)
+                                    )
                                     output = out_tensor.int().flatten().tolist()
+                                    image_grad = image_param.grad.int().flatten().tolist()
+                                    kernel_grad = kernel_param.grad.int().flatten().tolist()
                                 except:
                                     continue
                                 items.append(
@@ -54,6 +64,8 @@ for image_size in [(12, 11)]:
                                         ),
                                         outShape=out_tensor.shape,
                                         output=output,
+                                        imageGrad=image_grad,
+                                        kernelGrad=kernel_grad,
                                     )
                                 )
 print(json.dumps(items))

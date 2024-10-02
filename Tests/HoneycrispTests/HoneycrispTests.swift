@@ -1108,6 +1108,8 @@ final class HoneycrispTests: XCTestCase {
         let conv: ConvTestCaseConfig
         let outShape: [Int]
         let output: [Float]
+        let imageGrad: [Float]
+        let kernelGrad: [Float]
       }
       typealias JSONData = [ConvTestCase]
       let decodedData = try JSONDecoder().decode(JSONData.self, from: data)
@@ -1129,21 +1131,39 @@ final class HoneycrispTests: XCTestCase {
         let imageShape = [1, c.imageSize[2], c.imageSize[0], c.imageSize[1]]
         let kernel = Tensor(range: 0..<kernelShape.product(), dtype: .float32).reshape(kernelShape)
         let image = -Tensor(range: 0..<imageShape.product(), dtype: .float32).reshape(imageShape)
-        let output = Tensor.conv2d(conv, image: image, kernel: kernel)
+        var imageGrad: Tensor?
+        var kernelGrad: Tensor?
+        let output = Tensor.conv2d(
+          conv, image: image.onGrad { g in imageGrad = g },
+          kernel: kernel.onGrad { g in kernelGrad = g })
         XCTAssertEqual(output.shape, testCase.outShape, "\(conv)")
+        try await assertDataEqual(output, testCase.output, "\(conv)")
+
+        let outGrad = (Tensor(range: 0..<output.shape.product()) * 4).reshape(output.shape).cast(
+          .float32)
+        output.backward(outGrad)
+        try await assertDataEqual(imageGrad!, testCase.imageGrad, "\(conv)")
+        try await assertClose(kernelGrad!, testCase.kernelGrad, "\(conv)")
+
         var convCLast = conv
         convCLast.channelsLast = true
+        var transImageGrad: Tensor?
+        var transKernelGrad: Tensor?
         let outputCLast = Tensor.conv2d(
-          convCLast, image: image[PermuteAxes(0, 2, 3, 1)], kernel: kernel)[PermuteAxes(0, 3, 1, 2)]
+          convCLast, image: image.onGrad({ g in transImageGrad = g })[PermuteAxes(0, 2, 3, 1)],
+          kernel: kernel.onGrad { g in transKernelGrad = g })[PermuteAxes(0, 3, 1, 2)]
         try await assertDataEqual(output, outputCLast)
-        try await assertDataEqual(output, testCase.output)
+        outputCLast.backward(outGrad)
+        try await assertDataEqual(transImageGrad!, imageGrad!)
+        try await assertClose(transKernelGrad!, kernelGrad!)
       }
     }
   }
 }
 
 func assertClose(
-  _ x: Tensor, _ y: Tensor, atol: Float = 1e-4, rtol: Float = 1e-4, file: StaticString = #filePath,
+  _ x: Tensor, _ y: Tensor, _ msg: String? = nil, atol: Float = 1e-4, rtol: Float = 1e-4,
+  file: StaticString = #filePath,
   line: UInt = #line
 ) async throws {
   XCTAssertEqual(x.shape, y.shape)
@@ -1155,11 +1175,16 @@ func assertClose(
       allGood = false
     }
   }
-  XCTAssert(allGood, "tensors \(xData) and \(yData) are not equal", file: file, line: line)
+  if let msg = msg {
+    XCTAssert(
+      allGood, "tensors \(xData) and \(yData) are not equal: \(msg)", file: file, line: line)
+  } else {
+    XCTAssert(allGood, "tensors \(xData) and \(yData) are not equal", file: file, line: line)
+  }
 }
 
 func assertClose(
-  _ x: Tensor, _ yData: [Float], atol: Float = 1e-4, rtol: Float = 1e-4,
+  _ x: Tensor, _ yData: [Float], _ msg: String? = nil, atol: Float = 1e-4, rtol: Float = 1e-4,
   file: StaticString = #filePath,
   line: UInt = #line
 ) async throws {
@@ -1171,14 +1196,24 @@ func assertClose(
       allGood = false
     }
   }
-  XCTAssert(allGood, "tensors \(xData) and \(yData) are not equal", file: file, line: line)
+  if let msg = msg {
+    XCTAssert(
+      allGood, "tensors \(xData) and \(yData) are not equal: \(msg)", file: file, line: line)
+  } else {
+    XCTAssert(allGood, "tensors \(xData) and \(yData) are not equal", file: file, line: line)
+  }
 }
 
 func assertDataEqual(
-  _ x: Tensor, _ y: [Float], file: StaticString = #filePath, line: UInt = #line
+  _ x: Tensor, _ y: [Float], _ msg: String? = nil, file: StaticString = #filePath,
+  line: UInt = #line
 ) async throws {
   let data = try await x.floats()
-  XCTAssertEqual(data, y, file: file, line: line)
+  if let msg = msg {
+    XCTAssertEqual(data, y, msg, file: file, line: line)
+  } else {
+    XCTAssertEqual(data, y, file: file, line: line)
+  }
 }
 
 func assertDataEqual(
