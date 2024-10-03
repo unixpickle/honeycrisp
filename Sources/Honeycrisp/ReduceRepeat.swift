@@ -13,8 +13,8 @@ public struct ReduceDims: Hashable {
     outerCount * innerCount
   }
 
-  var mpsShape: [NSNumber] {
-    [NSNumber(value: outerCount), NSNumber(value: reduceCount), NSNumber(value: innerCount)]
+  var shape: [Int] {
+    [outerCount, reduceCount, innerCount]
   }
 }
 

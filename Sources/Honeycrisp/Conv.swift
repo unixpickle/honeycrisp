@@ -2,7 +2,7 @@ public enum Conv2DError: Error {
   case invalidGroups(String)
 }
 
-public struct Conv2DConfig {
+public struct Conv2DConfig: Hashable {
   /// Get the value of a tensor at a 4D coordinate.
   public typealias TensorGetter<T: NumericTensorElement> = (Int, Int, Int, Int) -> T
 
@@ -18,6 +18,24 @@ public struct Conv2DConfig {
   public var paddingW: AxisPadding
   public var groups: Int
   public var channelsLast: Bool
+
+  private func allFields() -> [Int] {
+    [
+      kernelSize.c, kernelSize.h, kernelSize.w, imageSize.c, imageSize.h, imageSize.w, stride.h,
+      stride.w, dilation.h, dilation.w, paddingH.before, paddingH.after, paddingW.before,
+      paddingW.after, groups, channelsLast ? 1 : 0,
+    ]
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    for x in allFields() {
+      hasher.combine(x)
+    }
+  }
+
+  public static func == (lhs: Conv2DConfig, rhs: Conv2DConfig) -> Bool {
+    lhs.allFields() == rhs.allFields()
+  }
 
   public func outputShape() throws -> HWCSize {
     if kernelSize.c % groups != 0 {
@@ -37,6 +55,31 @@ public struct Conv2DConfig {
         - 1)
       / stride.w
     return HWCSize(h: outHeight, w: outWidth, c: kernelSize.c)
+  }
+
+  public func kernelTensorShape() throws -> [Int] {
+    if imageSize.c % groups != 0 {
+      throw Conv2DError.invalidGroups(
+        "groups \(groups) does not divide image channels \(imageSize.c)")
+    }
+    return [kernelSize.c, imageSize.c / groups, kernelSize.h, kernelSize.w]
+  }
+
+  public func imageTensorShape(batch: Int) -> [Int] {
+    if channelsLast {
+      [batch, imageSize.h, imageSize.w, imageSize.c]
+    } else {
+      [batch, imageSize.c, imageSize.h, imageSize.w]
+    }
+  }
+
+  public func outputTensorShape(batch: Int) throws -> [Int] {
+    let (outH, outW, outC) = try outputShape()
+    if channelsLast {
+      return [batch, outH, outW, outC]
+    } else {
+      return [batch, outC, outH, outW]
+    }
   }
 
   internal func paddedNCHWInput<T>(_ nhwcImage: @escaping TensorGetter<T>) -> TensorGetter<T> {
@@ -199,38 +242,24 @@ extension Tensor {
       "image and kernel dtypes differ: \(image.dtype) vs \(kernel.dtype)")
     alwaysAssert(image.shape.count == 4, "invalid image shape: \(image.shape)")
     alwaysAssert(kernel.shape.count == 4, "invalid kernel shape: \(kernel.shape)")
-    if conv.channelsLast {
-      alwaysAssert(
-        image.shape[1...] == [conv.imageSize.h, conv.imageSize.w, conv.imageSize.c],
-        "invalid image shape \(image.shape) for conv \(conv)")
-    } else {
-      alwaysAssert(
-        image.shape[1...] == [conv.imageSize.c, conv.imageSize.h, conv.imageSize.w],
-        "invalid image shape \(image.shape) for conv \(conv)")
-    }
+
+    let expectedImageShape = conv.imageTensorShape(batch: image.shape[0])
     alwaysAssert(
-      kernel.shape == [
-        conv.kernelSize.c, conv.imageSize.c / conv.groups, conv.kernelSize.h, conv.kernelSize.w,
-      ],
-      "invalid kernel shape \(kernel.shape) for conv \(conv)")
-    let outH: Int
-    let outW: Int
-    let outC: Int
+      image.shape == expectedImageShape,
+      "invalid image shape \(image.shape), expected \(expectedImageShape)")
+
+    let outShape: [Int]
     do {
-      (outH, outW, outC) = try conv.outputShape()
+      outShape = try conv.outputTensorShape(batch: image.shape[0])
+      let kernelShape = try conv.kernelTensorShape()
+      alwaysAssert(kernel.shape == kernelShape)
     } catch {
-      fatalError("failed to compute output shape for conv: \(conv): \(error)")
+      fatalError("\(error)")
     }
-    let outShape =
-      if conv.channelsLast {
-        [image.shape[0], outH, outW, outC]
-      } else {
-        [image.shape[0], outC, outH, outW]
-      }
     let backend = Backend.current
     let newData = Task {
       try await backend.conv2d(
-        conv, batchSize: image.shape[0], image: try await image.data, kernel: try await kernel.data,
+        conv, batch: image.shape[0], image: try await image.data, kernel: try await kernel.data,
         dtype: image.dtype)
     }
     if !Tensor.isGradEnabled || (!image.needsGrad && !kernel.needsGrad) {
@@ -260,37 +289,24 @@ extension Tensor {
       ],
       "invalid kernel shape \(kernel.shape) for conv \(conv)")
 
-    let outH: Int
-    let outW: Int
-    let outC: Int
+    let outShape: [Int]
+    let inShape: [Int]
     do {
-      (outH, outW, outC) = try conv.outputShape()
+      inShape = try conv.outputTensorShape(batch: image.shape[0])
+      outShape = conv.imageTensorShape(batch: image.shape[0])
+      alwaysAssert(
+        image.shape == inShape,
+        "invalid input shape for transposed conv2D: \(image.shape) (expected \(inShape))")
     } catch {
-      fatalError("failed to compute output shape for conv: \(conv): \(error)")
-    }
-
-    if conv.channelsLast {
-      alwaysAssert(
-        image.shape[1...] == [outH, outW, outC],
-        "invalid image shape \(image.shape) for conv \(conv)")
-    } else {
-      alwaysAssert(
-        image.shape[1...] == [outC, outH, outW],
-        "invalid image shape \(image.shape) for conv \(conv)")
+      fatalError("\(error)")
     }
 
     let backend = Backend.current
     let newData = Task {
       try await backend.conv2dTranspose(
-        conv, batchSize: image.shape[0], image: try await image.data, kernel: try await kernel.data,
+        conv, batch: image.shape[0], image: try await image.data, kernel: try await kernel.data,
         dtype: image.dtype)
     }
-    let outShape =
-      if conv.channelsLast {
-        [image.shape[0], conv.imageSize.h, conv.imageSize.w, conv.imageSize.c]
-      } else {
-        [image.shape[0], conv.imageSize.c, conv.imageSize.h, conv.imageSize.w]
-      }
     if !Tensor.isGradEnabled || (!image.needsGrad && !kernel.needsGrad) {
       return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype)
     } else {
@@ -316,36 +332,25 @@ extension Tensor {
         "invalid image shape \(image.shape) for conv \(conv)")
     }
 
-    let outH: Int
-    let outW: Int
-    let outC: Int
+    let kernelShape: [Int]
     do {
-      (outH, outW, outC) = try conv.outputShape()
+      kernelShape = try conv.kernelTensorShape()
+      let outShape = try conv.outputTensorShape(batch: image.shape[0])
+      alwaysAssert(
+        outGrad.shape == outShape, "unexpected outGrad shape \(outGrad.shape), expected \(outShape)"
+      )
     } catch {
       fatalError("failed to compute output shape for conv: \(conv): \(error)")
-    }
-
-    if conv.channelsLast {
-      alwaysAssert(
-        outGrad.shape[1...] == [outH, outW, outC],
-        "invalid outGrad shape \(outGrad.shape) for conv \(conv)")
-    } else {
-      alwaysAssert(
-        outGrad.shape[1...] == [outC, outH, outW],
-        "invalid outGrad shape \(outGrad.shape) for conv \(conv)")
     }
 
     let backend = Backend.current
     let newData = Task {
       try await backend.conv2dKernelGrad(
-        conv, batchSize: image.shape[0], image: try await image.data,
+        conv, batch: image.shape[0], image: try await image.data,
         outGrad: try await outGrad.data, dtype: image.dtype)
     }
-    let outShape = [
-      conv.kernelSize.c, conv.imageSize.c / conv.groups, conv.kernelSize.h, conv.kernelSize.w,
-    ]
     if !Tensor.isGradEnabled || (!image.needsGrad && !outGrad.needsGrad) {
-      return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype)
+      return Tensor(dataTask: newData, shape: kernelShape, dtype: image.dtype)
     } else {
       fatalError("conv2dKernelGrad gradient is not yet implemented")
     }

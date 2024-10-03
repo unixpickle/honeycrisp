@@ -16,23 +16,36 @@ open class MPSBackend: CPUBackend {
     let dtype: MPSDataType
   }
 
-  private struct MatmulGraph {
+  private struct Conv2DKey: Hashable {
+    enum Kind {
+      case forward
+      case transpose
+      case kernelGrad
+    }
+
+    let conv: Conv2DConfig
+    let batch: Int
+    let kind: Kind
+    let dtype: MPSDataType
+  }
+
+  private struct TwoToOneGraph {
     let graph: MPSGraph
-    let matA: MPSGraphTensor
-    let matB: MPSGraphTensor
-    let matOut: MPSGraphTensor
+    let inputA: MPSGraphTensor
+    let inputB: MPSGraphTensor
+    let output: MPSGraphTensor
+  }
+
+  private struct OneToOneGraph {
+    let graph: MPSGraph
+    let input: MPSGraphTensor
+    let output: MPSGraphTensor
   }
 
   private struct ReduceKey: Hashable {
     let op: ReduceOp
     let dims: ReduceDims
     let dtype: MPSDataType
-  }
-
-  private struct ReduceGraph {
-    let graph: MPSGraph
-    let input: MPSGraphTensor
-    let output: MPSGraphTensor
   }
 
   public class MPSRandomGenerator: NativeRandomGenerator {
@@ -117,8 +130,9 @@ open class MPSBackend: CPUBackend {
 
   private var queue = DispatchQueue(label: "mps-backend-worker")
   private var commandQueue: MTLCommandQueue? = nil
-  private var matmuls: [MatmulKey: MatmulGraph] = [:]
-  private var reductions: [ReduceKey: ReduceGraph] = [:]
+  private var matmuls: [MatmulKey: TwoToOneGraph] = [:]
+  private var conv2d: [Conv2DKey: TwoToOneGraph] = [:]
+  private var reductions: [ReduceKey: OneToOneGraph] = [:]
   private var defaultRNG: MPSRandomGenerator? = nil
   private var functions: [String: MTLComputePipelineState] = [:]
 
@@ -567,19 +581,19 @@ open class MPSBackend: CPUBackend {
     }
   }
 
-  private func createReduction(op: ReduceOp, dims: ReduceDims, dtype: MPSDataType) -> ReduceGraph {
+  private func createReduction(op: ReduceOp, dims: ReduceDims, dtype: MPSDataType) -> OneToOneGraph
+  {
     let key = ReduceKey(op: op, dims: dims, dtype: dtype)
     if let r = reductions[key] {
       return r
     } else {
       let graph = MPSGraph()
       let input = graph.placeholder(
-        shape: [NSNumber(value: dims.inCount)], dataType: dtype, name: "input")
-      let reshaped = graph.reshape(input, shape: dims.mpsShape, name: "reshaped")
+        shape: mpsShape([dims.inCount]), dataType: dtype, name: "input")
+      let reshaped = graph.reshape(input, shape: mpsShape(dims.shape), name: "reshaped")
       let unshapedOutput = graph.reductionSum(with: reshaped, axis: 1, name: "unshapedOutput")
-      let output = graph.reshape(
-        unshapedOutput, shape: [NSNumber(value: dims.outCount)], name: "output")
-      let r = ReduceGraph(graph: graph, input: input, output: output)
+      let output = graph.reshape(unshapedOutput, shape: mpsShape([dims.outCount]), name: "output")
+      let r = OneToOneGraph(graph: graph, input: input, output: output)
       reductions[key] = r
       return r
     }
@@ -641,7 +655,7 @@ open class MPSBackend: CPUBackend {
         mm.graph.encode(
           to: buf as! MPSCommandBuffer,
           feeds: [
-            mm.matA: MPSGraphTensorData(
+            mm.inputA: MPSGraphTensorData(
               MPSMatrix(
                 buffer: a.buffer,
                 descriptor: MPSMatrixDescriptor(
@@ -649,7 +663,7 @@ open class MPSBackend: CPUBackend {
                   rowBytes: aShape.1 * dtype.byteSize,
                   matrixBytes: aShape.0 * aShape.1 * dtype.byteSize, dataType: mpsDType)),
               rank: matrixCount > 1 ? 3 : 2),
-            mm.matB: MPSGraphTensorData(
+            mm.inputB: MPSGraphTensorData(
               MPSMatrix(
                 buffer: b.buffer,
                 descriptor: MPSMatrixDescriptor(
@@ -660,7 +674,7 @@ open class MPSBackend: CPUBackend {
           ],
           targetOperations: nil,
           resultsDictionary: [
-            mm.matOut: MPSGraphTensorData(
+            mm.output: MPSGraphTensorData(
               MPSMatrix(
                 buffer: output,
                 descriptor: MPSMatrixDescriptor(
@@ -677,7 +691,7 @@ open class MPSBackend: CPUBackend {
   private func createMatmul(
     transA: Bool, transB: Bool, batch: Int, rows: Int, inner: Int, cols: Int, dtype: MPSDataType
   )
-    -> MatmulGraph
+    -> TwoToOneGraph
   {
     let key = MatmulKey(
       transA: transA, transB: transB, batch: batch, rows: rows, cols: cols, inner: inner,
@@ -686,17 +700,13 @@ open class MPSBackend: CPUBackend {
       return matmul
     } else {
       let graph = MPSGraph()
-      let batchShape = batch > 1 ? [NSNumber(value: batch)] : []
+      let batchShape = batch > 1 ? [batch] : []
       let inputA = graph.placeholder(
-        shape: batchShape + [
-          NSNumber(value: transA ? inner : rows),
-          NSNumber(value: transA ? rows : inner),
-        ], dataType: dtype, name: "inputA")
+        shape: mpsShape(batchShape + [transA ? inner : rows, transA ? rows : inner]),
+        dataType: dtype, name: "inputA")
       let inputB = graph.placeholder(
-        shape: batchShape + [
-          NSNumber(value: transB ? cols : inner),
-          NSNumber(value: transB ? inner : cols),
-        ], dataType: dtype, name: "inputB")
+        shape: mpsShape(batchShape + [transB ? cols : inner, transB ? inner : cols]),
+        dataType: dtype, name: "inputB")
       let transIndices = batch > 1 ? (1, 2) : (0, 1)
       let output = graph.matrixMultiplication(
         primary: !transA
@@ -708,9 +718,204 @@ open class MPSBackend: CPUBackend {
           : graph.transposeTensor(
             inputB, dimension: transIndices.0, withDimension: transIndices.1, name: nil),
         name: "output")
-      let mm = MatmulGraph(graph: graph, matA: inputA, matB: inputB, matOut: output)
+      let mm = TwoToOneGraph(graph: graph, inputA: inputA, inputB: inputB, output: output)
       matmuls[key] = mm
       return mm
+    }
+  }
+
+  internal func conv2d(
+    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data,
+    dtype: Tensor.DType, transpose: Bool
+  )
+    async throws
+    -> Tensor.Data
+  {
+    guard let mpsDType = dtype.mpsDType else {
+      if transpose {
+        return try await super.conv2dTranspose(
+          config, batch: batch, image: image, kernel: kernel, dtype: dtype)
+      } else {
+        return try await super.conv2d(
+          config, batch: batch, image: image, kernel: kernel, dtype: dtype)
+      }
+    }
+
+    let imageShape =
+      transpose ? try config.outputTensorShape(batch: batch) : config.imageTensorShape(batch: batch)
+    let kernelShape = try config.kernelTensorShape()
+    let outShape =
+      transpose ? config.imageTensorShape(batch: batch) : try config.outputTensorShape(batch: batch)
+    let output = try await allocate(length: outShape.product() * dtype.byteSize)
+    try await waitForGPUData(image, kernel)
+    return try await serialize { [self] in
+      let op = try self.createConv2D(
+        config, batch: batch, kind: transpose ? .transpose : .forward, dtype: mpsDType)
+      let completion = completionBuffer { buf in
+        alwaysAssert(
+          image.buffer.allocatedSize >= imageShape.product() * dtype.byteSize,
+          "input image buffer underflow")
+        alwaysAssert(
+          kernel.buffer.allocatedSize >= kernelShape.product() * dtype.byteSize,
+          "kernel buffer underflow")
+        op.graph.encode(
+          to: buf as! MPSCommandBuffer,
+          feeds: [
+            op.inputA: MPSGraphTensorData(
+              MPSVector(
+                buffer: image.buffer,
+                descriptor: MPSVectorDescriptor(length: imageShape.product(), dataType: mpsDType))),
+            op.inputB: MPSGraphTensorData(
+              MPSVector(
+                buffer: kernel.buffer,
+                descriptor: MPSVectorDescriptor(length: kernelShape.product(), dataType: mpsDType))),
+          ], targetOperations: nil,
+          resultsDictionary: [
+            op.output: MPSGraphTensorData(
+              MPSVector(
+                buffer: output,
+                descriptor: MPSVectorDescriptor(length: outShape.product(), dataType: mpsDType)))
+          ], executionDescriptor: nil)
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  override public func conv2d(
+    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await conv2d(
+      config, batch: batch, image: image, kernel: kernel, dtype: dtype, transpose: false)
+  }
+
+  override public func conv2dTranspose(
+    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await conv2d(
+      config, batch: batch, image: image, kernel: kernel, dtype: dtype, transpose: true)
+  }
+
+  override public func conv2dKernelGrad(
+    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    guard let mpsDType = dtype.mpsDType else {
+      return try await super.conv2dKernelGrad(
+        config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
+    }
+
+    let imageShape = config.imageTensorShape(batch: batch)
+    let kernelShape = try config.kernelTensorShape()
+    let outShape = try config.outputTensorShape(batch: batch)
+    let output = try await allocate(length: kernelShape.product() * dtype.byteSize)
+    try await waitForGPUData(image, outGrad)
+    return try await serialize { [self] in
+      let op = try self.createConv2D(config, batch: batch, kind: .kernelGrad, dtype: mpsDType)
+      let completion = completionBuffer { buf in
+        alwaysAssert(
+          image.buffer.allocatedSize >= imageShape.product() * dtype.byteSize,
+          "input image buffer underflow")
+        alwaysAssert(
+          outGrad.buffer.allocatedSize >= outShape.product() * dtype.byteSize,
+          "output gradient buffer underflow")
+        op.graph.encode(
+          to: buf as! MPSCommandBuffer,
+          feeds: [
+            op.inputA: MPSGraphTensorData(
+              MPSVector(
+                buffer: image.buffer,
+                descriptor: MPSVectorDescriptor(length: imageShape.product(), dataType: mpsDType))),
+            op.inputB: MPSGraphTensorData(
+              MPSVector(
+                buffer: outGrad.buffer,
+                descriptor: MPSVectorDescriptor(length: outShape.product(), dataType: mpsDType))),
+          ], targetOperations: nil,
+          resultsDictionary: [
+            op.output: MPSGraphTensorData(
+              MPSVector(
+                buffer: output,
+                descriptor: MPSVectorDescriptor(length: kernelShape.product(), dataType: mpsDType)))
+          ], executionDescriptor: nil)
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  private func createConv2D(
+    _ conv: Conv2DConfig, batch: Int, kind: Conv2DKey.Kind, dtype: MPSDataType
+  ) throws -> TwoToOneGraph {
+    let key = Conv2DKey(conv: conv, batch: batch, kind: kind, dtype: dtype)
+    if let op = conv2d[key] {
+      return op
+    }
+
+    let graph = MPSGraph()
+    guard
+      let convDesc = MPSGraphConvolution2DOpDescriptor(
+        strideInX: conv.stride.w, strideInY: conv.stride.h, dilationRateInX: conv.dilation.w,
+        dilationRateInY: conv.dilation.h, groups: conv.groups, paddingLeft: conv.paddingW.before,
+        paddingRight: conv.paddingW.after, paddingTop: conv.paddingH.before,
+        paddingBottom: conv.paddingH.after, paddingStyle: .explicit,
+        dataLayout: conv.channelsLast ? .NHWC : .NCHW, weightsLayout: .OIHW)
+    else {
+      throw BackendError.kernelFailed("failed to create MPSGraph convolution for: \(conv)")
+    }
+
+    let kernelShape = try conv.kernelTensorShape()
+
+    if kind == .kernelGrad {
+      let imageShape = conv.imageTensorShape(batch: batch)
+      let outShape = try conv.outputTensorShape(batch: batch)
+      let inputA = graph.placeholder(
+        shape: mpsShape([imageShape.product()]), dataType: dtype, name: "image")
+      let inputB = graph.placeholder(
+        shape: mpsShape([outShape.product()]), dataType: dtype, name: "outGrad")
+      let image = graph.reshape(inputA, shape: mpsShape(imageShape), name: "imageWithShape")
+      let outGrad = graph.reshape(inputB, shape: mpsShape(outShape), name: "outGradWithShape")
+      let output =
+        graph.convolution2DWeightsGradient(
+          outGrad, source: image, outputShape: mpsShape(kernelShape),
+          forwardConvolutionDescriptor: convDesc, name: "output")
+      let flatOutput = graph.reshape(
+        output, shape: mpsShape([kernelShape.product()]), name: "flatOutput")
+      let op = TwoToOneGraph(graph: graph, inputA: inputA, inputB: inputB, output: flatOutput)
+      conv2d[key] = op
+      return op
+    } else {
+      let imageShape =
+        kind == .transpose
+        ? try conv.outputTensorShape(batch: batch) : conv.imageTensorShape(batch: batch)
+      let outShape =
+        kind == .transpose
+        ? conv.imageTensorShape(batch: batch) : try conv.outputTensorShape(batch: batch)
+      let inputA = graph.placeholder(
+        shape: mpsShape([imageShape.product()]), dataType: dtype, name: "image")
+      let inputB = graph.placeholder(
+        shape: mpsShape([kernelShape.product()]), dataType: dtype, name: "kernel")
+      let image = graph.reshape(inputA, shape: mpsShape(imageShape), name: "imageWithShape")
+      let kernel = graph.reshape(inputB, shape: mpsShape(kernelShape), name: "kernelWithShape")
+      let output =
+        if kind == .transpose {
+          graph.convolutionTranspose2D(
+            image, weights: kernel, outputShape: mpsShape(outShape), descriptor: convDesc,
+            name: "output")
+        } else {
+          graph.convolution2D(image, weights: kernel, descriptor: convDesc, name: "output")
+        }
+      let flatOutput = graph.reshape(
+        output, shape: mpsShape([outShape.product()]), name: "flatOutput")
+      let op = TwoToOneGraph(graph: graph, inputA: inputA, inputB: inputB, output: flatOutput)
+      conv2d[key] = op
+      return op
     }
   }
 
@@ -1458,4 +1663,8 @@ extension Tensor.DType {
       nil
     }
   }
+}
+
+func mpsShape(_ x: [Int]) -> [NSNumber] {
+  x.map { NSNumber(value: $0) }
 }
