@@ -42,7 +42,7 @@ extension Tensor {
       self.init(dataTask: newData, shape: newShape, dtype: dtype) { grad in
         let pieces = backend.use { grad.split(axis: axis, counts: middleCounts) }
         for (handle, piece) in zip(handles, pieces) {
-          handle.backward(piece)
+          handle.backward(backend) { piece }
         }
       }
     }

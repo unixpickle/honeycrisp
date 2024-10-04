@@ -59,10 +59,9 @@ extension Tensor {
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { [self] grad in
-        handle.backward(
-          backend.use {
-            grad.scatter(axis: axis, count: shape[axis], indices: indices)
-          })
+        handle.backward(backend) {
+          grad.scatter(axis: axis, count: shape[axis], indices: indices)
+        }
       }
     }
   }
@@ -95,8 +94,9 @@ extension Tensor {
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { grad in
-        handle.backward(
-          backend.use { grad.gather(axis: axis, indices: indices) })
+        handle.backward(backend) {
+          grad.gather(axis: axis, indices: indices)
+        }
       }
     }
   }

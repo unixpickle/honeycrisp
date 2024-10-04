@@ -1117,12 +1117,13 @@ final class HoneycrispTests: XCTestCase {
       for testCase in decodedData {
         let c = testCase.conv
         let conv = Conv2DConfig(
-          kernelSize: (h: c.kernelSize[0], w: c.kernelSize[1], c: c.kernelSize[2]),
-          imageSize: (h: c.imageSize[0], w: c.imageSize[1], c: c.imageSize[2]),
-          stride: (h: c.stride[0], w: c.stride[1]),
-          dilation: (h: c.dilation[0], w: c.dilation[1]),
-          paddingH: (before: c.padding[0], after: c.padding[0]),
-          paddingW: (before: c.padding[1], after: c.padding[1]),
+          kernelSize: Conv2DConfig.HWCSize(
+            h: c.kernelSize[0], w: c.kernelSize[1], c: c.kernelSize[2]),
+          imageSize: Conv2DConfig.HWCSize(h: c.imageSize[0], w: c.imageSize[1], c: c.imageSize[2]),
+          stride: Conv2DConfig.HWSize(h: c.stride[0], w: c.stride[1]),
+          dilation: Conv2DConfig.HWSize(h: c.dilation[0], w: c.dilation[1]),
+          paddingH: Conv2DConfig.AxisPadding(before: c.padding[0], after: c.padding[0]),
+          paddingW: Conv2DConfig.AxisPadding(before: c.padding[1], after: c.padding[1]),
           groups: c.groups,
           channelsLast: false)
         let kernelShape = [

@@ -37,14 +37,12 @@ extension Tensor {
       let handleA = a.saveForBackward()
       let handleB = b.saveForBackward()
       return Tensor(dataTask: newData, shape: outShape, dtype: a.dtype) { grad in
-        handleA.backward(
-          backend.use {
-            matmul(a: grad, transA: transOut, b: b.noGrad(), transB: !transB, transOut: transA)
-          })
-        handleB.backward(
-          backend.use {
-            matmul(a: a.noGrad(), transA: !transA, b: grad, transB: transOut, transOut: transB)
-          })
+        handleA.backward(backend) {
+          matmul(a: grad, transA: transOut, b: b.noGrad(), transB: !transB, transOut: transA)
+        }
+        handleB.backward(backend) {
+          matmul(a: a.noGrad(), transA: !transA, b: grad, transB: transOut, transOut: transB)
+        }
       }
     }
   }
@@ -83,16 +81,14 @@ extension Tensor {
       let handleA = a.saveForBackward()
       let handleB = b.saveForBackward()
       return Tensor(dataTask: newData, shape: outShape, dtype: a.dtype) { grad in
-        handleA.backward(
-          backend.use {
-            batchedMatmul(
-              a: grad, transA: transOut, b: b.noGrad(), transB: !transB, transOut: transA)
-          })
-        handleB.backward(
-          backend.use {
-            batchedMatmul(
-              a: a.noGrad(), transA: !transA, b: grad, transB: transOut, transOut: transB)
-          })
+        handleA.backward(backend) {
+          batchedMatmul(
+            a: grad, transA: transOut, b: b.noGrad(), transB: !transB, transOut: transA)
+        }
+        handleB.backward(backend) {
+          batchedMatmul(
+            a: a.noGrad(), transA: !transA, b: grad, transB: transOut, transOut: transB)
+        }
       }
     }
   }
@@ -115,7 +111,7 @@ extension Tensor {
     } else {
       let handle = saveForBackward()
       return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
-        handle.backward(backend.use { grad.tril() })
+        handle.backward(backend) { grad.tril() }
       }
     }
   }

@@ -91,9 +91,9 @@ extension Tensor {
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { grad in
-        handle.backward(
-          backend.use { grad.repeating(axis: axis, count: self.shape[axis]).reshape(self.shape) }
-        )
+        handle.backward(backend) {
+          grad.repeating(axis: axis, count: self.shape[axis]).reshape(self.shape)
+        }
       }
     }
   }
@@ -125,8 +125,9 @@ extension Tensor {
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { grad in
-        let grad = backend.use { grad.reshape([outerCount, count, innerCount]).sum(axis: 1) }
-        handle.backward(grad.reshape(self.shape))
+        handle.backward(backend) {
+          grad.reshape([outerCount, count, innerCount]).sum(axis: 1).reshape(self.shape)
+        }
       }
     }
   }

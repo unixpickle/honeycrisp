@@ -17,7 +17,7 @@ extension Tensor {
     } else {
       let handle = saveForBackward()
       return Tensor(dataTask: task, shape: shape, dtype: dtype) { grad in
-        handle.backward(grad.printing(onForward: onGrad))
+        handle.backward(Backend.current) { grad.printing(onForward: onGrad) }
       }
     }
   }
@@ -44,7 +44,7 @@ extension Tensor {
     } else {
       let handle = saveForBackward()
       return Tensor(dataTask: task, shape: shape, dtype: dtype) { grad in
-        handle.backward(grad.checkNaN(onForward: onGrad))
+        handle.backward(Backend.current) { grad.checkNaN(onForward: onGrad) }
       }
     }
   }

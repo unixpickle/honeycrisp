@@ -3,12 +3,68 @@ public enum Conv2DError: Error {
 }
 
 public struct Conv2DConfig: Hashable {
-  /// Get the value of a tensor at a 4D coordinate.
-  public typealias TensorGetter<T: NumericTensorElement> = (Int, Int, Int, Int) -> T
+  public struct TensorGetter<T: NumericTensorElement> {
+    let fn: (Int, Int, Int, Int) -> T
 
-  public typealias HWCSize = (h: Int, w: Int, c: Int)
-  public typealias HWSize = (h: Int, w: Int)
-  public typealias AxisPadding = (before: Int, after: Int)
+    public init(_ fn: @escaping (Int, Int, Int, Int) -> T) {
+      self.fn = fn
+    }
+
+    public init(from arr: [T], shape: [Int]) {
+      let strides = (shape[1...].product(), shape[2...].product(), shape[3])
+      self.init({ i, j, k, l in
+        assert(i >= 0 && i < shape[0])
+        assert(j >= 0 && j < shape[1])
+        assert(k >= 0 && k < shape[2])
+        assert(l >= 0 && l < shape[3])
+        return arr[i * strides.0 + j * strides.1 + k * strides.2 + l]
+      })
+    }
+
+    public func callAsFunction(_ i: Int, _ j: Int, _ k: Int, _ l: Int) -> T {
+      fn(i, j, k, l)
+    }
+
+    public func nchwToNHWC() -> TensorGetter<T> {
+      return TensorGetter({ n, h, w, c in fn(n, c, h, w) })
+    }
+
+    public func nhwcToNCHW() -> TensorGetter<T> {
+      return TensorGetter({ n, c, h, w in fn(n, h, w, c) })
+    }
+
+    public func toArray(shape: [Int]) -> [T] {
+      var result = [T](repeating: T(0.0), count: shape.product())
+      var idx = 0
+      for i in 0..<shape[0] {
+        for j in 0..<shape[1] {
+          for k in 0..<shape[2] {
+            for l in 0..<shape[3] {
+              result[idx] = fn(i, j, k, l)
+              idx += 1
+            }
+          }
+        }
+      }
+      return result
+    }
+  }
+
+  public struct HWCSize: Hashable {
+    public let h: Int
+    public let w: Int
+    public let c: Int
+  }
+
+  public struct HWSize: Hashable {
+    public let h: Int
+    public let w: Int
+  }
+
+  public struct AxisPadding: Hashable {
+    public let before: Int
+    public let after: Int
+  }
 
   public var kernelSize: HWCSize
   public var imageSize: HWCSize
@@ -18,24 +74,6 @@ public struct Conv2DConfig: Hashable {
   public var paddingW: AxisPadding
   public var groups: Int
   public var channelsLast: Bool
-
-  private func allFields() -> [Int] {
-    [
-      kernelSize.c, kernelSize.h, kernelSize.w, imageSize.c, imageSize.h, imageSize.w, stride.h,
-      stride.w, dilation.h, dilation.w, paddingH.before, paddingH.after, paddingW.before,
-      paddingW.after, groups, channelsLast ? 1 : 0,
-    ]
-  }
-
-  public func hash(into hasher: inout Hasher) {
-    for x in allFields() {
-      hasher.combine(x)
-    }
-  }
-
-  public static func == (lhs: Conv2DConfig, rhs: Conv2DConfig) -> Bool {
-    lhs.allFields() == rhs.allFields()
-  }
 
   public func outputShape() throws -> HWCSize {
     if kernelSize.c % groups != 0 {
@@ -74,16 +112,16 @@ public struct Conv2DConfig: Hashable {
   }
 
   public func outputTensorShape(batch: Int) throws -> [Int] {
-    let (outH, outW, outC) = try outputShape()
+    let o = try outputShape()
     if channelsLast {
-      return [batch, outH, outW, outC]
+      return [batch, o.h, o.w, o.c]
     } else {
-      return [batch, outC, outH, outW]
+      return [batch, o.c, o.h, o.w]
     }
   }
 
-  internal func paddedNCHWInput<T>(_ nhwcImage: @escaping TensorGetter<T>) -> TensorGetter<T> {
-    { b, y, x, c in
+  internal func paddedNCHWInput<T>(_ nhwcImage: TensorGetter<T>) -> TensorGetter<T> {
+    TensorGetter { b, y, x, c in
       assert(c >= 0 && c < imageSize.c)
       let y = y - paddingH.before
       let x = x - paddingW.before
@@ -99,24 +137,19 @@ public struct Conv2DConfig: Hashable {
   ///
   /// Kernel is always [n_out, n_in/groups, kernel_height, kernel_width]
   public func lazyForward<T: NumericTensorElement>(
-    batch: Int, image: @escaping TensorGetter<T>, kernel: @escaping TensorGetter<T>
+    batch: Int, image: TensorGetter<T>, kernel: TensorGetter<T>
   ) throws -> TensorGetter<T> {
-    let nhwcImage =
-      if channelsLast {
-        image
-      } else {
-        { b, y, x, c in image(b, c, y, x) }
-      }
+    let nhwcImage = channelsLast ? image : image.nchwToNHWC()
     let paddedImage = paddedNCHWInput(nhwcImage)
 
-    let (outH, outW, outC) = try outputShape()
-    let nhwcResult = { (b: Int, y: Int, x: Int, c: Int) in
-      assert(y >= 0 && y < outH, "y \(y) out of out of range [0, \(outH))")
-      assert(x >= 0 && x < outW, "x \(x) out of out of range [0, \(outW))")
-      assert(c >= 0 && c < outC, "c \(c) out of out of range [0, \(outC))")
+    let o = try outputShape()
+    let nhwcResult = TensorGetter { (b: Int, y: Int, x: Int, c: Int) in
+      assert(y >= 0 && y < o.h, "y \(y) out of out of range [0, \(o.h))")
+      assert(x >= 0 && x < o.w, "x \(x) out of out of range [0, \(o.w))")
+      assert(c >= 0 && c < o.c, "c \(c) out of out of range [0, \(o.c))")
 
       let inGroupSize = imageSize.c / groups
-      let outGroupSize = outC / groups
+      let outGroupSize = o.c / groups
       let groupIdx = c / outGroupSize
 
       var sum = T(0.0)
@@ -133,33 +166,22 @@ public struct Conv2DConfig: Hashable {
       }
       return sum
     }
-    let result =
-      if channelsLast {
-        nhwcResult
-      } else {
-        { b, c, y, x in nhwcResult(b, y, x, c) }
-      }
-    return result
+    return channelsLast ? nhwcResult : nhwcResult.nhwcToNCHW()
   }
 
   public func lazyTranspose<T: NumericTensorElement>(
-    batch: Int, image: @escaping TensorGetter<T>, kernel: @escaping TensorGetter<T>
+    batch: Int, image: TensorGetter<T>, kernel: TensorGetter<T>
   ) throws -> TensorGetter<T> {
-    let nhwcImage =
-      if channelsLast {
-        image
-      } else {
-        { b, y, x, c in image(b, c, y, x) }
-      }
+    let nhwcImage = channelsLast ? image : image.nchwToNHWC()
 
-    let (outH, outW, outC) = try outputShape()
-    let nhwcResult = { (b: Int, y: Int, x: Int, c: Int) in
+    let o = try outputShape()
+    let nhwcResult = TensorGetter { (b: Int, y: Int, x: Int, c: Int) in
       assert(y >= 0 && y < imageSize.h, "y \(y) out of out of range [0, \(imageSize.h))")
       assert(x >= 0 && x < imageSize.w, "x \(x) out of out of range [0, \(imageSize.w))")
       assert(c >= 0 && c < imageSize.c, "c \(c) out of out of range [0, \(imageSize.c))")
 
       let inGroupSize = imageSize.c / groups
-      let outGroupSize = outC / groups
+      let outGroupSize = o.c / groups
       let groupIdx = c / inGroupSize
 
       var sum = T(0.0)
@@ -167,14 +189,14 @@ public struct Conv2DConfig: Hashable {
         guard let sourceY = exactDiv(y + paddingH.before - kernelY * dilation.h, stride.h) else {
           continue
         }
-        if sourceY < 0 || sourceY >= outH {
+        if sourceY < 0 || sourceY >= o.h {
           continue
         }
         for kernelX in 0..<kernelSize.w {
           guard let sourceX = exactDiv(x + paddingW.before - kernelX * dilation.w, stride.w) else {
             continue
           }
-          if sourceX < 0 || sourceX >= outW {
+          if sourceX < 0 || sourceX >= o.w {
             continue
           }
           for sourceC in 0..<outGroupSize {
@@ -187,42 +209,36 @@ public struct Conv2DConfig: Hashable {
       }
       return sum
     }
-    let result =
-      if channelsLast {
-        nhwcResult
-      } else {
-        { b, c, y, x in nhwcResult(b, y, x, c) }
-      }
-    return result
+    return channelsLast ? nhwcResult : nhwcResult.nhwcToNCHW()
   }
 
   public func lazyKernelGrad<T: NumericTensorElement>(
-    batch: Int, image: @escaping TensorGetter<T>, outGrad: @escaping TensorGetter<T>
+    batch: Int, image: TensorGetter<T>, outGrad: TensorGetter<T>
   ) throws -> TensorGetter<T> {
     let (nhwcImage, nhwcOutGrad) =
       if channelsLast {
         (image, outGrad)
       } else {
-        ({ b, y, x, c in image(b, c, y, x) }, { b, y, x, c in outGrad(b, c, y, x) })
+        (image.nchwToNHWC(), outGrad.nchwToNHWC())
       }
     let paddedImage = paddedNCHWInput(nhwcImage)
 
-    let (outH, outW, outC) = try outputShape()
-    return { (cOut: Int, cIn: Int, kernelY: Int, kernelX: Int) in
+    let o = try outputShape()
+    return TensorGetter { (cOut: Int, cIn: Int, kernelY: Int, kernelX: Int) in
       assert(cOut >= 0 && cOut < kernelSize.c)
       assert(cIn >= 0 && cIn < imageSize.c / groups)
       assert(kernelY >= 0 && kernelY < kernelSize.h)
       assert(kernelX >= 0 && kernelX < kernelSize.w)
 
-      let outGroupSize = outC / groups
+      let outGroupSize = o.c / groups
       let inGroupSize = imageSize.c / groups
       let groupIdx = cOut / outGroupSize
 
       var sum = T(0.0)
       for batchIdx in 0..<batch {
-        for outY in 0..<outH {
+        for outY in 0..<o.h {
           let imageY = outY * stride.h + kernelY * dilation.h
-          for outX in 0..<outW {
+          for outX in 0..<o.w {
             let imageX = outX * stride.w + kernelX * dilation.w
             sum =
               sum + paddedImage(batchIdx, imageY, imageX, cIn + groupIdx * inGroupSize)
@@ -268,10 +284,12 @@ extension Tensor {
       let imageHandle = image.saveForBackward()
       let kernelHandle = kernel.saveForBackward()
       return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype) { grad in
-        imageHandle.backward(
-          backend.use { Tensor.conv2dTranspose(conv, image: grad, kernel: kernel.noGrad()) })
-        kernelHandle.backward(
-          backend.use { Tensor.conv2dKernelGrad(conv, image: image.noGrad(), outGrad: grad) })
+        imageHandle.backward(backend) {
+          Tensor.conv2dTranspose(conv, image: grad, kernel: kernel.noGrad())
+        }
+        kernelHandle.backward(backend) {
+          Tensor.conv2dKernelGrad(conv, image: image.noGrad(), outGrad: grad)
+        }
       }
     }
   }
