@@ -51,6 +51,11 @@ extension Tensor?: MaybeTensor {
 }
 
 open class Trainable {
+  public enum Mode {
+    case training
+    case inference
+  }
+
   public protocol Parameter {
     var name: String? { get }
     var data: Tensor? { get set }
@@ -167,8 +172,7 @@ open class Trainable {
   internal var registeredParams = [String: Parameter]()
   internal var registeredChildren = [String: Trainable]()
 
-  public init() {
-  }
+  internal var _mode: Mode = .training
 
   public var parameters: [(String, Parameter)] {
     var results = Array(registeredParams)
@@ -178,6 +182,28 @@ open class Trainable {
       }
     }
     return results.sorted(by: { $0.0 < $1.0 })
+  }
+
+  public var mode: Mode {
+    get {
+      _mode
+    }
+    set {
+      _mode = newValue
+      for child in registeredChildren.values {
+        child.mode = newValue
+      }
+    }
+  }
+
+  public init() {
+  }
+
+  public func withMode<T>(_ mode: Mode, _ action: () throws -> T) rethrows -> T {
+    let oldMode = self.mode
+    self.mode = mode
+    defer { self.mode = oldMode }
+    return try action()
   }
 
 }
@@ -201,7 +227,8 @@ public class Linear: Trainable {
   public init(inCount: Int, outCount: Int, dtype: Tensor.DType = .float32, bias: Bool = true) {
     super.init()
     self.weight =
-      (Tensor(rand: [inCount, outCount], dtype: dtype) - 0.5) * (sqrt(3.0) / 0.5 / Float(inCount))
+      (Tensor(rand: [inCount, outCount], dtype: dtype) - 0.5)
+      * (sqrt(3.0) / 0.5 / sqrt(Float(inCount)))
     if bias {
       self.bias = Tensor(zeros: [outCount])
     }
@@ -220,6 +247,139 @@ public class Linear: Trainable {
       h = h + bias.expand(as: h)
     }
     return h
+  }
+}
+
+public class Conv2D: Trainable {
+  public typealias HWCSize = Conv2DConfig.HWCSize
+  public typealias HWSize = Conv2DConfig.HWSize
+  public typealias AxisPadding = Conv2DConfig.AxisPadding
+
+  public enum Padding {
+    case none
+    case same
+    case allSides(Int)
+    case xy(x: Int, y: Int)
+    case leftRightTopBottom(Int, Int, Int, Int)
+  }
+
+  public enum SpatialSize {
+    case square(Int)
+    case widthHeight(Int, Int)
+
+    public var hwSize: HWSize {
+      switch self {
+      case .square(let x):
+        HWSize(h: x, w: x)
+      case .widthHeight(let x, let y):
+        HWSize(h: y, w: x)
+      }
+    }
+  }
+
+  public let inChannels: Int
+  public let outChannels: Int
+  public let kernelSize: Conv2DConfig.HWSize
+  public let stride: Conv2DConfig.HWSize
+  public let dilation: Conv2DConfig.HWSize
+  public let paddingH: Conv2DConfig.AxisPadding
+  public let paddingW: Conv2DConfig.AxisPadding
+  public let groups: Int
+  public let channelsLast: Bool
+
+  @Param(name: "weight") public var weight: Tensor
+  @Param(name: "bias") public var bias: Tensor?
+
+  public init(
+    inChannels: Int, outChannels: Int, kernelSize: SpatialSize, stride: SpatialSize = .square(1),
+    padding: Padding = .none, dilation: SpatialSize = .square(1), groups: Int = 1,
+    channelsLast: Bool = false, bias: Bool = true, dtype: Tensor.DType = .float32
+  ) {
+    self.inChannels = inChannels
+    self.outChannels = outChannels
+    self.kernelSize = kernelSize.hwSize
+    self.stride = stride.hwSize
+    self.dilation = dilation.hwSize
+    alwaysAssert(
+      inChannels % groups == 0, "outChannels \(outChannels) not divisible by groups \(groups)")
+    alwaysAssert(
+      outChannels % groups == 0, "inChannels \(inChannels) not divisible by groups \(groups)")
+    switch padding {
+    case .none:
+      self.paddingH = AxisPadding(before: 0, after: 0)
+      self.paddingW = AxisPadding(before: 0, after: 0)
+    case .same:
+      alwaysAssert(
+        self.stride == HWSize(h: 1, w: 1),
+        "cannot use padding mode 'same' with stride \(self.stride)")
+      let kernelW = self.kernelSize.w + (self.kernelSize.w - 1) * self.dilation.w
+      let kernelH = self.kernelSize.h + (self.kernelSize.h - 1) * self.dilation.h
+      self.paddingH = Conv2DConfig.AxisPadding(before: (kernelH - 1) / 2, after: kernelH / 2)
+      self.paddingW = Conv2DConfig.AxisPadding(before: (kernelW - 1) / 2, after: kernelW / 2)
+    case .allSides(let x):
+      self.paddingH = AxisPadding(before: x, after: x)
+      self.paddingW = AxisPadding(before: x, after: x)
+    case .xy(let x, let y):
+      self.paddingH = AxisPadding(before: y, after: y)
+      self.paddingW = AxisPadding(before: x, after: x)
+    case .leftRightTopBottom(let left, let right, let top, let bottom):
+      self.paddingH = AxisPadding(before: top, after: bottom)
+      self.paddingW = AxisPadding(before: left, after: right)
+    }
+    self.groups = groups
+    self.channelsLast = channelsLast
+    super.init()
+    self.weight =
+      (Tensor(
+        rand: [outChannels, inChannels / groups, self.kernelSize.h, self.kernelSize.w],
+        dtype: dtype) - 0.5)
+      * (sqrt(3.0) / 0.5 / sqrt(Float(inChannels * self.kernelSize.h * self.kernelSize.w)))
+    if bias {
+      self.bias = Tensor(zeros: [outChannels])
+    }
+  }
+
+  public func callAsFunction(_ x: Tensor) -> Tensor {
+    alwaysAssert(x.shape.count == 4, "invalid input shape for conv2d: \(x.shape)")
+    let (height, width, channels) =
+      if channelsLast {
+        (x.shape[1], x.shape[2], x.shape[3])
+      } else {
+        (x.shape[2], x.shape[3], x.shape[1])
+      }
+    alwaysAssert(
+      channels == inChannels,
+      "channels of input \(channels) doesn't match expected channels \(inChannels)")
+    let convDesc = Conv2DConfig(
+      kernelSize: Conv2DConfig.HWCSize(h: kernelSize.h, w: kernelSize.w, c: outChannels),
+      imageSize: Conv2DConfig.HWCSize(h: height, w: width, c: channels),
+      stride: stride, dilation: dilation, paddingH: paddingH, paddingW: paddingW, groups: groups,
+      channelsLast: channelsLast)
+    var h = Tensor.conv2d(convDesc, image: x, kernel: weight)
+    if let bias = bias {
+      if channelsLast {
+        h = h + bias.expand(as: h)
+      } else {
+        h = h + bias[..., NewAxis(), NewAxis()].expand(as: h)
+      }
+    }
+    return h
+  }
+}
+
+public class Dropout: Trainable {
+  public let dropProb: Float
+
+  public init(dropProb: Float) {
+    self.dropProb = dropProb
+  }
+
+  public func callAsFunction(_ x: Tensor) -> Tensor {
+    if mode == .training {
+      (1.0 / (1.0 - dropProb)) * x * (Tensor(randLike: x) > dropProb).cast(.float32)
+    } else {
+      x
+    }
   }
 }
 

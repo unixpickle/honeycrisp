@@ -62,6 +62,21 @@ extension Tensor {
     }
   }
 
+  public func maxPool2D(width kw: Int, height kh: Int, channelsLast: Bool = false) -> Tensor {
+    alwaysAssert(shape.count == 4, "invalid shape for maxPool2D \(shape)")
+    let b = shape[0]
+    let (h, w, c) = channelsLast ? (shape[1], shape[2], shape[3]) : (shape[2], shape[3], shape[1])
+    alwaysAssert(h % kh == 0, "pool height \(kh) does not divide image height \(h)")
+    alwaysAssert(w % kw == 0, "pool width \(kw) does not divide image width \(w)")
+    if channelsLast {
+      return reshape([b, h / kh, kh, w / kw, kw, c])[FullRange(dims: 2), PermuteAxes(1, 0)]
+        .reshape([b, h / kh, kh * kw, w / kw, c]).max(axis: 2)
+    } else {
+      return reshape([b, c, h / kh, kh, w / kw, kw])[FullRange(dims: 3), PermuteAxes(1, 0)]
+        .reshape([b, c, h / kh, kh * kw, w / kw]).max(axis: 3)
+    }
+  }
+
   internal func gatherFromReduce(op: ReduceOp, axis: Int?, keepdims: Bool) -> Tensor {
     guard let axis = positiveAxis(axis) else {
       let result = flatten().gatherFromReduce(op: op, axis: 0, keepdims: false)

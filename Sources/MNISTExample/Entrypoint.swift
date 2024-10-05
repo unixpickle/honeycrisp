@@ -3,25 +3,37 @@ import Honeycrisp
 import MNIST
 
 class Model: Trainable {
-  @Child var layer1: Linear
-  @Child var layer2: Linear
-  @Child var layer3: Linear
+  @Child var conv1: Conv2D
+  @Child var conv2: Conv2D
+  @Child var dropout1: Dropout
+  @Child var dropout2: Dropout
+  @Child var linear1: Linear
+  @Child var linear2: Linear
 
   override init() {
     super.init()
-    layer1 = Linear(inCount: 28 * 28, outCount: 1024)
-    layer2 = Linear(inCount: 1024, outCount: 1024)
-    layer3 = Linear(inCount: 1024, outCount: 10)
+    conv1 = Conv2D(inChannels: 1, outChannels: 32, kernelSize: .square(3))
+    conv2 = Conv2D(inChannels: 32, outChannels: 64, kernelSize: .square(3))
+    self.dropout1 = Dropout(dropProb: 0.25)
+    self.dropout2 = Dropout(dropProb: 0.5)
+    self.linear1 = Linear(inCount: 9216, outCount: 128)
+    self.linear2 = Linear(inCount: 128, outCount: 10)
   }
 
   func callAsFunction(_ x: Tensor) -> Tensor {
     var h = x
-    h = layer1(h)
-    h = h.gelu()
-    h = layer2(h)
-    h = h.gelu()
-    h = layer3(h)
-    return h.logSoftmax(axis: -1)
+    h = conv1(h)
+    h = h.relu()
+    h = conv2(h)
+    h = h.relu()
+    h = h.maxPool2D(width: 2, height: 2)
+    h = dropout1(h)
+    h = h.flatten(startAxis: 1)
+    h = linear1(h)
+    h = h.relu()
+    h = linear2(h)
+    h = h.logSoftmax(axis: -1)
+    return h
   }
 }
 
@@ -42,7 +54,7 @@ struct DataIterator: Sequence, IteratorProtocol {
       offset += 1
     }
     return (
-      Tensor(data: inputData, shape: [batchSize, 28 * 28], dtype: .float32),
+      Tensor(data: inputData, shape: [batchSize, 1, 28, 28], dtype: .float32),
       Tensor(data: outputLabels, shape: [batchSize, 1], dtype: .int64)
     )
   }
@@ -103,8 +115,11 @@ struct Main {
       opt.step()
       opt.clearGrads()
       let (testLoss, testAcc) = Tensor.withGrad(enabled: false) {
-        computeLossAndAcc(testBatch)
+        model.withMode(.inference) {
+          computeLossAndAcc(testBatch)
+        }
       }
+
       seenExamples += batch.0.shape[0]
       let epochs = Float(seenExamples) / Float(train.images.count)
       do {
