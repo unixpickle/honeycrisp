@@ -12,6 +12,24 @@ public enum BackendError: Error {
 
 open class Backend {
 
+  public enum TensorOrScalar<T: TensorElement> {
+    case tensor(Tensor.Data)
+    case scalar(T)
+
+    internal func getPointer(_ dtype: Tensor.DType) throws -> (UnsafeMutableRawPointer, Bool) {
+      switch self {
+      case .tensor(let t):
+        (t.buffer.contents(), false)
+      case .scalar(let s):
+        try {
+          let output = UnsafeMutableRawPointer.allocate(byteCount: dtype.byteSize, alignment: 16)
+          try arrayToPointer([s], output: output, dtype: dtype)
+          return (output, true)
+        }()
+      }
+    }
+  }
+
   private static let ThreadKey = "HONEYCRISP_CURRENT_BACKEND"
 
   public static var defaultBackend: Backend = CPUBackend()
@@ -208,6 +226,16 @@ open class Backend {
     -> Tensor.Data
   {
     throw BackendError.notImplemented("scatter")
+  }
+
+  public func when<T>(
+    _ mask: Tensor.Data, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("when")
   }
 
   public func matmul(
@@ -873,6 +901,52 @@ open class CPUBackend: Backend {
     } else {
       return try await apply(Float(0))
     }
+  }
+
+  override public func when<T>(
+    _ mask: Tensor.Data, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    if case .tensor(let t) = a {
+      try await waitForData(t)
+    }
+    if case .tensor(let t) = b {
+      try await waitForData(t)
+    }
+
+    let (aData, aIsScalar) = try a.getPointer(dtype)
+    defer {
+      if aIsScalar {
+        aData.deallocate()
+      }
+    }
+    let (bData, bIsScalar) = try b.getPointer(dtype)
+    defer {
+      if bIsScalar {
+        bData.deallocate()
+      }
+    }
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    try await serialize {
+      let contents = output.contents()
+      let bools = mask.buffer.contents().bindMemory(to: UInt8.self, capacity: count)
+      for i in 0..<count {
+        let off = i * dtype.byteSize
+        if bools[i] != 0 {
+          contents.advanced(by: off).copyMemory(
+            from: aData.advanced(by: aIsScalar ? 0 : off), byteCount: dtype.byteSize)
+        } else {
+          contents.advanced(by: off).copyMemory(
+            from: bData.advanced(by: bIsScalar ? 0 : off), byteCount: dtype.byteSize)
+        }
+      }
+    }
+
+    return Tensor.Data(backend: self, buffer: output)
   }
 
   override public func matmul(

@@ -30,11 +30,12 @@ public final class Tensor {
     }
 
     internal func canUseScalarType<T: TensorElement>(_: T.Type) -> Bool {
-      if !isNumeric {
-        false
-      } else if self == .int64 && T.isInt64Lossy {
-        false
-      } else {
+      switch self {
+      case .bool:
+        !T.isBoolLossy
+      case .int64:
+        !T.isInt64Lossy
+      default:
         true
       }
     }

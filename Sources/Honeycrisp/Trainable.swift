@@ -376,7 +376,7 @@ public class Dropout: Trainable {
 
   public func callAsFunction(_ x: Tensor) -> Tensor {
     if mode == .training {
-      (1.0 / (1.0 - dropProb)) * x * (Tensor(randLike: x) > dropProb).cast(.float32)
+      (Tensor(randLike: x) >= dropProb).when(isTrue: (1.0 / (1.0 - dropProb)) * x, isFalse: 0)
     } else {
       x
     }
