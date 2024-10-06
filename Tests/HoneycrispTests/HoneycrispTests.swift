@@ -841,6 +841,19 @@ final class HoneycrispTests: XCTestCase {
     try await assertDataEqual(stack2, Tensor(stack: [x, y], axis: -1))
   }
 
+  func testWhen() async throws {
+    let x = Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [4])
+    let y = Tensor(data: [-1.0, -2.0, -3.0, -4.0], shape: [4])
+    let mask = Tensor(data: [false, true, true, false], shape: [4])
+    var xGrad: Tensor?
+    var yGrad: Tensor?
+    let out = mask.when(isTrue: x.onGrad { g in xGrad = g }, isFalse: y.onGrad { g in yGrad = g })
+    try await assertDataEqual(out, [-1.0, 2.0, 3.0, -4.0])
+    out.backward(Tensor(data: [5.0, 6.0, 7.0, 8.0], shape: [4]))
+    try await assertDataEqual(xGrad!, [0, 6.0, 7.0, 0.0])
+    try await assertDataEqual(yGrad!, [5.0, 0.0, 0.0, 8.0])
+  }
+
   func testOneHot() async throws {
     try await assertDataEqual(Tensor(oneHot: 3, count: 5), [0, 0, 0, 1, 0])
     try await assertDataEqual(Tensor(oneHot: [3, 1], count: 5), [0, 0, 0, 1, 0, 0, 1, 0, 0, 0])
@@ -1116,20 +1129,23 @@ final class HoneycrispTests: XCTestCase {
 
       for testCase in decodedData {
         let c = testCase.conv
-        let conv = Conv2DConfig(
-          kernelSize: Conv2DConfig.HWCSize(
-            h: c.kernelSize[0], w: c.kernelSize[1], c: c.kernelSize[2]),
-          imageSize: Conv2DConfig.HWCSize(h: c.imageSize[0], w: c.imageSize[1], c: c.imageSize[2]),
-          stride: Conv2DConfig.HWSize(h: c.stride[0], w: c.stride[1]),
-          dilation: Conv2DConfig.HWSize(h: c.dilation[0], w: c.dilation[1]),
-          paddingH: Conv2DConfig.AxisPadding(before: c.padding[0], after: c.padding[0]),
-          paddingW: Conv2DConfig.AxisPadding(before: c.padding[1], after: c.padding[1]),
-          groups: c.groups,
-          channelsLast: false)
-        let kernelShape = [
-          c.kernelSize[2], c.imageSize[2] / c.groups, c.kernelSize[0], c.kernelSize[1],
-        ]
-        let imageShape = [1, c.imageSize[2], c.imageSize[0], c.imageSize[1]]
+        func createConv(_ channelsLast: Bool) throws -> Conv2DConfig {
+          try Conv2DConfig(
+            inChannels: c.imageSize[2],
+            outChannels: c.kernelSize[2],
+            kernelSize: SpatialDim2D(x: c.kernelSize[1], y: c.kernelSize[0]),
+            imageSize: SpatialDim2D(x: c.imageSize[1], y: c.imageSize[0]),
+            stride: SpatialDim2D(x: c.stride[1], y: c.stride[0]),
+            dilation: SpatialDim2D(x: c.dilation[1], y: c.dilation[0]),
+            padding: Conv2DConfig.Padding(
+              before: SpatialDim2D(x: c.padding[1], y: c.padding[0]),
+              after: SpatialDim2D(x: c.padding[1], y: c.padding[0])),
+            groups: c.groups,
+            channelsLast: channelsLast)
+        }
+        let conv = try createConv(false)
+        let kernelShape = conv.kernelTensorShape()
+        let imageShape = conv.imageTensorShape(batch: 1)
         let kernel = Tensor(range: 0..<kernelShape.product(), dtype: .float32).reshape(kernelShape)
         let image = -Tensor(range: 0..<imageShape.product(), dtype: .float32).reshape(imageShape)
         var imageGrad: Tensor?
@@ -1146,8 +1162,7 @@ final class HoneycrispTests: XCTestCase {
         try await assertDataEqual(imageGrad!, testCase.imageGrad, "\(conv)")
         try await assertClose(kernelGrad!, testCase.kernelGrad, "\(conv)")
 
-        var convCLast = conv
-        convCLast.channelsLast = true
+        let convCLast = try createConv(true)
         var transImageGrad: Tensor?
         var transKernelGrad: Tensor?
         let outputCLast = Tensor.conv2d(
@@ -1157,9 +1172,63 @@ final class HoneycrispTests: XCTestCase {
         outputCLast.backward(outGrad)
         try await assertDataEqual(transImageGrad!, imageGrad!)
         try await assertClose(transKernelGrad!, kernelGrad!)
+
+        var batchedImageGrad: Tensor?
+        var batchedKernelGrad: Tensor?
+        let batchedInput = image.onGrad({ g in batchedImageGrad = g })
+        let batchedOutput = Tensor.conv2d(
+          conv, image: Tensor(concat: [Tensor(zerosLike: batchedInput), batchedInput], axis: 0),
+          kernel: kernel.onGrad { g in batchedKernelGrad = g })
+        batchedOutput.backward(outGrad.repeating(axis: 0, count: 2))
+        try await assertClose(batchedImageGrad!, imageGrad!)
+        try await assertClose(batchedKernelGrad!, kernelGrad!)
       }
     }
   }
+
+  func testConv2DTransposeGrads() async throws {
+    try await runInBackends {
+      let conv = try Conv2DConfig(
+        inChannels: 6, outChannels: 4, kernelSize: .init(x: 3, y: 2), imageSize: .init(x: 8, y: 9),
+        stride: .init(x: 2, y: 1), dilation: .init(x: 2, y: 2),
+        padding: .init(before: .init(x: 1, y: 0), after: .init(x: 2, y: 1)), groups: 2,
+        channelsLast: false)
+      let input = Tensor(rand: conv.outputTensorShape(batch: 2))
+      let kernel = Tensor(rand: conv.kernelTensorShape())
+      var inputGrad: Tensor?
+      var kernelGrad: Tensor?
+      let output = Tensor.conv2dTranspose(
+        conv, image: input.onGrad { g in inputGrad = g },
+        kernel: kernel.onGrad { g in kernelGrad = g })
+      let outGrad = Tensor(randLike: output)
+      output.backward(outGrad)
+
+      let approxKernelGrad = try await estimateGradient(delta: 0.5, input: kernel, outGrad: outGrad)
+      { x in
+        Tensor.conv2dTranspose(conv, image: input, kernel: x)
+      }
+      try await assertClose(approxKernelGrad, kernelGrad!)
+
+      let approxInputGrad = try await estimateGradient(delta: 0.5, input: input, outGrad: outGrad) {
+        x in
+        Tensor.conv2dTranspose(conv, image: x, kernel: kernel)
+      }
+      try await assertClose(approxInputGrad, inputGrad!)
+    }
+  }
+}
+
+func estimateGradient(delta: Float = 1e-4, input: Tensor, outGrad: Tensor, fn: (Tensor) -> Tensor)
+  async throws -> Tensor
+{
+  var result = [Float](repeating: 0, count: input.shape.product())
+  for i in 0..<result.count {
+    let bias = Tensor(oneHot: i, count: result.count).reshape(as: input).cast(as: input) * delta
+    let o1: Float = try await (fn(input - bias) * outGrad).sum().item()
+    let o2: Float = try await (fn(input + bias) * outGrad).sum().item()
+    result[i] = (o2 - o1) / (2 * delta)
+  }
+  return Tensor(data: result, shape: input.shape, dtype: input.dtype)
 }
 
 func assertClose(

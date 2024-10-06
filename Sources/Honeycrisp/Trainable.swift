@@ -251,11 +251,10 @@ public class Linear: Trainable {
 }
 
 public class Conv2D: Trainable {
-  public typealias HWCSize = Conv2DConfig.HWCSize
-  public typealias HWSize = Conv2DConfig.HWSize
-  public typealias AxisPadding = Conv2DConfig.AxisPadding
+  public typealias Dim = Conv2DConfig.Dim
+  public typealias Padding = Conv2DConfig.Padding
 
-  public enum Padding {
+  public enum PaddingType {
     case none
     case same
     case allSides(Int)
@@ -267,23 +266,22 @@ public class Conv2D: Trainable {
     case square(Int)
     case widthHeight(Int, Int)
 
-    public var hwSize: HWSize {
+    public var dim: Dim {
       switch self {
       case .square(let x):
-        HWSize(h: x, w: x)
+        Dim(x: x, y: x)
       case .widthHeight(let x, let y):
-        HWSize(h: y, w: x)
+        Dim(x: x, y: y)
       }
     }
   }
 
   public let inChannels: Int
   public let outChannels: Int
-  public let kernelSize: Conv2DConfig.HWSize
-  public let stride: Conv2DConfig.HWSize
-  public let dilation: Conv2DConfig.HWSize
-  public let paddingH: Conv2DConfig.AxisPadding
-  public let paddingW: Conv2DConfig.AxisPadding
+  public let kernelSize: Dim
+  public let stride: Dim
+  public let dilation: Dim
+  public let padding: Padding
   public let groups: Int
   public let channelsLast: Bool
 
@@ -292,48 +290,41 @@ public class Conv2D: Trainable {
 
   public init(
     inChannels: Int, outChannels: Int, kernelSize: SpatialSize, stride: SpatialSize = .square(1),
-    padding: Padding = .none, dilation: SpatialSize = .square(1), groups: Int = 1,
+    padding: PaddingType = .none, dilation: SpatialSize = .square(1), groups: Int = 1,
     channelsLast: Bool = false, bias: Bool = true, dtype: Tensor.DType = .float32
   ) {
     self.inChannels = inChannels
     self.outChannels = outChannels
-    self.kernelSize = kernelSize.hwSize
-    self.stride = stride.hwSize
-    self.dilation = dilation.hwSize
+    self.kernelSize = kernelSize.dim
+    self.stride = stride.dim
+    self.dilation = dilation.dim
     alwaysAssert(
       inChannels % groups == 0, "outChannels \(outChannels) not divisible by groups \(groups)")
     alwaysAssert(
       outChannels % groups == 0, "inChannels \(inChannels) not divisible by groups \(groups)")
     switch padding {
     case .none:
-      self.paddingH = AxisPadding(before: 0, after: 0)
-      self.paddingW = AxisPadding(before: 0, after: 0)
+      self.padding = Padding(before: Dim(constant: 0), after: Dim(constant: 0))
     case .same:
       alwaysAssert(
-        self.stride == HWSize(h: 1, w: 1),
+        self.stride == Dim(constant: 1),
         "cannot use padding mode 'same' with stride \(self.stride)")
-      let kernelW = self.kernelSize.w + (self.kernelSize.w - 1) * self.dilation.w
-      let kernelH = self.kernelSize.h + (self.kernelSize.h - 1) * self.dilation.h
-      self.paddingH = Conv2DConfig.AxisPadding(before: (kernelH - 1) / 2, after: kernelH / 2)
-      self.paddingW = Conv2DConfig.AxisPadding(before: (kernelW - 1) / 2, after: kernelW / 2)
+      self.padding = Conv2DConfig.samePadding(kernelSize: self.kernelSize, dilation: self.dilation)
     case .allSides(let x):
-      self.paddingH = AxisPadding(before: x, after: x)
-      self.paddingW = AxisPadding(before: x, after: x)
+      self.padding = Padding(before: Dim(constant: x), after: Dim(constant: x))
     case .xy(let x, let y):
-      self.paddingH = AxisPadding(before: y, after: y)
-      self.paddingW = AxisPadding(before: x, after: x)
+      self.padding = Padding(before: Dim(x: x, y: y), after: Dim(x: x, y: y))
     case .leftRightTopBottom(let left, let right, let top, let bottom):
-      self.paddingH = AxisPadding(before: top, after: bottom)
-      self.paddingW = AxisPadding(before: left, after: right)
+      self.padding = Padding(before: Dim(x: left, y: top), after: Dim(x: right, y: bottom))
     }
     self.groups = groups
     self.channelsLast = channelsLast
     super.init()
     self.weight =
       (Tensor(
-        rand: [outChannels, inChannels / groups, self.kernelSize.h, self.kernelSize.w],
+        rand: [outChannels, inChannels / groups] + self.kernelSize.dims,
         dtype: dtype) - 0.5)
-      * (sqrt(3.0) / 0.5 / sqrt(Float(inChannels * self.kernelSize.h * self.kernelSize.w)))
+      * (sqrt(3.0) / 0.5 / sqrt(Float(inChannels * self.kernelSize.dims.product())))
     if bias {
       self.bias = Tensor(zeros: [outChannels])
     }
@@ -350,11 +341,17 @@ public class Conv2D: Trainable {
     alwaysAssert(
       channels == inChannels,
       "channels of input \(channels) doesn't match expected channels \(inChannels)")
-    let convDesc = Conv2DConfig(
-      kernelSize: Conv2DConfig.HWCSize(h: kernelSize.h, w: kernelSize.w, c: outChannels),
-      imageSize: Conv2DConfig.HWCSize(h: height, w: width, c: channels),
-      stride: stride, dilation: dilation, paddingH: paddingH, paddingW: paddingW, groups: groups,
-      channelsLast: channelsLast)
+
+    let convDesc: Conv2DConfig
+    do {
+      convDesc = try Conv2DConfig(
+        inChannels: inChannels, outChannels: outChannels, kernelSize: kernelSize,
+        imageSize: Dim(x: width, y: height), stride: stride, dilation: dilation, padding: padding,
+        groups: groups, channelsLast: channelsLast)
+    } catch {
+      fatalError("failed to instantiate Conv2DConfig: \(error)")
+    }
+
     var h = Tensor.conv2d(convDesc, image: x, kernel: weight)
     if let bias = bias {
       if channelsLast {

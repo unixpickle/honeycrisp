@@ -742,10 +742,10 @@ open class MPSBackend: CPUBackend {
     }
 
     let imageShape =
-      transpose ? try config.outputTensorShape(batch: batch) : config.imageTensorShape(batch: batch)
-    let kernelShape = try config.kernelTensorShape()
+      transpose ? config.outputTensorShape(batch: batch) : config.imageTensorShape(batch: batch)
+    let kernelShape = config.kernelTensorShape()
     let outShape =
-      transpose ? config.imageTensorShape(batch: batch) : try config.outputTensorShape(batch: batch)
+      transpose ? config.imageTensorShape(batch: batch) : config.outputTensorShape(batch: batch)
     let output = try await allocate(length: outShape.product() * dtype.byteSize)
     try await waitForGPUData(image, kernel)
     return try await serialize { [self] in
@@ -814,8 +814,8 @@ open class MPSBackend: CPUBackend {
     }
 
     let imageShape = config.imageTensorShape(batch: batch)
-    let kernelShape = try config.kernelTensorShape()
-    let outShape = try config.outputTensorShape(batch: batch)
+    let kernelShape = config.kernelTensorShape()
+    let outShape = config.outputTensorShape(batch: batch)
     let output = try await allocate(length: kernelShape.product() * dtype.byteSize)
     try await waitForGPUData(image, outGrad)
     return try await serialize { [self] in
@@ -861,20 +861,20 @@ open class MPSBackend: CPUBackend {
     let graph = MPSGraph()
     guard
       let convDesc = MPSGraphConvolution2DOpDescriptor(
-        strideInX: conv.stride.w, strideInY: conv.stride.h, dilationRateInX: conv.dilation.w,
-        dilationRateInY: conv.dilation.h, groups: conv.groups, paddingLeft: conv.paddingW.before,
-        paddingRight: conv.paddingW.after, paddingTop: conv.paddingH.before,
-        paddingBottom: conv.paddingH.after, paddingStyle: .explicit,
+        strideInX: conv.stride.x, strideInY: conv.stride.y, dilationRateInX: conv.dilation.x,
+        dilationRateInY: conv.dilation.y, groups: conv.groups, paddingLeft: conv.padding.before.x,
+        paddingRight: conv.padding.after.x, paddingTop: conv.padding.before.y,
+        paddingBottom: conv.padding.after.y, paddingStyle: .explicit,
         dataLayout: conv.channelsLast ? .NHWC : .NCHW, weightsLayout: .OIHW)
     else {
       throw BackendError.kernelFailed("failed to create MPSGraph convolution for: \(conv)")
     }
 
-    let kernelShape = try conv.kernelTensorShape()
+    let kernelShape = conv.kernelTensorShape()
 
     if kind == .kernelGrad {
       let imageShape = conv.imageTensorShape(batch: batch)
-      let outShape = try conv.outputTensorShape(batch: batch)
+      let outShape = conv.outputTensorShape(batch: batch)
       let inputA = graph.placeholder(
         shape: mpsShape([imageShape.product()]), dataType: dtype, name: "image")
       let inputB = graph.placeholder(
@@ -893,10 +893,10 @@ open class MPSBackend: CPUBackend {
     } else {
       let imageShape =
         kind == .transpose
-        ? try conv.outputTensorShape(batch: batch) : conv.imageTensorShape(batch: batch)
+        ? conv.outputTensorShape(batch: batch) : conv.imageTensorShape(batch: batch)
       let outShape =
         kind == .transpose
-        ? conv.imageTensorShape(batch: batch) : try conv.outputTensorShape(batch: batch)
+        ? conv.imageTensorShape(batch: batch) : conv.outputTensorShape(batch: batch)
       let inputA = graph.placeholder(
         shape: mpsShape([imageShape.product()]), dataType: dtype, name: "image")
       let inputB = graph.placeholder(

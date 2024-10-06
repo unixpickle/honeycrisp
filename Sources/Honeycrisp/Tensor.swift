@@ -284,6 +284,10 @@ public final class Tensor {
     }
   }
 
+  public func reshape(as x: Tensor) -> Tensor {
+    reshape(x.shape)
+  }
+
   internal func fillNegativeOneInShape(_ newShape: [Int]) -> [Int] {
     guard let idx = newShape.firstIndex(of: -1) else {
       return newShape

@@ -1075,8 +1075,8 @@ open class CPUBackend: Backend {
     try await waitForData(kernel, image)
 
     let imageShape = config.imageTensorShape(batch: batch)
-    let kernelShape = try config.kernelTensorShape()
-    let outShape = try config.outputTensorShape(batch: batch)
+    let kernelShape = config.kernelTensorShape()
+    let outShape = config.outputTensorShape(batch: batch)
 
     let outBuf = try await allocate(length: outShape.product() * dtype.byteSize)
 
@@ -1089,11 +1089,12 @@ open class CPUBackend: Backend {
         try pointerToArray(kernel.buffer.contents(), output: &arrKernel, dtype: dtype)
         try pointerToArray(image.buffer.contents(), output: &arrImage, dtype: dtype)
 
-        let getKernel = Conv2DConfig.TensorGetter(from: arrKernel, shape: kernelShape)
-        let getImage = Conv2DConfig.TensorGetter(from: arrImage, shape: imageShape)
-        let outputFn = try config.lazyForward(batch: batch, image: getImage, kernel: getKernel)
+        let getKernel = Conv2DConfig.LazyTensor(
+          from: arrKernel, shape: kernelShape, channelsLast: false)
+        let getImage = config.lazy(from: arrImage, shape: imageShape)
+        let outputFn = config.lazyForward(image: getImage, kernel: getKernel)
 
-        let arrOut = outputFn.toArray(shape: outShape)
+        let arrOut = config.array(from: outputFn)
         try arrayToPointer(arrOut, output: outBuf.contents(), dtype: dtype)
       }
       return Tensor.Data(backend: self, buffer: outBuf)
@@ -1114,8 +1115,8 @@ open class CPUBackend: Backend {
     try await waitForData(kernel, image)
 
     let imageShape = config.imageTensorShape(batch: batch)
-    let kernelShape = try config.kernelTensorShape()
-    let outShape = try config.outputTensorShape(batch: batch)
+    let kernelShape = config.kernelTensorShape()
+    let outShape = config.outputTensorShape(batch: batch)
 
     let outBuf = try await allocate(length: imageShape.product() * dtype.byteSize)
 
@@ -1128,11 +1129,12 @@ open class CPUBackend: Backend {
         try pointerToArray(kernel.buffer.contents(), output: &arrKernel, dtype: dtype)
         try pointerToArray(image.buffer.contents(), output: &arrImage, dtype: dtype)
 
-        let getKernel = Conv2DConfig.TensorGetter(from: arrKernel, shape: kernelShape)
-        let getImage = Conv2DConfig.TensorGetter(from: arrImage, shape: outShape)
-        let outputFn = try config.lazyTranspose(batch: batch, image: getImage, kernel: getKernel)
+        let getKernel = Conv2DConfig.LazyTensor(
+          from: arrKernel, shape: kernelShape, channelsLast: false)
+        let getImage = config.lazy(from: arrImage, shape: outShape)
+        let outputFn = config.lazyTranspose(image: getImage, kernel: getKernel)
 
-        let arrOut = outputFn.toArray(shape: imageShape)
+        let arrOut = config.array(from: outputFn)
         try arrayToPointer(arrOut, output: outBuf.contents(), dtype: dtype)
       }
       return Tensor.Data(backend: self, buffer: outBuf)
@@ -1154,11 +1156,10 @@ open class CPUBackend: Backend {
     try await waitForData(image, outGrad)
 
     let imageShape = config.imageTensorShape(batch: batch)
-    let kernelShape = try config.kernelTensorShape()
-    let outShape = try config.outputTensorShape(batch: batch)
+    let kernelShape = config.kernelTensorShape()
+    let outShape = config.outputTensorShape(batch: batch)
 
-    let outBuf = try await allocate(
-      length: (try config.kernelTensorShape()).product() * dtype.byteSize)
+    let outBuf = try await allocate(length: kernelShape.product() * dtype.byteSize)
 
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
       try await serialize {
@@ -1169,11 +1170,11 @@ open class CPUBackend: Backend {
         try pointerToArray(image.buffer.contents(), output: &arrImage, dtype: dtype)
         try pointerToArray(outGrad.buffer.contents(), output: &arrOutGrad, dtype: dtype)
 
-        let getImage = Conv2DConfig.TensorGetter(from: arrImage, shape: imageShape)
-        let getOutGrad = Conv2DConfig.TensorGetter(from: arrOutGrad, shape: outShape)
-        let outputFn = try config.lazyKernelGrad(batch: batch, image: getImage, outGrad: getOutGrad)
+        let getImage = config.lazy(from: arrImage, shape: imageShape)
+        let getOutGrad = config.lazy(from: arrOutGrad, shape: outShape)
+        let outputFn = config.lazyKernelGrad(image: getImage, outGrad: getOutGrad)
 
-        let arrOut = outputFn.toArray(shape: kernelShape)
+        let arrOut = outputFn.toArray(channelsLast: false)
         try arrayToPointer(arrOut, output: outBuf.contents(), dtype: dtype)
       }
       return Tensor.Data(backend: self, buffer: outBuf)

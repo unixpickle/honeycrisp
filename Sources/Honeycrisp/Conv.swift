@@ -1,48 +1,159 @@
-public enum Conv2DError: Error {
+public enum ConvConfigError: Error {
   case invalidGroups(String)
 }
 
-public struct Conv2DConfig: Hashable {
-  public struct TensorGetter<T: NumericTensorElement> {
-    let fn: (Int, Int, Int, Int) -> T
+/// A size or coordinate in N-dimensional space.
+///
+///  * For 1D, this can be considered (length) or (x).
+///  * For 2D, this can be treated as (height, width) or (y, x).
+///  * For 3D, this can be (depth, height, width) or (z, y, x).
+///
+/// All multidimensional comparisons are reduced with &. In particular,
+/// (x == y) is only true if all elements of x equal corresponding ones in y.
+/// The same goes for (x != y) -- it is only true if no elements are equal.
+/// As a result, (x != y) may be different than !(x == y).
+public protocol SpatialDim: Hashable, Comparable {
+  var dims: [Int] { get }
+  init(constant: Int)
+  init(dims: [Int])
 
-    public init(_ fn: @escaping (Int, Int, Int, Int) -> T) {
+  static func + (lhs: Self, rhs: Self) -> Self
+  static func - (lhs: Self, rhs: Self) -> Self
+  static func * (lhs: Self, rhs: Self) -> Self
+  static func / (lhs: Self, rhs: Self) -> Self
+  static func % (lhs: Self, rhs: Self) -> Self
+
+  /// This implements the dot product.
+  static func &* (lhs: Self, rhs: Self) -> Int
+
+  /// Treat self as a size, and return the coordinates within a rectangle
+  /// of this size, in first-major (e.g. row-major) order.
+  func coordsInRect() -> [Self]
+}
+
+public struct SpatialDim2D: SpatialDim {
+  let x: Int
+  let y: Int
+
+  public var dims: [Int] { [y, x] }
+
+  public init(x: Int, y: Int) {
+    self.x = x
+    self.y = y
+  }
+
+  public init(constant: Int) {
+    x = constant
+    y = constant
+  }
+
+  public init(dims: [Int]) {
+    assert(dims.count == 2)
+    y = dims[0]
+    x = dims[1]
+  }
+
+  public static func + (lhs: Self, rhs: Self) -> Self {
+    Self(x: lhs.x + rhs.x, y: lhs.y + rhs.y)
+  }
+
+  public static func - (lhs: Self, rhs: Self) -> Self {
+    Self(x: lhs.x - rhs.x, y: lhs.y - rhs.y)
+  }
+
+  public static func * (lhs: Self, rhs: Self) -> Self {
+    Self(x: lhs.x * rhs.x, y: lhs.y * rhs.y)
+  }
+
+  public static func / (lhs: Self, rhs: Self) -> Self {
+    Self(x: lhs.x / rhs.x, y: lhs.y / rhs.y)
+  }
+
+  public static func % (lhs: Self, rhs: Self) -> Self {
+    Self(x: lhs.x % rhs.x, y: lhs.y % rhs.y)
+  }
+
+  public static func &* (lhs: Self, rhs: Self) -> Int {
+    return lhs.x * rhs.x + lhs.y * rhs.y
+  }
+
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.x == rhs.x && lhs.y == rhs.y
+  }
+
+  public static func >= (lhs: Self, rhs: Self) -> Bool {
+    lhs.x >= rhs.x && lhs.y >= rhs.y
+  }
+
+  public static func <= (lhs: Self, rhs: Self) -> Bool {
+    lhs.x <= rhs.x && lhs.y <= rhs.y
+  }
+
+  public static func < (lhs: Self, rhs: Self) -> Bool {
+    lhs.x < rhs.x && lhs.y < rhs.y
+  }
+
+  public static func > (lhs: Self, rhs: Self) -> Bool {
+    lhs.x > rhs.x && lhs.y > rhs.y
+  }
+
+  public func coordsInRect() -> [Self] {
+    (0..<y).flatMap { i in (0..<x).map { j in Self(x: j, y: i) } }
+  }
+}
+
+public struct ConvConfig<Dim: SpatialDim>: Hashable {
+  public typealias Dim = Dim
+
+  struct LazyTensor<T: NumericTensorElement> {
+    let shape: (Int, Int, Dim)
+    let fn: (Int, Int, Dim) -> T
+
+    static func strides(shape: (Int, Int, Dim), channelsLast: Bool) -> (Int, Int, Dim) {
+      let dimMult = channelsLast ? shape.1 : 1
+      let spatialStride = Array(
+        (1...shape.2.dims.count).map({ shape.2.dims[$0...].product() * dimMult }))
+      let dimStride = Dim(dims: spatialStride)
+      let channelStride = channelsLast ? 1 : shape.2.dims.product()
+      let batchStride = shape.1 * shape.2.dims.product()
+      return (batchStride, channelStride, dimStride)
+    }
+
+    public init(shape: (Int, Int, Dim), _ fn: @escaping (Int, Int, Dim) -> T) {
+      self.shape = shape
       self.fn = fn
     }
 
-    public init(from arr: [T], shape: [Int]) {
-      let strides = (shape[1...].product(), shape[2...].product(), shape[3])
-      self.init({ i, j, k, l in
-        assert(i >= 0 && i < shape[0])
-        assert(j >= 0 && j < shape[1])
-        assert(k >= 0 && k < shape[2])
-        assert(l >= 0 && l < shape[3])
-        return arr[i * strides.0 + j * strides.1 + k * strides.2 + l]
-      })
+    public init(from arr: [T], shape: [Int], channelsLast: Bool) {
+      assert(arr.count == shape.product())
+      let s =
+        channelsLast
+        ? (shape[0], shape[shape.count - 1], Dim(dims: Array(shape[1..<(shape.count - 1)])))
+        : (shape[0], shape[1], Dim(dims: Array(shape[2...])))
+      let (batchStride, channelStride, dimStride) = LazyTensor<T>.strides(
+        shape: s, channelsLast: channelsLast)
+      self.init(shape: s) { i, j, k in
+        assert(i >= 0 && i < s.0)
+        assert(j >= 0 && j < s.1)
+        assert(k >= Dim(constant: 0) && k < s.2, "\(k) out of bounds with size \(s.2)")
+        return arr[i * batchStride + j * channelStride + (k &* dimStride)]
+      }
     }
 
-    public func callAsFunction(_ i: Int, _ j: Int, _ k: Int, _ l: Int) -> T {
-      fn(i, j, k, l)
+    public func callAsFunction(_ i: Int, _ j: Int, _ k: Dim) -> T {
+      fn(i, j, k)
     }
 
-    public func nchwToNHWC() -> TensorGetter<T> {
-      return TensorGetter({ n, h, w, c in fn(n, c, h, w) })
-    }
-
-    public func nhwcToNCHW() -> TensorGetter<T> {
-      return TensorGetter({ n, c, h, w in fn(n, h, w, c) })
-    }
-
-    public func toArray(shape: [Int]) -> [T] {
-      var result = [T](repeating: T(0.0), count: shape.product())
-      var idx = 0
-      for i in 0..<shape[0] {
-        for j in 0..<shape[1] {
-          for k in 0..<shape[2] {
-            for l in 0..<shape[3] {
-              result[idx] = fn(i, j, k, l)
-              idx += 1
-            }
+    public func toArray(channelsLast: Bool) -> [T] {
+      let (batchStride, channelStride, dimStride) = LazyTensor<T>.strides(
+        shape: shape, channelsLast: channelsLast)
+      let coords = shape.2.coordsInRect()
+      var result = [T](repeating: T(0.0), count: shape.0 * shape.1 * shape.2.dims.product())
+      for batchIdx in 0..<shape.0 {
+        for ch in 0..<shape.1 {
+          for dim in coords {
+            result[batchIdx * batchStride + ch * channelStride + (dim &* dimStride)] = fn(
+              batchIdx, ch, dim)
           }
         }
       }
@@ -50,206 +161,199 @@ public struct Conv2DConfig: Hashable {
     }
   }
 
-  public struct HWCSize: Hashable {
-    public let h: Int
-    public let w: Int
-    public let c: Int
+  public struct Padding: Hashable {
+    public let before: Dim
+    public let after: Dim
   }
 
-  public struct HWSize: Hashable {
-    public let h: Int
-    public let w: Int
+  public let inChannels: Int
+  public let outChannels: Int
+  public let kernelSize: Dim
+  public let imageSize: Dim
+  public let stride: Dim
+  public let dilation: Dim
+  public let padding: Padding
+  public let groups: Int
+  public let channelsLast: Bool
+
+  public var outSize: Dim {
+    let one: Dim = Dim(constant: 1)
+    // Parentheses seem to make this expression compile faster.
+    return
+      ((((imageSize + padding.before) + padding.after) - ((kernelSize - one) * dilation))
+      + (stride - one)) / stride
   }
 
-  public struct AxisPadding: Hashable {
-    public let before: Int
-    public let after: Int
-  }
-
-  public var kernelSize: HWCSize
-  public var imageSize: HWCSize
-  public var stride: HWSize
-  public var dilation: HWSize
-  public var paddingH: AxisPadding
-  public var paddingW: AxisPadding
-  public var groups: Int
-  public var channelsLast: Bool
-
-  public func outputShape() throws -> HWCSize {
-    if kernelSize.c % groups != 0 {
-      throw Conv2DError.invalidGroups(
-        "kernel channels \(kernelSize.c) is not divisible by groups \(groups)")
+  public init(
+    inChannels: Int,
+    outChannels: Int,
+    kernelSize: Dim,
+    imageSize: Dim,
+    stride: Dim,
+    dilation: Dim,
+    padding: Padding,
+    groups: Int,
+    channelsLast: Bool
+  ) throws {
+    if inChannels % groups != 0 {
+      throw ConvConfigError.invalidGroups(
+        "groups \(groups) must divide input channels \(inChannels)")
+    } else if outChannels % groups != 0 {
+      throw ConvConfigError.invalidGroups(
+        "groups \(groups) must divide output channels \(outChannels)")
     }
-    if imageSize.c % groups != 0 {
-      throw Conv2DError.invalidGroups(
-        "image channels \(imageSize.c) is not divisible by groups \(groups)")
-    }
-    let outHeight =
-      (imageSize.h + paddingH.before + paddingH.after - dilation.h * (kernelSize.h - 1) + stride.h
-        - 1)
-      / stride.h
-    let outWidth =
-      (imageSize.w + paddingW.before + paddingW.after - dilation.w * (kernelSize.w - 1) + stride.w
-        - 1)
-      / stride.w
-    return HWCSize(h: outHeight, w: outWidth, c: kernelSize.c)
+    self.inChannels = inChannels
+    self.outChannels = outChannels
+    self.kernelSize = kernelSize
+    self.imageSize = imageSize
+    self.stride = stride
+    self.dilation = dilation
+    self.padding = padding
+    self.groups = groups
+    self.channelsLast = channelsLast
   }
 
-  public func kernelTensorShape() throws -> [Int] {
-    if imageSize.c % groups != 0 {
-      throw Conv2DError.invalidGroups(
-        "groups \(groups) does not divide image channels \(imageSize.c)")
-    }
-    return [kernelSize.c, imageSize.c / groups, kernelSize.h, kernelSize.w]
+  public static func samePadding(kernelSize: Dim, dilation: Dim = Dim(constant: 1))
+    -> Padding
+  {
+    let effectiveKernel = kernelSize + (kernelSize - Dim(constant: 1)) * dilation
+    return Padding(
+      before: (effectiveKernel - Dim(constant: 1)) / Dim(constant: 2),
+      after: effectiveKernel / Dim(constant: 2))
+  }
+
+  internal func imageShape(batch: Int) -> (Int, Int, Dim) {
+    (batch, inChannels, imageSize)
+  }
+
+  internal func outShape(batch: Int) -> (Int, Int, Dim) {
+    (batch, outChannels, outSize)
+  }
+
+  public func kernelTensorShape() -> [Int] {
+    return [outChannels, inChannels / groups] + kernelSize.dims
   }
 
   public func imageTensorShape(batch: Int) -> [Int] {
     if channelsLast {
-      [batch, imageSize.h, imageSize.w, imageSize.c]
+      [batch] + imageSize.dims + [inChannels]
     } else {
-      [batch, imageSize.c, imageSize.h, imageSize.w]
+      [batch, inChannels] + imageSize.dims
     }
   }
 
-  public func outputTensorShape(batch: Int) throws -> [Int] {
-    let o = try outputShape()
+  public func outputTensorShape(batch: Int) -> [Int] {
     if channelsLast {
-      return [batch, o.h, o.w, o.c]
+      return [batch] + outSize.dims + [outChannels]
     } else {
-      return [batch, o.c, o.h, o.w]
+      return [batch, outChannels] + outSize.dims
     }
   }
 
-  internal func paddedNCHWInput<T>(_ nhwcImage: TensorGetter<T>) -> TensorGetter<T> {
-    TensorGetter { b, y, x, c in
-      assert(c >= 0 && c < imageSize.c)
-      let y = y - paddingH.before
-      let x = x - paddingW.before
-      if y < 0 || y >= imageSize.h || x < 0 || x >= imageSize.w {
+  func lazy<T: TensorElement>(from: [T], shape: [Int]) -> LazyTensor<T> {
+    return LazyTensor(from: from, shape: shape, channelsLast: channelsLast)
+  }
+
+  func array<T>(from: LazyTensor<T>) -> [T] {
+    return from.toArray(channelsLast: channelsLast)
+  }
+
+  private func paddedInput<T>(_ rawInput: LazyTensor<T>) -> LazyTensor<T> {
+    LazyTensor(
+      shape: (rawInput.shape.0, rawInput.shape.1, rawInput.shape.2 + padding.before + padding.after)
+    ) { b, c, x in
+      let newX = x - padding.before
+      if !(newX >= Dim(constant: 0)) || !(newX < imageSize) {
         return T(0.0)
       } else {
-        return nhwcImage(b, y, x, c)
+        return rawInput(b, c, newX)
       }
     }
   }
 
-  /// Create a lazy output of the convolution.
-  ///
-  /// Kernel is always [n_out, n_in/groups, kernel_height, kernel_width]
-  public func lazyForward<T: NumericTensorElement>(
-    batch: Int, image: TensorGetter<T>, kernel: TensorGetter<T>
-  ) throws -> TensorGetter<T> {
-    let nhwcImage = channelsLast ? image : image.nchwToNHWC()
-    let paddedImage = paddedNCHWInput(nhwcImage)
-
-    let o = try outputShape()
-    let nhwcResult = TensorGetter { (b: Int, y: Int, x: Int, c: Int) in
-      assert(y >= 0 && y < o.h, "y \(y) out of out of range [0, \(o.h))")
-      assert(x >= 0 && x < o.w, "x \(x) out of out of range [0, \(o.w))")
-      assert(c >= 0 && c < o.c, "c \(c) out of out of range [0, \(o.c))")
-
-      let inGroupSize = imageSize.c / groups
-      let outGroupSize = o.c / groups
+  func lazyForward<T: NumericTensorElement>(image: LazyTensor<T>, kernel: LazyTensor<T>)
+    -> LazyTensor<T>
+  {
+    let paddedImage = paddedInput(image)
+    let coords = kernelSize.coordsInRect()
+    return LazyTensor(shape: outShape(batch: image.shape.0)) { (b: Int, c: Int, x: Dim) in
+      let inGroupSize = inChannels / groups
+      let outGroupSize = outChannels / groups
       let groupIdx = c / outGroupSize
 
       var sum = T(0.0)
-      for kernelY in 0..<kernelSize.h {
-        let imageY = y * stride.h + kernelY * dilation.h
-        for kernelX in 0..<kernelSize.w {
-          let imageX = x * stride.w + kernelX * dilation.w
-          for inC in 0..<inGroupSize {
-            let imageVal = paddedImage(b, imageY, imageX, inC + inGroupSize * groupIdx)
-            let kernelVal = kernel(c, inC, kernelY, kernelX)
-            sum = sum + imageVal * kernelVal
-          }
+      for kernelX in coords {
+        let imageX = x * stride + kernelX * dilation
+        for inC in 0..<inGroupSize {
+          let imageVal = paddedImage(b, inC + inGroupSize * groupIdx, imageX)
+          let kernelVal = kernel(c, inC, kernelX)
+          sum = sum + imageVal * kernelVal
         }
       }
       return sum
     }
-    return channelsLast ? nhwcResult : nhwcResult.nhwcToNCHW()
   }
 
-  public func lazyTranspose<T: NumericTensorElement>(
-    batch: Int, image: TensorGetter<T>, kernel: TensorGetter<T>
-  ) throws -> TensorGetter<T> {
-    let nhwcImage = channelsLast ? image : image.nchwToNHWC()
-
-    let o = try outputShape()
-    let nhwcResult = TensorGetter { (b: Int, y: Int, x: Int, c: Int) in
-      assert(y >= 0 && y < imageSize.h, "y \(y) out of out of range [0, \(imageSize.h))")
-      assert(x >= 0 && x < imageSize.w, "x \(x) out of out of range [0, \(imageSize.w))")
-      assert(c >= 0 && c < imageSize.c, "c \(c) out of out of range [0, \(imageSize.c))")
-
-      let inGroupSize = imageSize.c / groups
-      let outGroupSize = o.c / groups
+  func lazyTranspose<T: NumericTensorElement>(image: LazyTensor<T>, kernel: LazyTensor<T>)
+    -> LazyTensor<T>
+  {
+    let o = outShape(batch: image.shape.0)
+    let coords = kernelSize.coordsInRect()
+    let imgShape = imageShape(batch: image.shape.0)
+    return LazyTensor(shape: imgShape) { (b: Int, c: Int, x: Dim) in
+      let inGroupSize = inChannels / groups
+      let outGroupSize = outChannels / groups
       let groupIdx = c / inGroupSize
 
       var sum = T(0.0)
-      for kernelY in 0..<kernelSize.h {
-        guard let sourceY = exactDiv(y + paddingH.before - kernelY * dilation.h, stride.h) else {
+      for kernelX in coords {
+        let multOffset: Dim = (x + padding.before) - (kernelX * dilation)
+        if !((multOffset % stride) == Dim(constant: 0)) {
           continue
         }
-        if sourceY < 0 || sourceY >= o.h {
+        let sourceX = multOffset / stride
+        if !(sourceX >= Dim(constant: 0)) || !(sourceX < o.2) {
           continue
         }
-        for kernelX in 0..<kernelSize.w {
-          guard let sourceX = exactDiv(x + paddingW.before - kernelX * dilation.w, stride.w) else {
-            continue
-          }
-          if sourceX < 0 || sourceX >= o.w {
-            continue
-          }
-          for sourceC in 0..<outGroupSize {
-            let imageVal = nhwcImage(b, sourceY, sourceX, sourceC + outGroupSize * groupIdx)
-            let kernelVal = kernel(
-              sourceC + outGroupSize * groupIdx, c % inGroupSize, kernelY, kernelX)
-            sum = sum + imageVal * kernelVal
-          }
+        for sourceC in 0..<outGroupSize {
+          let imageVal = image(b, sourceC + outGroupSize * groupIdx, sourceX)
+          let kernelVal = kernel(
+            sourceC + outGroupSize * groupIdx, c % inGroupSize, kernelX)
+          sum = sum + imageVal * kernelVal
         }
       }
       return sum
     }
-    return channelsLast ? nhwcResult : nhwcResult.nhwcToNCHW()
   }
 
-  public func lazyKernelGrad<T: NumericTensorElement>(
-    batch: Int, image: TensorGetter<T>, outGrad: TensorGetter<T>
-  ) throws -> TensorGetter<T> {
-    let (nhwcImage, nhwcOutGrad) =
-      if channelsLast {
-        (image, outGrad)
-      } else {
-        (image.nchwToNHWC(), outGrad.nchwToNHWC())
-      }
-    let paddedImage = paddedNCHWInput(nhwcImage)
+  func lazyKernelGrad<T: NumericTensorElement>(image: LazyTensor<T>, outGrad: LazyTensor<T>)
+    -> LazyTensor<T>
+  {
+    let paddedImage = paddedInput(image)
 
-    let o = try outputShape()
-    return TensorGetter { (cOut: Int, cIn: Int, kernelY: Int, kernelX: Int) in
-      assert(cOut >= 0 && cOut < kernelSize.c)
-      assert(cIn >= 0 && cIn < imageSize.c / groups)
-      assert(kernelY >= 0 && kernelY < kernelSize.h)
-      assert(kernelX >= 0 && kernelX < kernelSize.w)
-
-      let outGroupSize = o.c / groups
-      let inGroupSize = imageSize.c / groups
+    let kernelShape = (outChannels, inChannels / groups, kernelSize)
+    let outShape = outShape(batch: image.shape.0)
+    let coords = outShape.2.coordsInRect()
+    return LazyTensor(shape: kernelShape) { (cOut: Int, cIn: Int, kernelX: Dim) in
+      let outGroupSize = outChannels / groups
+      let inGroupSize = inChannels / groups
       let groupIdx = cOut / outGroupSize
 
       var sum = T(0.0)
-      for batchIdx in 0..<batch {
-        for outY in 0..<o.h {
-          let imageY = outY * stride.h + kernelY * dilation.h
-          for outX in 0..<o.w {
-            let imageX = outX * stride.w + kernelX * dilation.w
-            sum =
-              sum + paddedImage(batchIdx, imageY, imageX, cIn + groupIdx * inGroupSize)
-              * nhwcOutGrad(batchIdx, outY, outX, cOut)
-          }
+      for batchIdx in 0..<image.shape.0 {
+        for outX in coords {
+          let imageX = outX * stride + kernelX * dilation
+          sum =
+            sum + paddedImage(batchIdx, cIn + groupIdx * inGroupSize, imageX)
+            * outGrad(batchIdx, cOut, outX)
         }
       }
       return sum
     }
   }
 }
+
+public typealias Conv2DConfig = ConvConfig<SpatialDim2D>
 
 extension Tensor {
   public static func conv2d(_ conv: Conv2DConfig, image: Tensor, kernel: Tensor) -> Tensor {
@@ -264,14 +368,10 @@ extension Tensor {
       image.shape == expectedImageShape,
       "invalid image shape \(image.shape), expected \(expectedImageShape)")
 
-    let outShape: [Int]
-    do {
-      outShape = try conv.outputTensorShape(batch: image.shape[0])
-      let kernelShape = try conv.kernelTensorShape()
-      alwaysAssert(kernel.shape == kernelShape)
-    } catch {
-      fatalError("\(error)")
-    }
+    let outShape = conv.outputTensorShape(batch: image.shape[0])
+    let kernelShape = conv.kernelTensorShape()
+    alwaysAssert(kernel.shape == kernelShape)
+
     let backend = Backend.current
     let newData = Task {
       try await backend.conv2d(
@@ -302,22 +402,16 @@ extension Tensor {
     alwaysAssert(image.shape.count == 4, "invalid image shape: \(image.shape)")
     alwaysAssert(kernel.shape.count == 4, "invalid image shape: \(kernel.shape)")
     alwaysAssert(
-      kernel.shape == [
-        conv.kernelSize.c, conv.imageSize.c / conv.groups, conv.kernelSize.h, conv.kernelSize.w,
-      ],
+      kernel.shape == conv.kernelTensorShape(),
       "invalid kernel shape \(kernel.shape) for conv \(conv)")
 
     let outShape: [Int]
     let inShape: [Int]
-    do {
-      inShape = try conv.outputTensorShape(batch: image.shape[0])
-      outShape = conv.imageTensorShape(batch: image.shape[0])
-      alwaysAssert(
-        image.shape == inShape,
-        "invalid input shape for transposed conv2D: \(image.shape) (expected \(inShape))")
-    } catch {
-      fatalError("\(error)")
-    }
+    inShape = conv.outputTensorShape(batch: image.shape[0])
+    outShape = conv.imageTensorShape(batch: image.shape[0])
+    alwaysAssert(
+      image.shape == inShape,
+      "invalid input shape for transposed conv2D: \(image.shape) (expected \(inShape))")
 
     let backend = Backend.current
     let newData = Task {
@@ -328,7 +422,14 @@ extension Tensor {
     if !Tensor.isGradEnabled || (!image.needsGrad && !kernel.needsGrad) {
       return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype)
     } else {
-      fatalError("conv2dTranspose gradient is not yet implemented")
+      let imageHandle = image.saveForBackward()
+      let kernelHandle = kernel.saveForBackward()
+      return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype) { grad in
+        imageHandle.backward(backend) { conv2d(conv, image: grad, kernel: kernel.noGrad()) }
+        kernelHandle.backward(backend) {
+          conv2dKernelGrad(conv, image: grad, outGrad: image.noGrad())
+        }
+      }
     }
   }
 
@@ -340,26 +441,15 @@ extension Tensor {
       "image and outGrad dtypes differ: \(image.dtype) vs \(outGrad.dtype)")
     alwaysAssert(image.shape.count == 4, "invalid image shape: \(image.shape)")
     alwaysAssert(outGrad.shape.count == 4, "invalid outGrad shape: \(outGrad.shape)")
-    if conv.channelsLast {
-      alwaysAssert(
-        image.shape[1...] == [conv.imageSize.h, conv.imageSize.w, conv.imageSize.c],
-        "invalid image shape \(image.shape) for conv \(conv)")
-    } else {
-      alwaysAssert(
-        image.shape[1...] == [conv.imageSize.c, conv.imageSize.h, conv.imageSize.w],
-        "invalid image shape \(image.shape) for conv \(conv)")
-    }
+    alwaysAssert(
+      image.shape == conv.imageTensorShape(batch: image.shape[0]),
+      "invalid image shape \(image.shape) for conv \(conv)")
 
-    let kernelShape: [Int]
-    do {
-      kernelShape = try conv.kernelTensorShape()
-      let outShape = try conv.outputTensorShape(batch: image.shape[0])
-      alwaysAssert(
-        outGrad.shape == outShape, "unexpected outGrad shape \(outGrad.shape), expected \(outShape)"
-      )
-    } catch {
-      fatalError("failed to compute output shape for conv: \(conv): \(error)")
-    }
+    let kernelShape = conv.kernelTensorShape()
+    let outShape = conv.outputTensorShape(batch: image.shape[0])
+    alwaysAssert(
+      outGrad.shape == outShape, "unexpected outGrad shape \(outGrad.shape), expected \(outShape)"
+    )
 
     let backend = Backend.current
     let newData = Task {
