@@ -125,6 +125,49 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testMod() async throws {
+    try await runInBackends {
+      func testSimple(
+        _ x: Int, _ y: Int, _ out: Int, file: StaticString = #filePath,
+        line: UInt = #line
+      ) async throws {
+        for dtype: Tensor.DType in [.float32, .float16, .int64] {
+          try await assertDataEqual(
+            Tensor(data: [x], shape: [1], dtype: dtype)
+              % Tensor(data: [y], shape: [1], dtype: dtype), [Float(out)], file: file,
+            line: line)
+        }
+      }
+      try await testSimple(15, 4, 3)
+      try await testSimple(15, -4, -1)
+      try await testSimple(-15, -4, -3)
+      try await testSimple(-15, 4, 1)
+
+      let x = Tensor(data: [0.5, 2.0, 5.0, 5.0, 0.0, -0.5, -0.5], shape: [7], dtype: .float32)
+      let y = Tensor(data: [-1.0, -2.0, 1.5, 2.0, 3.0, 2.0, -2.0], shape: [7], dtype: .float32)
+      try await assertDataEqual(Tensor(data: [3], shape: [1]) % Tensor(data: [2], shape: [1]), [1])
+
+      try await assertDataEqual(x % y, [-0.5, 0.0, 0.5, 1.0, 0.0, 1.5, -0.5])
+      try await assertDataEqual(
+        x.cast(.float16) % y.cast(.float16), [-0.5, 0.0, 0.5, 1.0, 0.0, 1.5, -0.5])
+      try await assertDataEqual(
+        x.cast(.int64) % y.cast(.int64), [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+      try await assertDataEqual(x % 2, [0.5, 0.0, 1.0, 1.0, 0.0, 1.5, 1.5])
+      try await assertDataEqual(x.cast(.float16) % 2, [0.5, 0.0, 1.0, 1.0, 0.0, 1.5, 1.5])
+      try await assertDataEqual(x.cast(.int64) % 2, [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+      try await assertDataEqual(7.5 % y, [-0.5, -0.5, 0.0, 1.5, 1.5, 1.5, -0.5])
+      try await assertDataEqual(7.5 % y.cast(.float16), [-0.5, -0.5, 0.0, 1.5, 1.5, 1.5, -0.5])
+      try await assertDataEqual(7 % y.cast(.int64), [0, -1, 0, 1, 1, 1, -1])
+
+      var xGrad: Tensor?
+      var yGrad: Tensor?
+      let modded = (x.onGrad { g in xGrad = g }) % (y.onGrad { g in yGrad = g })
+      modded.backward(Tensor(data: [-1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], shape: [7]))
+      try await assertClose(xGrad!, [-1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
+      try await assertClose(yGrad!, [0.0, -2.0, -0, -0, -5.0, -0, -0])
+    }
+  }
+
   func testMulGrad() async throws {
     let x = Tensor(data: [1.0, 2.0, 0.0], shape: [3], dtype: .float32)
     let y = Tensor(data: [-1.0, 2.0, -3.0], shape: [3], dtype: .float32)

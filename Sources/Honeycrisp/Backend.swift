@@ -434,7 +434,7 @@ open class CPUBackend: Backend {
     func apply<T: NumericTensorElement>(_: T.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        if dtype == .float32 && (op == .add || op == .mul) {
+        if dtype == .float32 && (op != .mod) {
           let x = UnsafePointer<Float>(
             a.buffer.contents().bindMemory(to: Float.self, capacity: count))
           let y = UnsafePointer<Float>(
@@ -442,13 +442,15 @@ open class CPUBackend: Backend {
           let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
           switch op {
           case .add:
-            vDSP_vadd(x, 1, y, 1, z, 1, vDSP_Length(count))
+            vDSP_vadd(y, 1, x, 1, z, 1, vDSP_Length(count))
           case .mul:
-            vDSP_vmul(x, 1, y, 1, z, 1, vDSP_Length(count))
+            vDSP_vmul(y, 1, x, 1, z, 1, vDSP_Length(count))
           case .div:
-            vDSP_vdiv(x, 1, y, 1, z, 1, vDSP_Length(count))
+            vDSP_vdiv(y, 1, x, 1, z, 1, vDSP_Length(count))
           case .sub:
-            vDSP_vsub(x, 1, y, 1, z, 1, vDSP_Length(count))
+            vDSP_vsub(y, 1, x, 1, z, 1, vDSP_Length(count))
+          case .mod:
+            fatalError()
           }
         } else {
           var aData = [T](repeating: T(0.0), count: count)
@@ -479,7 +481,7 @@ open class CPUBackend: Backend {
     func apply<T1: NumericTensorElement>(_ b: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        if dtype == .float32 && (op == .add || op == .mul) {
+        if dtype == .float32 && (op != .mod) {
           let x = UnsafePointer<Float>(
             a.buffer.contents().bindMemory(to: Float.self, capacity: count))
           var bScalar =
@@ -487,6 +489,7 @@ open class CPUBackend: Backend {
             case .add, .mul: b.toFloat()
             case .div: 1 / b.toFloat()
             case .sub: -b.toFloat()
+            case .mod: fatalError()
             }
           let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
           switch op {
@@ -494,6 +497,8 @@ open class CPUBackend: Backend {
             vDSP_vsadd(x, 1, &bScalar, z, 1, vDSP_Length(count))
           case .mul, .div:
             vDSP_vsmul(x, 1, &bScalar, z, 1, vDSP_Length(count))
+          case .mod:
+            fatalError()
           }
         } else {
           var aData = [T1](repeating: T1(0.0), count: count)
@@ -521,7 +526,7 @@ open class CPUBackend: Backend {
     func apply<T1: NumericTensorElement>(_ a: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        if dtype == .float32 && (op == .add || op == .mul) {
+        if dtype == .float32 && (op != .mod) {
           let x = UnsafePointer<Float>(
             b.buffer.contents().bindMemory(to: Float.self, capacity: count))
           var aFloat = a.toFloat()
@@ -536,6 +541,8 @@ open class CPUBackend: Backend {
             vDSP_svdiv(&aFloat, x, 1, z, 1, vDSP_Length(count))
           case .sub:
             vDSP_vsmsa(x, 1, &neg1, &aFloat, z, 1, vDSP_Length(count))
+          case .mod:
+            fatalError()
           }
         } else {
           var bData = [T1](repeating: T1(0.0), count: count)

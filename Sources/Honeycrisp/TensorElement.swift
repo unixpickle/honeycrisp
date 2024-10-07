@@ -29,6 +29,7 @@ public protocol NumericTensorElement: TensorElement {
   prefix static func - (t: Self) -> Self
   static func - (lhs: Self, rhs: Self) -> Self
   static func / (lhs: Self, rhs: Self) -> Self
+  static func modulus(_ lhs: Self, _ rhs: Self) -> Self
 }
 
 extension Double: NumericTensorElement {
@@ -47,6 +48,16 @@ extension Double: NumericTensorElement {
 
   public func pow<T: TensorElement>(_ exponent: T) -> Double {
     return Foundation.pow(self, Double(exponent.toFloat()))
+  }
+
+  public static func modulus(_ lhs: Self, _ rhs: Self) -> Self {
+    if rhs < 0 {
+      -modulus(-lhs, -rhs)
+    } else if lhs < 0 {
+      fmod(rhs - fmod(rhs - lhs, rhs), rhs)
+    } else {
+      fmod(lhs, rhs)
+    }
   }
 }
 
@@ -67,6 +78,16 @@ extension Int: NumericTensorElement {
   public func pow<T: TensorElement>(_ exponent: T) -> Int {
     return Int(Foundation.pow(Double(self), Double(exponent.toFloat())))
   }
+
+  public static func modulus(_ lhs: Self, _ rhs: Self) -> Self {
+    if rhs < 0 {
+      -modulus(-lhs, -rhs)
+    } else if lhs < 0 {
+      (rhs - ((rhs - lhs) % rhs)) % rhs
+    } else {
+      lhs % rhs
+    }
+  }
 }
 
 extension Float: NumericTensorElement {
@@ -85,6 +106,16 @@ extension Float: NumericTensorElement {
 
   public func pow<T: TensorElement>(_ exponent: T) -> Float {
     return Foundation.pow(self, exponent.toFloat())
+  }
+
+  public static func modulus(_ lhs: Self, _ rhs: Self) -> Self {
+    if rhs < 0 {
+      -modulus(-lhs, -rhs)
+    } else if lhs < 0 {
+      fmod(rhs - fmod(rhs - lhs, rhs), rhs)
+    } else {
+      fmod(lhs, rhs)
+    }
   }
 }
 
@@ -143,6 +174,16 @@ extension Int64: NumericTensorElement {
 
   public func pow<T: TensorElement>(_ exponent: T) -> Int64 {
     return Int64(Foundation.pow(Double(self), Double(exponent.toFloat())))
+  }
+
+  public static func modulus(_ lhs: Self, _ rhs: Self) -> Self {
+    if rhs < 0 {
+      -modulus(-lhs, -rhs)
+    } else if lhs < 0 {
+      (rhs - ((rhs - lhs) % rhs)) % rhs
+    } else {
+      lhs % rhs
+    }
   }
 }
 

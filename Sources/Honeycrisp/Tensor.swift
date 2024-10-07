@@ -585,6 +585,73 @@ public final class Tensor {
     }
   }
 
+  public static func % <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+    alwaysAssert(
+      lhs.dtype.canUseScalarType(T.self),
+      "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
+    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with % operator")
+    let backend = Backend.current
+    let newData = Task {
+      try await backend.binaryOp(
+        try await lhs.data, rhs, op: .mod, count: lhs.shape.product(), dtype: lhs.dtype)
+    }
+    if !lhs.needsGrad || !Tensor.isGradEnabled {
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+    } else {
+      let lhsHandle = lhs.saveForBackward()
+      return Tensor(
+        dataTask: newData, shape: lhs.shape, dtype: lhs.dtype
+      ) { grad in
+        lhsHandle.backward(backend) { grad }
+      }
+    }
+  }
+
+  public static func % <T: NumericTensorElement>(lhs: T, rhs: Tensor) -> Tensor {
+    alwaysAssert(
+      rhs.dtype.canUseScalarType(T.self),
+      "scalar type \(T.self) cannot be used with dtype \(rhs.dtype)")
+    let backend = Backend.current
+    let newData = Task {
+      try await backend.binaryOp(
+        lhs, try await rhs.data, op: .mod, count: rhs.shape.product(), dtype: rhs.dtype)
+    }
+    if !rhs.needsGrad || !Tensor.isGradEnabled {
+      return Tensor(dataTask: newData, shape: rhs.shape, dtype: rhs.dtype)
+    } else {
+      let rhsHandle = rhs.saveForBackward()
+      return Tensor(dataTask: newData, shape: rhs.shape, dtype: rhs.dtype) { grad in
+        rhsHandle.backward(backend) { -grad * (lhs % rhs.noGrad() == 0).cast(as: grad) }
+      }
+    }
+  }
+
+  public static func % (lhs: Tensor, rhs: Tensor) -> Tensor {
+    alwaysAssert(
+      lhs.shape == rhs.shape,
+      "shape mismatch for - operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
+    )
+    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
+    alwaysAssert(
+      lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+    let backend = Backend.current
+    let newData = Task {
+      try await backend.binaryOp(
+        try await lhs.data, try await rhs.data, op: .mod, count: lhs.shape.product(),
+        dtype: lhs.dtype)
+    }
+    if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+    } else {
+      let lhsHandle = lhs.saveForBackward()
+      let rhsHandle = rhs.saveForBackward()
+      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
+        lhsHandle.backward(backend) { grad }
+        rhsHandle.backward(backend) { -grad * (lhs.noGrad() % rhs.noGrad() == 0).cast(as: grad) }
+      }
+    }
+  }
+
   public func pow<T: NumericTensorElement>(_ exponent: T) -> Tensor {
     alwaysAssert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
     let backend = Backend.current

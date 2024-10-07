@@ -178,7 +178,7 @@ open class MPSBackend: CPUBackend {
         }
       }
     }
-    for op in ["add", "sub", "mul", "div"] {
+    for op in ["add", "sub", "mul", "div", "mod"] {
       for type in ["fp16", "fp32"] {
         for args in ["vv", "sv", "vs"] {
           names.append("\(op)\(args)_\(type)")
@@ -318,6 +318,8 @@ open class MPSBackend: CPUBackend {
         "sub"
       case .div:
         "div"
+      case .mod:
+        "mod"
       }
     let functionName = "\(opName)vv_\(dtype == .float16 ? "fp16" : "fp32")"
     let output = try await allocate(length: count * dtype.byteSize)
@@ -361,6 +363,8 @@ open class MPSBackend: CPUBackend {
         "sub"
       case .div:
         "div"
+      case .mod:
+        "mod"
       }
     let functionName = "\(opName)vs_\(dtype == .float16 ? "fp16" : "fp32")"
     let output = try await allocate(length: count * dtype.byteSize)
@@ -404,6 +408,8 @@ open class MPSBackend: CPUBackend {
         "sub"
       case .div:
         "div"
+      case .mod:
+        "mod"
       }
     let functionName = "\(opName)sv_\(dtype == .float16 ? "fp16" : "fp32")"
     let output = try await allocate(length: count * dtype.byteSize)
@@ -1063,14 +1069,27 @@ open class MPSBackend: CPUBackend {
           return (x < -10 ? -1 : (x > 10 ? 1 : tanh(x)));
       }
 
-      #define ELEMWISE_KERNELS(name, operator) \
+      template <typename T>
+      inline T pythonFmod(T lhs, T rhs) {
+          if (rhs < 0) {
+              return -pythonFmod(-lhs, -rhs);
+          } else if (lhs < 0) {
+              return fmod(rhs - fmod(rhs - lhs, rhs), rhs);
+          } else {
+              return fmod(lhs, rhs);
+          }
+      }
+
+      #define ELEMWISE_KERNELS(name, expr) \
           kernel void name##vv_fp16(device const half* a [[buffer(0)]], \
                                     device const half* b [[buffer(1)]], \
                                     device half* c [[buffer(2)]], \
                                     constant uint &N [[buffer(3)]], \
                                     uint id [[thread_position_in_grid]]) { \
             if (id < N) { \
-              c[id] = a[id] operator b[id]; \
+              half x = a[id]; \
+              half y = b[id]; \
+              c[id] = expr; \
             } \
           } \
           kernel void name##vv_fp32(device const float* a [[buffer(0)]], \
@@ -1079,7 +1098,9 @@ open class MPSBackend: CPUBackend {
                                     constant uint &N [[buffer(3)]], \
                                     uint id [[thread_position_in_grid]]) { \
             if (id < N) { \
-              c[id] = a[id] operator b[id]; \
+              float x = a[id]; \
+              float y = b[id]; \
+              c[id] = expr; \
             } \
           } \
           kernel void name##vs_fp16(device const half* a [[buffer(0)]], \
@@ -1088,7 +1109,9 @@ open class MPSBackend: CPUBackend {
                                     constant uint &N [[buffer(3)]], \
                                     uint id [[thread_position_in_grid]]) { \
             if (id < N) { \
-              c[id] = a[id] operator (half)b; \
+              half x = a[id]; \
+              half y = (half)b; \
+              c[id] = expr; \
             } \
           } \
           kernel void name##vs_fp32(device const float* a [[buffer(0)]], \
@@ -1097,7 +1120,9 @@ open class MPSBackend: CPUBackend {
                                     constant uint &N [[buffer(3)]], \
                                     uint id [[thread_position_in_grid]]) { \
             if (id < N) { \
-              c[id] = a[id] operator b; \
+              float x = a[id]; \
+              float y = b; \
+              c[id] = expr; \
             } \
           } \
           kernel void name##sv_fp16(device const float& a [[buffer(0)]], \
@@ -1106,7 +1131,9 @@ open class MPSBackend: CPUBackend {
                                     constant uint &N [[buffer(3)]], \
                                     uint id [[thread_position_in_grid]]) { \
             if (id < N) { \
-              c[id] = (half)a operator b[id]; \
+              half x = (half)a; \
+              half y = b[id]; \
+              c[id] = expr; \
             } \
           } \
           kernel void name##sv_fp32(device const float& a [[buffer(0)]], \
@@ -1115,14 +1142,17 @@ open class MPSBackend: CPUBackend {
                                     constant uint &N [[buffer(3)]], \
                                     uint id [[thread_position_in_grid]]) { \
             if (id < N) { \
-              c[id] = a operator b[id]; \
+              float x = a; \
+              float y = b[id]; \
+              c[id] = expr; \
             } \
           } \
 
-      ELEMWISE_KERNELS(add, +)
-      ELEMWISE_KERNELS(sub, -)
-      ELEMWISE_KERNELS(mul, *)
-      ELEMWISE_KERNELS(div, /)
+      ELEMWISE_KERNELS(add, x+y)
+      ELEMWISE_KERNELS(sub, x-y)
+      ELEMWISE_KERNELS(mul, x*y)
+      ELEMWISE_KERNELS(div, x/y)
+      ELEMWISE_KERNELS(mod, (pythonFmod(x,y)))
 
       kernel void vector_pow_fp16(device const half* input [[buffer(0)]],
                                   device half* output [[buffer(1)]],
