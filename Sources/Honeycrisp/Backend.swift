@@ -265,32 +265,60 @@ open class Backend {
     throw BackendError.notImplemented("tril")
   }
 
-  public func conv2d(
+  public func conv1D(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("conv1D")
+  }
+
+  public func conv1DTranspose(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("conv1DTranspose")
+  }
+
+  public func conv1DKernelGrad(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("conv1DKernelGrad")
+  }
+
+  public func conv2D(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented("conv2d")
+    throw BackendError.notImplemented("conv2D")
   }
 
-  public func conv2dTranspose(
+  public func conv2DTranspose(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented("conv2dTranspose")
+    throw BackendError.notImplemented("conv2DTranspose")
   }
 
-  public func conv2dKernelGrad(
+  public func conv2DKernelGrad(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented("conv2dKernelGrad")
+    throw BackendError.notImplemented("conv2DKernelGrad")
   }
 
   public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
@@ -1073,8 +1101,9 @@ open class CPUBackend: Backend {
     return Tensor.Data(backend: self, buffer: outBuf)
   }
 
-  override public func conv2d(
-    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  internal func convNd<Dim: SpatialDim>(
+    _ config: ConvConfig<Dim>, batch: Int, image: Tensor.Data, kernel: Tensor.Data,
+    dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -1096,7 +1125,7 @@ open class CPUBackend: Backend {
         try pointerToArray(kernel.buffer.contents(), output: &arrKernel, dtype: dtype)
         try pointerToArray(image.buffer.contents(), output: &arrImage, dtype: dtype)
 
-        let getKernel = Conv2DConfig.LazyTensor(
+        let getKernel = ConvConfig<Dim>.LazyTensor(
           from: arrKernel, shape: kernelShape, channelsLast: false)
         let getImage = config.lazy(from: arrImage, shape: imageShape)
         let outputFn = config.lazyForward(image: getImage, kernel: getKernel)
@@ -1113,8 +1142,9 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func conv2dTranspose(
-    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  internal func convNdTranspose<Dim: SpatialDim>(
+    _ config: ConvConfig<Dim>, batch: Int, image: Tensor.Data, kernel: Tensor.Data,
+    dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -1136,7 +1166,7 @@ open class CPUBackend: Backend {
         try pointerToArray(kernel.buffer.contents(), output: &arrKernel, dtype: dtype)
         try pointerToArray(image.buffer.contents(), output: &arrImage, dtype: dtype)
 
-        let getKernel = Conv2DConfig.LazyTensor(
+        let getKernel = ConvConfig<Dim>.LazyTensor(
           from: arrKernel, shape: kernelShape, channelsLast: false)
         let getImage = config.lazy(from: arrImage, shape: outShape)
         let outputFn = config.lazyTranspose(image: getImage, kernel: getKernel)
@@ -1153,8 +1183,8 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func conv2dKernelGrad(
-    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
+  internal func convNdKernelGrad<Dim: SpatialDim>(
+    _ config: ConvConfig<Dim>, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
     dtype: Tensor.DType
   )
     async throws
@@ -1191,6 +1221,62 @@ open class CPUBackend: Backend {
     } else {
       return try await apply(Float(0))
     }
+  }
+
+  override public func conv1D(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await convNd(config, batch: batch, image: image, kernel: kernel, dtype: dtype)
+  }
+
+  override public func conv1DTranspose(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await convNdTranspose(config, batch: batch, image: image, kernel: kernel, dtype: dtype)
+  }
+
+  override public func conv1DKernelGrad(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await convNdKernelGrad(config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
+  }
+
+  override public func conv2D(
+    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await convNd(config, batch: batch, image: image, kernel: kernel, dtype: dtype)
+  }
+
+  override public func conv2DTranspose(
+    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await convNdTranspose(config, batch: batch, image: image, kernel: kernel, dtype: dtype)
+  }
+
+  override public func conv2DKernelGrad(
+    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await convNdKernelGrad(config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
   }
 
   override public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)

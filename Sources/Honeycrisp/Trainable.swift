@@ -352,7 +352,7 @@ public class Conv2D: Trainable {
       fatalError("failed to instantiate Conv2DConfig: \(error)")
     }
 
-    var h = Tensor.conv2d(convDesc, image: x, kernel: weight)
+    var h = Tensor.conv2D(convDesc, image: x, kernel: weight)
     if let bias = bias {
       if channelsLast {
         h = h + bias.expand(as: h)

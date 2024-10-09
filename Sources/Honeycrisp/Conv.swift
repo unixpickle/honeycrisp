@@ -13,6 +13,7 @@ public enum ConvConfigError: Error {
 /// The same goes for (x != y) -- it is only true if no elements are equal.
 /// As a result, (x != y) may be different than !(x == y).
 public protocol SpatialDim: Hashable, Comparable {
+  static var dimCount: Int { get }
   var dims: [Int] { get }
   init(constant: Int)
   init(dims: [Int])
@@ -31,7 +32,78 @@ public protocol SpatialDim: Hashable, Comparable {
   func coordsInRect() -> [Self]
 }
 
+public struct SpatialDim1D: SpatialDim {
+  public static var dimCount: Int { 1 }
+
+  let x: Int
+
+  public var dims: [Int] { [x] }
+
+  public init(x: Int) {
+    self.x = x
+  }
+
+  public init(constant: Int) {
+    x = constant
+  }
+
+  public init(dims: [Int]) {
+    assert(dims.count == 1)
+    x = dims[0]
+  }
+
+  public static func + (lhs: Self, rhs: Self) -> Self {
+    Self(x: lhs.x + rhs.x)
+  }
+
+  public static func - (lhs: Self, rhs: Self) -> Self {
+    Self(x: lhs.x - rhs.x)
+  }
+
+  public static func * (lhs: Self, rhs: Self) -> Self {
+    Self(x: lhs.x * rhs.x)
+  }
+
+  public static func / (lhs: Self, rhs: Self) -> Self {
+    Self(x: lhs.x / rhs.x)
+  }
+
+  public static func % (lhs: Self, rhs: Self) -> Self {
+    Self(x: lhs.x % rhs.x)
+  }
+
+  public static func &* (lhs: Self, rhs: Self) -> Int {
+    return lhs.x * rhs.x
+  }
+
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.x == rhs.x
+  }
+
+  public static func >= (lhs: Self, rhs: Self) -> Bool {
+    lhs.x >= rhs.x
+  }
+
+  public static func <= (lhs: Self, rhs: Self) -> Bool {
+    lhs.x <= rhs.x
+  }
+
+  public static func < (lhs: Self, rhs: Self) -> Bool {
+    lhs.x < rhs.x
+  }
+
+  public static func > (lhs: Self, rhs: Self) -> Bool {
+    lhs.x > rhs.x
+  }
+
+  public func coordsInRect() -> [Self] {
+    (0..<x).map { Self(x: $0) }
+  }
+}
+
 public struct SpatialDim2D: SpatialDim {
+  public static var dimCount: Int { 2 }
+
   let x: Int
   let y: Int
 
@@ -353,15 +425,48 @@ public struct ConvConfig<Dim: SpatialDim>: Hashable {
   }
 }
 
+public typealias Conv1DConfig = ConvConfig<SpatialDim1D>
 public typealias Conv2DConfig = ConvConfig<SpatialDim2D>
 
 extension Tensor {
-  public static func conv2d(_ conv: Conv2DConfig, image: Tensor, kernel: Tensor) -> Tensor {
+  public static func conv1D(_ conv: Conv1DConfig, image: Tensor, kernel: Tensor) -> Tensor {
+    convND(conv, image: image, kernel: kernel)
+  }
+
+  public static func conv1DTranspose(_ conv: Conv1DConfig, image: Tensor, kernel: Tensor) -> Tensor
+  {
+    convNDTranspose(conv, image: image, kernel: kernel)
+  }
+
+  public static func conv1DKernelGrad(_ conv: Conv1DConfig, image: Tensor, outGrad: Tensor)
+    -> Tensor
+  {
+    convNDKernelGrad(conv, image: image, outGrad: outGrad)
+  }
+
+  public static func conv2D(_ conv: Conv2DConfig, image: Tensor, kernel: Tensor) -> Tensor {
+    convND(conv, image: image, kernel: kernel)
+  }
+
+  public static func conv2DTranspose(_ conv: Conv2DConfig, image: Tensor, kernel: Tensor) -> Tensor
+  {
+    convNDTranspose(conv, image: image, kernel: kernel)
+  }
+
+  public static func conv2DKernelGrad(_ conv: Conv2DConfig, image: Tensor, outGrad: Tensor)
+    -> Tensor
+  {
+    convNDKernelGrad(conv, image: image, outGrad: outGrad)
+  }
+
+  internal static func convND<Dim: SpatialDim>(
+    _ conv: ConvConfig<Dim>, image: Tensor, kernel: Tensor
+  ) -> Tensor {
     alwaysAssert(
       image.dtype == kernel.dtype,
       "image and kernel dtypes differ: \(image.dtype) vs \(kernel.dtype)")
-    alwaysAssert(image.shape.count == 4, "invalid image shape: \(image.shape)")
-    alwaysAssert(kernel.shape.count == 4, "invalid kernel shape: \(kernel.shape)")
+    alwaysAssert(image.shape.count == 2 + Dim.dimCount, "invalid image shape: \(image.shape)")
+    alwaysAssert(kernel.shape.count == 2 + Dim.dimCount, "invalid kernel shape: \(kernel.shape)")
 
     let expectedImageShape = conv.imageTensorShape(batch: image.shape[0])
     alwaysAssert(
@@ -374,9 +479,20 @@ extension Tensor {
 
     let backend = Backend.current
     let newData = Task {
-      try await backend.conv2d(
-        conv, batch: image.shape[0], image: try await image.data, kernel: try await kernel.data,
-        dtype: image.dtype)
+      switch Dim.dimCount {
+      case 1:
+        try await backend.conv1D(
+          conv as! Conv1DConfig, batch: image.shape[0], image: try await image.data,
+          kernel: try await kernel.data,
+          dtype: image.dtype)
+      case 2:
+        try await backend.conv2D(
+          conv as! Conv2DConfig, batch: image.shape[0], image: try await image.data,
+          kernel: try await kernel.data,
+          dtype: image.dtype)
+      default:
+        fatalError()
+      }
     }
     if !Tensor.isGradEnabled || (!image.needsGrad && !kernel.needsGrad) {
       return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype)
@@ -385,22 +501,23 @@ extension Tensor {
       let kernelHandle = kernel.saveForBackward()
       return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype) { grad in
         imageHandle.backward(backend) {
-          Tensor.conv2dTranspose(conv, image: grad, kernel: kernel.noGrad())
+          Tensor.convNDTranspose(conv, image: grad, kernel: kernel.noGrad())
         }
         kernelHandle.backward(backend) {
-          Tensor.conv2dKernelGrad(conv, image: image.noGrad(), outGrad: grad)
+          Tensor.convNDKernelGrad(conv, image: image.noGrad(), outGrad: grad)
         }
       }
     }
   }
 
-  public static func conv2dTranspose(_ conv: Conv2DConfig, image: Tensor, kernel: Tensor) -> Tensor
-  {
+  internal static func convNDTranspose<Dim: SpatialDim>(
+    _ conv: ConvConfig<Dim>, image: Tensor, kernel: Tensor
+  ) -> Tensor {
     alwaysAssert(
       image.dtype == kernel.dtype,
       "image and kernel dtypes differ: \(image.dtype) vs \(kernel.dtype)")
-    alwaysAssert(image.shape.count == 4, "invalid image shape: \(image.shape)")
-    alwaysAssert(kernel.shape.count == 4, "invalid image shape: \(kernel.shape)")
+    alwaysAssert(image.shape.count == 2 + Dim.dimCount, "invalid image shape: \(image.shape)")
+    alwaysAssert(kernel.shape.count == 2 + Dim.dimCount, "invalid image shape: \(kernel.shape)")
     alwaysAssert(
       kernel.shape == conv.kernelTensorShape(),
       "invalid kernel shape \(kernel.shape) for conv \(conv)")
@@ -415,9 +532,20 @@ extension Tensor {
 
     let backend = Backend.current
     let newData = Task {
-      try await backend.conv2dTranspose(
-        conv, batch: image.shape[0], image: try await image.data, kernel: try await kernel.data,
-        dtype: image.dtype)
+      switch Dim.dimCount {
+      case 1:
+        try await backend.conv1DTranspose(
+          conv as! Conv1DConfig, batch: image.shape[0], image: try await image.data,
+          kernel: try await kernel.data,
+          dtype: image.dtype)
+      case 2:
+        try await backend.conv2DTranspose(
+          conv as! Conv2DConfig, batch: image.shape[0], image: try await image.data,
+          kernel: try await kernel.data,
+          dtype: image.dtype)
+      default:
+        fatalError()
+      }
     }
     if !Tensor.isGradEnabled || (!image.needsGrad && !kernel.needsGrad) {
       return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype)
@@ -425,22 +553,24 @@ extension Tensor {
       let imageHandle = image.saveForBackward()
       let kernelHandle = kernel.saveForBackward()
       return Tensor(dataTask: newData, shape: outShape, dtype: image.dtype) { grad in
-        imageHandle.backward(backend) { conv2d(conv, image: grad, kernel: kernel.noGrad()) }
+        imageHandle.backward(backend) { convND(conv, image: grad, kernel: kernel.noGrad()) }
         kernelHandle.backward(backend) {
-          conv2dKernelGrad(conv, image: grad, outGrad: image.noGrad())
+          convNDKernelGrad(conv, image: grad, outGrad: image.noGrad())
         }
       }
     }
   }
 
-  public static func conv2dKernelGrad(_ conv: Conv2DConfig, image: Tensor, outGrad: Tensor)
+  internal static func convNDKernelGrad<Dim: SpatialDim>(
+    _ conv: ConvConfig<Dim>, image: Tensor, outGrad: Tensor
+  )
     -> Tensor
   {
     alwaysAssert(
       image.dtype == outGrad.dtype,
       "image and outGrad dtypes differ: \(image.dtype) vs \(outGrad.dtype)")
-    alwaysAssert(image.shape.count == 4, "invalid image shape: \(image.shape)")
-    alwaysAssert(outGrad.shape.count == 4, "invalid outGrad shape: \(outGrad.shape)")
+    alwaysAssert(image.shape.count == 2 + Dim.dimCount, "invalid image shape: \(image.shape)")
+    alwaysAssert(outGrad.shape.count == 2 + Dim.dimCount, "invalid outGrad shape: \(outGrad.shape)")
     alwaysAssert(
       image.shape == conv.imageTensorShape(batch: image.shape[0]),
       "invalid image shape \(image.shape) for conv \(conv)")
@@ -453,14 +583,23 @@ extension Tensor {
 
     let backend = Backend.current
     let newData = Task {
-      try await backend.conv2dKernelGrad(
-        conv, batch: image.shape[0], image: try await image.data,
-        outGrad: try await outGrad.data, dtype: image.dtype)
+      switch Dim.dimCount {
+      case 1:
+        try await backend.conv1DKernelGrad(
+          conv as! Conv1DConfig, batch: image.shape[0], image: try await image.data,
+          outGrad: try await outGrad.data, dtype: image.dtype)
+      case 2:
+        try await backend.conv2DKernelGrad(
+          conv as! Conv2DConfig, batch: image.shape[0], image: try await image.data,
+          outGrad: try await outGrad.data, dtype: image.dtype)
+      default:
+        fatalError()
+      }
     }
     if !Tensor.isGradEnabled || (!image.needsGrad && !outGrad.needsGrad) {
       return Tensor(dataTask: newData, shape: kernelShape, dtype: image.dtype)
     } else {
-      fatalError("conv2dKernelGrad gradient is not yet implemented")
+      fatalError("convNDKernelGrad gradient is not yet implemented")
     }
   }
 }

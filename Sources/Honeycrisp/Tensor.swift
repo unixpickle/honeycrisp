@@ -311,9 +311,10 @@ public final class Tensor {
   }
 
   public func squeeze(axis: Int) -> Tensor {
-    alwaysAssert(shape[positiveAxis(axis)] == 1, "cannot squeeze axis \(axis) for shape \(shape)")
+    let posAxis = positiveAxis(axis)
+    alwaysAssert(shape[posAxis] == 1, "cannot squeeze axis \(axis) for shape \(shape)")
     var newShape = shape
-    newShape.remove(at: axis)
+    newShape.remove(at: posAxis)
     return reshape(newShape)
   }
 

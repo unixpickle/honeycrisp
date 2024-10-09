@@ -1193,7 +1193,7 @@ final class HoneycrispTests: XCTestCase {
         let image = -Tensor(range: 0..<imageShape.product(), dtype: .float32).reshape(imageShape)
         var imageGrad: Tensor?
         var kernelGrad: Tensor?
-        let output = Tensor.conv2d(
+        let output = Tensor.conv2D(
           conv, image: image.onGrad { g in imageGrad = g },
           kernel: kernel.onGrad { g in kernelGrad = g })
         XCTAssertEqual(output.shape, testCase.outShape, "\(conv)")
@@ -1208,7 +1208,7 @@ final class HoneycrispTests: XCTestCase {
         let convCLast = try createConv(true)
         var transImageGrad: Tensor?
         var transKernelGrad: Tensor?
-        let outputCLast = Tensor.conv2d(
+        let outputCLast = Tensor.conv2D(
           convCLast, image: image.onGrad({ g in transImageGrad = g })[PermuteAxes(0, 2, 3, 1)],
           kernel: kernel.onGrad { g in transKernelGrad = g })[PermuteAxes(0, 3, 1, 2)]
         try await assertDataEqual(output, outputCLast)
@@ -1219,7 +1219,7 @@ final class HoneycrispTests: XCTestCase {
         var batchedImageGrad: Tensor?
         var batchedKernelGrad: Tensor?
         let batchedInput = image.onGrad({ g in batchedImageGrad = g })
-        let batchedOutput = Tensor.conv2d(
+        let batchedOutput = Tensor.conv2D(
           conv, image: Tensor(concat: [Tensor(zerosLike: batchedInput), batchedInput], axis: 0),
           kernel: kernel.onGrad { g in batchedKernelGrad = g })
         batchedOutput.backward(outGrad.repeating(axis: 0, count: 2))
@@ -1240,7 +1240,7 @@ final class HoneycrispTests: XCTestCase {
       let kernel = Tensor(rand: conv.kernelTensorShape())
       var inputGrad: Tensor?
       var kernelGrad: Tensor?
-      let output = Tensor.conv2dTranspose(
+      let output = Tensor.conv2DTranspose(
         conv, image: input.onGrad { g in inputGrad = g },
         kernel: kernel.onGrad { g in kernelGrad = g })
       let outGrad = Tensor(randLike: output)
@@ -1248,15 +1248,51 @@ final class HoneycrispTests: XCTestCase {
 
       let approxKernelGrad = try await estimateGradient(delta: 0.5, input: kernel, outGrad: outGrad)
       { x in
-        Tensor.conv2dTranspose(conv, image: input, kernel: x)
+        Tensor.conv2DTranspose(conv, image: input, kernel: x)
       }
       try await assertClose(approxKernelGrad, kernelGrad!)
 
       let approxInputGrad = try await estimateGradient(delta: 0.5, input: input, outGrad: outGrad) {
         x in
-        Tensor.conv2dTranspose(conv, image: x, kernel: kernel)
+        Tensor.conv2DTranspose(conv, image: x, kernel: kernel)
       }
       try await assertClose(approxInputGrad, inputGrad!)
+    }
+  }
+
+  func testConv1D() async throws {
+    try await runInBackends {
+      let conv1d = try Conv1DConfig(
+        inChannels: 6, outChannels: 4, kernelSize: .init(x: 2), imageSize: .init(x: 8),
+        stride: .init(x: 2), dilation: .init(x: 3),
+        padding: .init(before: .init(x: 1), after: .init(x: 2)), groups: 2,
+        channelsLast: false)
+      let conv2d = try Conv2DConfig(
+        inChannels: 6, outChannels: 4, kernelSize: .init(x: 2, y: 1), imageSize: .init(x: 8, y: 1),
+        stride: .init(x: 2, y: 1), dilation: .init(x: 3, y: 1),
+        padding: .init(before: .init(x: 1, y: 0), after: .init(x: 2, y: 0)), groups: 2,
+        channelsLast: false)
+      let input = Tensor(rand: conv1d.imageTensorShape(batch: 2))
+      let kernel = Tensor(rand: conv1d.kernelTensorShape())
+      var inputGrad: Tensor?
+      var kernelGrad: Tensor?
+      let output = Tensor.conv1D(
+        conv1d, image: input.onGrad { g in inputGrad = g },
+        kernel: kernel.onGrad { g in kernelGrad = g })
+      let outGrad = Tensor(randLike: output)
+      output.backward(outGrad)
+
+      var inputGrad2D: Tensor?
+      var kernelGrad2D: Tensor?
+      let image2D = input.onGrad { g in inputGrad2D = g }.unsqueeze(axis: -2)
+      let kernel2D = kernel.onGrad { g in kernelGrad2D = g }.unsqueeze(axis: -2)
+      let output2DRaw = Tensor.conv2D(conv2d, image: image2D, kernel: kernel2D)
+      let output2D = output2DRaw.squeeze(axis: -2)
+      output2D.backward(outGrad)
+
+      try await assertClose(output2D, output)
+      try await assertClose(inputGrad2D!, inputGrad!)
+      try await assertClose(kernelGrad2D!, kernelGrad!)
     }
   }
 }

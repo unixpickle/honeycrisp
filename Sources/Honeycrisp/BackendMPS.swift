@@ -131,7 +131,7 @@ open class MPSBackend: CPUBackend {
   private var queue = DispatchQueue(label: "mps-backend-worker")
   private var commandQueue: MTLCommandQueue? = nil
   private var matmuls: [MatmulKey: TwoToOneGraph] = [:]
-  private var conv2d: [Conv2DKey: TwoToOneGraph] = [:]
+  private var conv2D: [Conv2DKey: TwoToOneGraph] = [:]
   private var reductions: [ReduceKey: OneToOneGraph] = [:]
   private var defaultRNG: MPSRandomGenerator? = nil
   private var functions: [String: MTLComputePipelineState] = [:]
@@ -730,7 +730,7 @@ open class MPSBackend: CPUBackend {
     }
   }
 
-  internal func conv2d(
+  internal func conv2D(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data,
     dtype: Tensor.DType, transpose: Bool
   )
@@ -739,10 +739,10 @@ open class MPSBackend: CPUBackend {
   {
     guard let mpsDType = dtype.mpsDType else {
       if transpose {
-        return try await super.conv2dTranspose(
+        return try await super.conv2DTranspose(
           config, batch: batch, image: image, kernel: kernel, dtype: dtype)
       } else {
-        return try await super.conv2d(
+        return try await super.conv2D(
           config, batch: batch, image: image, kernel: kernel, dtype: dtype)
       }
     }
@@ -787,27 +787,70 @@ open class MPSBackend: CPUBackend {
     }
   }
 
-  override public func conv2d(
+  internal func conv1DToConv2D(_ config: Conv1DConfig) throws -> Conv2DConfig {
+    try Conv2DConfig(
+      inChannels: config.inChannels, outChannels: config.outChannels,
+      kernelSize: .init(x: config.kernelSize.x, y: 1),
+      imageSize: .init(x: config.imageSize.x, y: 1), stride: .init(x: config.stride.x, y: 1),
+      dilation: .init(x: config.dilation.x, y: 1),
+      padding: .init(
+        before: .init(x: config.padding.before.x, y: 0),
+        after: .init(x: config.padding.after.x, y: 0)), groups: config.groups,
+      channelsLast: config.channelsLast)
+  }
+
+  override public func conv1D(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await conv2D(
+      try conv1DToConv2D(config), batch: batch, image: image, kernel: kernel, dtype: dtype)
+  }
+
+  override public func conv1DTranspose(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await conv2DTranspose(
+      try conv1DToConv2D(config), batch: batch, image: image, kernel: kernel, dtype: dtype)
+  }
+
+  override public func conv1DKernelGrad(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await conv2DKernelGrad(
+      try conv1DToConv2D(config), batch: batch, image: image, outGrad: outGrad, dtype: dtype)
+  }
+
+  override public func conv2D(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await conv2d(
+    try await conv2D(
       config, batch: batch, image: image, kernel: kernel, dtype: dtype, transpose: false)
   }
 
-  override public func conv2dTranspose(
+  override public func conv2DTranspose(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await conv2d(
+    try await conv2D(
       config, batch: batch, image: image, kernel: kernel, dtype: dtype, transpose: true)
   }
 
-  override public func conv2dKernelGrad(
+  override public func conv2DKernelGrad(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
     dtype: Tensor.DType
   )
@@ -815,7 +858,7 @@ open class MPSBackend: CPUBackend {
     -> Tensor.Data
   {
     guard let mpsDType = dtype.mpsDType else {
-      return try await super.conv2dKernelGrad(
+      return try await super.conv2DKernelGrad(
         config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
     }
 
@@ -860,7 +903,7 @@ open class MPSBackend: CPUBackend {
     _ conv: Conv2DConfig, batch: Int, kind: Conv2DKey.Kind, dtype: MPSDataType
   ) throws -> TwoToOneGraph {
     let key = Conv2DKey(conv: conv, batch: batch, kind: kind, dtype: dtype)
-    if let op = conv2d[key] {
+    if let op = conv2D[key] {
       return op
     }
 
@@ -894,7 +937,7 @@ open class MPSBackend: CPUBackend {
       let flatOutput = graph.reshape(
         output, shape: mpsShape([kernelShape.product()]), name: "flatOutput")
       let op = TwoToOneGraph(graph: graph, inputA: inputA, inputB: inputB, output: flatOutput)
-      conv2d[key] = op
+      conv2D[key] = op
       return op
     } else {
       let imageShape =
@@ -920,7 +963,7 @@ open class MPSBackend: CPUBackend {
       let flatOutput = graph.reshape(
         output, shape: mpsShape([outShape.product()]), name: "flatOutput")
       let op = TwoToOneGraph(graph: graph, inputA: inputA, inputB: inputB, output: flatOutput)
-      conv2d[key] = op
+      conv2D[key] = op
       return op
     }
   }
