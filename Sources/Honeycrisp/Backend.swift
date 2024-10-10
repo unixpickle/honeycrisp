@@ -481,12 +481,15 @@ open class CPUBackend: Backend {
             fatalError()
           }
         } else {
-          var aData = [T](repeating: T(0.0), count: count)
-          var bData = [T](repeating: T(0.0), count: count)
-          try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
-          try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
-          let cData = zip(aData, bData).map { op.apply($0, $1) }
-          try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+          try readBuffer(T.self, a.buffer, count: count, dtype: dtype) { aData in
+            try readBuffer(T.self, b.buffer, count: count, dtype: dtype) { bData in
+              try writeBuffer(T.self, buffer, count: count, dtype: dtype) { cData in
+                for (i, (x, y)) in zip(aData, bData).enumerated() {
+                  cData[i] = op.apply(x, y)
+                }
+              }
+            }
+          }
         }
       }
       return Tensor.Data(backend: self, buffer: buffer)
@@ -529,10 +532,13 @@ open class CPUBackend: Backend {
             fatalError()
           }
         } else {
-          var aData = [T1](repeating: T1(0.0), count: count)
-          try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
-          let cData = aData.map { op.apply($0, b) }
-          try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+          try readBuffer(T1.self, a.buffer, count: count, dtype: dtype) { aData in
+            try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { cData in
+              for (i, x) in aData.enumerated() {
+                cData[i] = op.apply(x, b)
+              }
+            }
+          }
         }
       }
       return Tensor.Data(backend: self, buffer: buffer)
@@ -573,10 +579,13 @@ open class CPUBackend: Backend {
             fatalError()
           }
         } else {
-          var bData = [T1](repeating: T1(0.0), count: count)
-          try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
-          let cData = bData.map { op.apply(a, $0) }
-          try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+          try readBuffer(T1.self, b.buffer, count: count, dtype: dtype) { bData in
+            try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { cData in
+              for (i, x) in bData.enumerated() {
+                cData[i] = op.apply(a, x)
+              }
+            }
+          }
         }
       }
       return Tensor.Data(backend: self, buffer: buffer)
@@ -599,12 +608,15 @@ open class CPUBackend: Backend {
     func apply<T1: NumericTensorElement>(_: T1.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * Tensor.DType.bool.byteSize)
       try await serialize {
-        var aData = [T1](repeating: T1(0.0), count: count)
-        var bData = [T1](repeating: T1(0.0), count: count)
-        try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
-        try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
-        let cData = zip(aData, bData).map { op.apply($0, $1) }
-        try arrayToPointer(cData, output: buffer.contents(), dtype: .bool)
+        try readBuffer(T1.self, a.buffer, count: count, dtype: dtype) { aData in
+          try readBuffer(T1.self, b.buffer, count: count, dtype: dtype) { bData in
+            try writeBuffer(Bool.self, buffer, count: count, dtype: .bool) { cData in
+              for (i, (x, y)) in zip(aData, bData).enumerated() {
+                cData[i] = op.apply(x, y)
+              }
+            }
+          }
+        }
       }
       return Tensor.Data(backend: self, buffer: buffer)
     }
@@ -625,10 +637,13 @@ open class CPUBackend: Backend {
     func apply<T1: NumericTensorElement>(_ b: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * Tensor.DType.bool.byteSize)
       try await serialize {
-        var aData = [T1](repeating: T1(0.0), count: count)
-        try pointerToArray(a.buffer.contents(), output: &aData, dtype: dtype)
-        let cData = aData.map { op.apply($0, b) }
-        try arrayToPointer(cData, output: buffer.contents(), dtype: .bool)
+        try readBuffer(T1.self, a.buffer, count: count, dtype: dtype) { aData in
+          try writeBuffer(Bool.self, buffer, count: count, dtype: .bool) { cData in
+            for (i, x) in aData.enumerated() {
+              cData[i] = op.apply(x, b)
+            }
+          }
+        }
       }
       return Tensor.Data(backend: self, buffer: buffer)
     }
@@ -649,10 +664,13 @@ open class CPUBackend: Backend {
     func apply<T1: NumericTensorElement>(_ a: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * Tensor.DType.bool.byteSize)
       try await serialize {
-        var bData = [T1](repeating: T1(0.0), count: count)
-        try pointerToArray(b.buffer.contents(), output: &bData, dtype: dtype)
-        let cData = bData.map { op.apply(a, $0) }
-        try arrayToPointer(cData, output: buffer.contents(), dtype: .bool)
+        try readBuffer(T1.self, b.buffer, count: count, dtype: dtype) { bData in
+          try writeBuffer(Bool.self, buffer, count: count, dtype: .bool) { cData in
+            for (i, x) in bData.enumerated() {
+              cData[i] = op.apply(a, x)
+            }
+          }
+        }
       }
       return Tensor.Data(backend: self, buffer: buffer)
     }
@@ -711,10 +729,13 @@ open class CPUBackend: Backend {
             }
           }
         } else {
-          var arr = [T1](repeating: T1(0.0), count: count)
-          try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
-          let cData = arr.map { $0.pow(b) }
-          try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+          try readBuffer(T1.self, a.buffer, count: count, dtype: dtype) { arr in
+            try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in
+              for (i, x) in arr.enumerated() {
+                out[i] = x.pow(b)
+              }
+            }
+          }
         }
       }
       return Tensor.Data(backend: self, buffer: buffer)
@@ -751,68 +772,67 @@ open class CPUBackend: Backend {
       return Tensor.Data(backend: self, buffer: buffer)
     }
 
-    func apply<T: NumericTensorElement>(_ x: T) async throws -> Tensor.Data {
-      let arr = try await serialize {
-        var arr = [T](repeating: x, count: dims.inCount)
-        try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
-        return arr
-      }
-
+    func apply<T: NumericTensorElement>(_: T.Type) async throws -> Tensor.Data {
       switch op {
       case .sum:
-        var arrOut = [T]()
         let buffer = try await allocate(length: dims.outCount * dtype.byteSize)
         try await serialize {
-          for i in 0..<dims.outerCount {
-            for j in 0..<dims.innerCount {
-              var sum = T(0.0)
-              for k in 0..<dims.reduceCount {
-                let item = arr[j + (k + i * dims.reduceCount) * dims.innerCount]
-                sum = sum + item
+          try readBuffer(T.self, a.buffer, count: dims.inCount, dtype: dtype) { arr in
+            try writeBuffer(T.self, buffer, count: dims.outCount, dtype: dtype) { arrOut in
+              var index: Int = 0
+              for i in 0..<dims.outerCount {
+                for j in 0..<dims.innerCount {
+                  var sum = T(0.0)
+                  for k in 0..<dims.reduceCount {
+                    let item = arr[j + (k + i * dims.reduceCount) * dims.innerCount]
+                    sum = sum + item
+                  }
+                  arrOut[index] = sum
+                  index += 1
+                }
               }
-              arrOut.append(sum)
             }
           }
-          alwaysAssert(arrOut.count == dims.outCount)
-          try arrayToPointer(arrOut, output: buffer.contents(), dtype: dtype)
         }
         return Tensor.Data(backend: self, buffer: buffer)
       case .argmin, .argmax:
-        alwaysAssert(dims.outCount > 0, "cannot apply op \(self) to empty dimension")
-        var arrOut = [Int64]()
         let buffer = try await allocate(length: dims.outCount * Tensor.DType.int64.byteSize)
         try await serialize {
-          for i in 0..<dims.outerCount {
-            for j in 0..<dims.innerCount {
-              var extremum = arr[j + i * dims.reduceCount * dims.innerCount]
-              var index = Int64(0)
-              for k in 0..<dims.reduceCount {
-                let item = arr[j + (k + i * dims.reduceCount) * dims.innerCount]
-                if op == .argmin {
-                  if item < extremum {
-                    extremum = item
-                    index = Int64(k)
+          try readBuffer(T.self, a.buffer, count: dims.inCount, dtype: dtype) { arr in
+            try writeBuffer(Int64.self, buffer, count: dims.outCount, dtype: .int64) { arrOut in
+              var outIndex: Int = 0
+              for i in 0..<dims.outerCount {
+                for j in 0..<dims.innerCount {
+                  var extremum = arr[j + i * dims.reduceCount * dims.innerCount]
+                  var index = Int64(0)
+                  for k in 0..<dims.reduceCount {
+                    let item = arr[j + (k + i * dims.reduceCount) * dims.innerCount]
+                    if op == .argmin {
+                      if item < extremum {
+                        extremum = item
+                        index = Int64(k)
+                      }
+                    } else if op == .argmax {
+                      if item > extremum {
+                        extremum = item
+                        index = Int64(k)
+                      }
+                    }
                   }
-                } else if op == .argmax {
-                  if item > extremum {
-                    extremum = item
-                    index = Int64(k)
-                  }
+                  arrOut[outIndex] = index
+                  outIndex += 1
                 }
               }
-              arrOut.append(index)
             }
           }
-          alwaysAssert(arrOut.count == dims.outCount)
-          try arrayToPointer(arrOut, output: buffer.contents(), dtype: .int64)
         }
         return Tensor.Data(backend: self, buffer: buffer)
       }
     }
     if dtype == .int64 {
-      return try await apply(Int64(0))
+      return try await apply(Int64.self)
     } else {
-      return try await apply(Float(0))
+      return try await apply(Float.self)
     }
   }
 
@@ -1118,20 +1138,22 @@ open class CPUBackend: Backend {
 
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
       try await serialize {
-        var arrKernel = [T](repeating: zero, count: kernelShape.product())
-        var arrImage = [T](repeating: zero, count: imageShape.product())
-        assert(kernel.buffer.allocatedSize >= dtype.byteSize * arrKernel.count)
-        assert(image.buffer.allocatedSize >= dtype.byteSize * arrImage.count)
-        try pointerToArray(kernel.buffer.contents(), output: &arrKernel, dtype: dtype)
-        try pointerToArray(image.buffer.contents(), output: &arrImage, dtype: dtype)
-
-        let getKernel = ConvConfig<Dim>.LazyTensor(
-          from: arrKernel, shape: kernelShape, channelsLast: false)
-        let getImage = config.lazy(from: arrImage, shape: imageShape)
-        let outputFn = config.lazyForward(image: getImage, kernel: getKernel)
-
-        let arrOut = config.array(from: outputFn)
-        try arrayToPointer(arrOut, output: outBuf.contents(), dtype: dtype)
+        assert(kernel.buffer.allocatedSize >= dtype.byteSize * kernelShape.product())
+        assert(image.buffer.allocatedSize >= dtype.byteSize * imageShape.product())
+        try readBuffer(T.self, kernel.buffer, count: kernelShape.product(), dtype: dtype) {
+          arrKernel in
+          try readBuffer(T.self, image.buffer, count: imageShape.product(), dtype: dtype) {
+            arrImage in
+            try writeBuffer(T.self, outBuf, count: outShape.product(), dtype: dtype) {
+              arrOut in
+              let getKernel = ConvConfig<Dim>.LazyTensor(
+                from: arrKernel, shape: kernelShape, channelsLast: false)
+              let getImage = config.lazy(from: arrImage, shape: imageShape)
+              let outputFn = config.lazyForward(image: getImage, kernel: getKernel)
+              config.unlazify(from: outputFn, to: &arrOut)
+            }
+          }
+        }
       }
       return Tensor.Data(backend: self, buffer: outBuf)
     }
@@ -1159,20 +1181,21 @@ open class CPUBackend: Backend {
 
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
       try await serialize {
-        var arrKernel = [T](repeating: zero, count: kernelShape.product())
-        var arrImage = [T](repeating: zero, count: outShape.product())
-        assert(kernel.buffer.allocatedSize >= dtype.byteSize * arrKernel.count)
-        assert(image.buffer.allocatedSize >= dtype.byteSize * arrImage.count)
-        try pointerToArray(kernel.buffer.contents(), output: &arrKernel, dtype: dtype)
-        try pointerToArray(image.buffer.contents(), output: &arrImage, dtype: dtype)
-
-        let getKernel = ConvConfig<Dim>.LazyTensor(
-          from: arrKernel, shape: kernelShape, channelsLast: false)
-        let getImage = config.lazy(from: arrImage, shape: outShape)
-        let outputFn = config.lazyTranspose(image: getImage, kernel: getKernel)
-
-        let arrOut = config.array(from: outputFn)
-        try arrayToPointer(arrOut, output: outBuf.contents(), dtype: dtype)
+        assert(kernel.buffer.allocatedSize >= dtype.byteSize * kernelShape.product())
+        assert(image.buffer.allocatedSize >= dtype.byteSize * outShape.product())
+        try readBuffer(T.self, kernel.buffer, count: kernelShape.product(), dtype: dtype) {
+          arrKernel in
+          try readBuffer(T.self, image.buffer, count: outShape.product(), dtype: dtype) {
+            arrImage in
+            try writeBuffer(T.self, outBuf, count: imageShape.product(), dtype: dtype) { arrOut in
+              let getKernel = ConvConfig<Dim>.LazyTensor(
+                from: arrKernel, shape: kernelShape, channelsLast: false)
+              let getImage = config.lazy(from: arrImage, shape: outShape)
+              let outputFn = config.lazyTranspose(image: getImage, kernel: getKernel)
+              config.unlazify(from: outputFn, to: &arrOut)
+            }
+          }
+        }
       }
       return Tensor.Data(backend: self, buffer: outBuf)
     }
@@ -1200,19 +1223,18 @@ open class CPUBackend: Backend {
 
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
       try await serialize {
-        var arrImage = [T](repeating: zero, count: imageShape.product())
-        var arrOutGrad = [T](repeating: zero, count: outShape.product())
-        assert(image.buffer.allocatedSize >= dtype.byteSize * arrImage.count)
-        assert(outGrad.buffer.allocatedSize >= dtype.byteSize * arrOutGrad.count)
-        try pointerToArray(image.buffer.contents(), output: &arrImage, dtype: dtype)
-        try pointerToArray(outGrad.buffer.contents(), output: &arrOutGrad, dtype: dtype)
-
-        let getImage = config.lazy(from: arrImage, shape: imageShape)
-        let getOutGrad = config.lazy(from: arrOutGrad, shape: outShape)
-        let outputFn = config.lazyKernelGrad(image: getImage, outGrad: getOutGrad)
-
-        let arrOut = outputFn.toArray(channelsLast: false)
-        try arrayToPointer(arrOut, output: outBuf.contents(), dtype: dtype)
+        try readBuffer(T.self, image.buffer, count: imageShape.product(), dtype: dtype) {
+          arrImage in
+          try readBuffer(T.self, outGrad.buffer, count: outShape.product(), dtype: dtype) {
+            arrOutGrad in
+            try writeBuffer(T.self, outBuf, count: kernelShape.product(), dtype: dtype) { arrOut in
+              let getImage = config.lazy(from: arrImage, shape: imageShape)
+              let getOutGrad = config.lazy(from: arrOutGrad, shape: outShape)
+              let outputFn = config.lazyKernelGrad(image: getImage, outGrad: getOutGrad)
+              outputFn.unlazify(to: &arrOut, channelsLast: false)
+            }
+          }
+        }
       }
       return Tensor.Data(backend: self, buffer: outBuf)
     }
@@ -1286,10 +1308,13 @@ open class CPUBackend: Backend {
     try await waitForData(a)
     let buffer = try await allocate(length: count * dtype.byteSize)
     try await serialize {
-      var arr = [Float](repeating: 0, count: count)
-      try pointerToArray(a.buffer.contents(), output: &arr, dtype: dtype)
-      let cData = arr.map(op.apply)
-      try arrayToPointer(cData, output: buffer.contents(), dtype: dtype)
+      try readBuffer(Float.self, a.buffer, count: count, dtype: dtype) { arr in
+        try writeBuffer(Float.self, buffer, count: count, dtype: dtype) { out in
+          for (i, x) in arr.enumerated() {
+            out[i] = op.apply(x)
+          }
+        }
+      }
     }
     return Tensor.Data(backend: self, buffer: buffer)
   }
@@ -1359,4 +1384,36 @@ func stridesForShape(_ shape: [Int]) -> [Int] {
     strides[i] = shape[(i + 1)...].product()
   }
   return strides
+}
+
+func readBuffer<T, T1: TensorElement>(
+  _: T1.Type, _ buf: MTLBuffer, count: Int, dtype: Tensor.DType,
+  _ fn: (UnsafeBufferPointer<T1>) throws -> T
+) throws -> T {
+  assert(buf.allocatedSize >= count * dtype.byteSize)
+  if dtype == T1.dtype {
+    return try fn(
+      UnsafeBufferPointer(
+        start: buf.contents().bindMemory(to: T1.self, capacity: count), count: count))
+  }
+  var arr = [T1](repeating: T1(0.0), count: count)
+  try pointerToArray(buf.contents(), output: &arr, dtype: dtype)
+  return try arr.withUnsafeBufferPointer(fn)
+}
+
+func writeBuffer<T, T1: TensorElement>(
+  _: T1.Type, _ buf: MTLBuffer, count: Int, dtype: Tensor.DType,
+  _ fn: (inout UnsafeMutableBufferPointer<T1>) throws -> T
+) throws -> T {
+  assert(buf.allocatedSize >= count * dtype.byteSize)
+  if dtype == T1.dtype {
+    var buf = UnsafeMutableBufferPointer(
+      start: buf.contents().bindMemory(to: T1.self, capacity: count), count: count)
+    return try fn(&buf)
+  }
+  var arr = [T1](repeating: T1(0.0), count: count)
+  try pointerToArray(buf.contents(), output: &arr, dtype: dtype)
+  let result = try arr.withUnsafeMutableBufferPointer(fn)
+  try arrayToPointer(arr, output: buf.contents(), dtype: dtype)
+  return result
 }

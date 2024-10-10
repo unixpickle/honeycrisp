@@ -14,7 +14,7 @@ public enum ElemwiseOp {
   case gelu
   case geluGrad
 
-  public func apply<T: NumericTensorElement>(x: T) -> T {
+  public func apply<T: NumericTensorElement>(_ x: T) -> T {
     let f = x.toFloat()
     return switch self {
     case .sin:

@@ -8,10 +8,11 @@ public enum ConvConfigError: Error {
 ///  * For 2D, this can be treated as (height, width) or (y, x).
 ///  * For 3D, this can be (depth, height, width) or (z, y, x).
 ///
-/// All multidimensional comparisons are reduced with &. In particular,
-/// (x == y) is only true if all elements of x equal corresponding ones in y.
-/// The same goes for (x != y) -- it is only true if no elements are equal.
-/// As a result, (x != y) may be different than !(x == y).
+/// All multidimensional comparisons are only true if the comparison is true
+/// for all sub-elements. For example, (x == y) is only true if all elements
+/// of x equal corresponding ones in y. The same goes for (x != y), where it is
+/// only true if no elements are equal. As a result, (x != y) may be different
+/// than !(x == y).
 public protocol SpatialDim: Hashable, Comparable {
   static var dimCount: Int { get }
   var dims: [Int] { get }
@@ -196,7 +197,8 @@ public struct ConvConfig<Dim: SpatialDim>: Hashable {
       self.fn = fn
     }
 
-    public init(from arr: [T], shape: [Int], channelsLast: Bool) {
+    public init<C: Collection<T>>(from arr: C, shape: [Int], channelsLast: Bool)
+    where C.Index == Int {
       assert(arr.count == shape.product())
       let s =
         channelsLast
@@ -204,7 +206,7 @@ public struct ConvConfig<Dim: SpatialDim>: Hashable {
         : (shape[0], shape[1], Dim(dims: Array(shape[2...])))
       let (batchStride, channelStride, dimStride) = LazyTensor<T>.strides(
         shape: s, channelsLast: channelsLast)
-      self.init(shape: s) { i, j, k in
+      self.init(shape: s) { (i: Int, j: Int, k: Dim) in
         assert(i >= 0 && i < s.0)
         assert(j >= 0 && j < s.1)
         assert(k >= Dim(constant: 0) && k < s.2, "\(k) out of bounds with size \(s.2)")
@@ -216,11 +218,11 @@ public struct ConvConfig<Dim: SpatialDim>: Hashable {
       fn(i, j, k)
     }
 
-    public func toArray(channelsLast: Bool) -> [T] {
+    public func unlazify<C: MutableCollection<T>>(to result: inout C, channelsLast: Bool)
+    where C.Index == Int {
       let (batchStride, channelStride, dimStride) = LazyTensor<T>.strides(
         shape: shape, channelsLast: channelsLast)
       let coords = shape.2.coordsInRect()
-      var result = [T](repeating: T(0.0), count: shape.0 * shape.1 * shape.2.dims.product())
       for batchIdx in 0..<shape.0 {
         for ch in 0..<shape.1 {
           for dim in coords {
@@ -229,7 +231,6 @@ public struct ConvConfig<Dim: SpatialDim>: Hashable {
           }
         }
       }
-      return result
     }
   }
 
@@ -322,12 +323,13 @@ public struct ConvConfig<Dim: SpatialDim>: Hashable {
     }
   }
 
-  func lazy<T: TensorElement>(from: [T], shape: [Int]) -> LazyTensor<T> {
+  func lazy<T: TensorElement, C: Collection<T>>(from: C, shape: [Int]) -> LazyTensor<T>
+  where C.Index == Int {
     return LazyTensor(from: from, shape: shape, channelsLast: channelsLast)
   }
 
-  func array<T>(from: LazyTensor<T>) -> [T] {
-    return from.toArray(channelsLast: channelsLast)
+  func unlazify<T, C: MutableCollection<T>>(from: LazyTensor<T>, to: inout C) where C.Index == Int {
+    from.unlazify(to: &to, channelsLast: channelsLast)
   }
 
   private func paddedInput<T>(_ rawInput: LazyTensor<T>) -> LazyTensor<T> {
