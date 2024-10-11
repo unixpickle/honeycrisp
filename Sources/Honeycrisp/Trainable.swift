@@ -417,3 +417,82 @@ public class LayerNorm: Trainable {
     }
   }
 }
+
+public class GroupNorm: Trainable {
+  public let groupCount: Int
+  public let channelCount: Int
+  public let channelsLast: Bool
+  public let eps: Float
+
+  @Param(name: "gian") var gain: Tensor?
+  @Param(name: "bias") var bias: Tensor?
+
+  public init(
+    groupCount: Int, channelCount: Int, channelsLast: Bool = false, dtype: Tensor.DType = .float32,
+    eps: Float = 1e-5, affine: Bool = true
+  ) {
+    alwaysAssert(
+      channelCount % groupCount == 0,
+      "channelCount \(channelCount) must be divisible by groupCount \(groupCount)")
+    self.groupCount = groupCount
+    self.channelCount = channelCount
+    self.channelsLast = channelsLast
+    self.eps = eps
+    super.init()
+    if affine {
+      self.gain = Tensor(zeros: [channelCount], dtype: dtype)
+      self.bias = Tensor(zeros: [channelCount], dtype: dtype)
+    }
+  }
+
+  public func callAsFunction(_ x: Tensor) -> Tensor {
+    if channelsLast {
+      alwaysAssert(
+        x.shape[x.shape.count - 1] == channelCount,
+        "expected \(channelCount) channels but got shape \(x.shape)")
+    } else {
+      alwaysAssert(
+        x.shape[1] == channelCount, "expected \(channelCount) channels but got shape \(x.shape)")
+    }
+    let cFirst =
+      if channelsLast {
+        x.move(axis: -1, to: 1)
+      } else {
+        x
+      }
+
+    let grouped = cFirst.reshape(
+      [cFirst.shape[0], groupCount, cFirst.shape[1] / groupCount, cFirst.shape[2...].product()])
+    let mean = grouped.mean(axis: -1, keepdims: true)
+    let variance = grouped.variance(axis: -1, keepdims: true)
+    let cFirstNormed =
+      ((grouped - mean.expand(as: grouped)) * (variance + eps).rsqrt().expand(as: grouped))
+      .reshape(as: cFirst)
+
+    let normalized =
+      if channelsLast {
+        cFirstNormed.move(axis: 1, to: -1)
+      } else {
+        cFirstNormed
+      }
+
+    let result =
+      if let gain = gain, let bias = bias {
+        if channelsLast {
+          normalized * (1 + gain.expand(as: normalized)) + bias.expand(as: normalized)
+        } else {
+          normalized * (1 + expandVector(gain, axis: 1, shape: x.shape))
+            + expandVector(bias, axis: 1, shape: x.shape)
+        }
+      } else {
+        normalized
+      }
+    return result
+  }
+}
+
+private func expandVector(_ vec: Tensor, axis: Int, shape: [Int]) -> Tensor {
+  var preShape = [Int](repeating: 1, count: shape.count)
+  preShape[axis] = vec.shape[0]
+  return vec.reshape(preShape).expand(shape: shape)
+}

@@ -11,6 +11,8 @@ public enum ElemwiseOp {
   case sigmoidGrad
   case relu
   case reluGrad
+  case abs
+  case absGrad
   case gelu
   case geluGrad
 
@@ -37,6 +39,10 @@ public enum ElemwiseOp {
       x < T(0.0) ? T(0.0) : x
     case .reluGrad:
       x < T(0.0) ? T(0.0) : T(1.0)
+    case .abs:
+      T(f < 0 ? -f : f)
+    case .absGrad:
+      T(f < 0 ? -1.0 : 1.0)
     case .gelu:
       T(0.5 * f * (1 + safeTanh(0.797884561 * (f + 0.044715 * pow(f, 3)))))
     case .geluGrad:
@@ -110,6 +116,10 @@ extension Tensor {
 
   public func relu() -> Tensor {
     self.elemwise(op: .relu, grad: .reluGrad)
+  }
+
+  public func abs() -> Tensor {
+    self.elemwise(op: .abs, grad: .absGrad)
   }
 
   public func tanh() -> Tensor {

@@ -168,8 +168,8 @@ open class MPSBackend: CPUBackend {
       "exp_fp16", "exp_fp32", "sigmoid_fp16", "sigmoid_fp32", "sigmoid_grad_fp16",
       "sigmoid_grad_fp32", "gelu_fp32", "gelu_fp16", "gelu_grad_fp32", "gelu_grad_fp16", "sin_fp32",
       "sin_fp16", "cos_fp32", "cos_fp16", "minus_sin_fp32", "minus_sin_fp16", "relu_fp32",
-      "relu_fp16", "relu_grad_fp32", "relu_grad_fp16", "repeat", "rand_fp32", "rand_fp16",
-      "randn_fp32", "randn_fp16",
+      "relu_fp16", "relu_grad_fp32", "relu_grad_fp16", "abs_fp16", "abs_fp32", "abs_grad_fp16",
+      "abs_grad_fp32", "repeat", "rand_fp32", "rand_fp16", "randn_fp32", "randn_fp16",
     ]
     for type in ["char", "short", "int", "long"] {
       for mode in ["", "_bcast"] {
@@ -263,6 +263,10 @@ open class MPSBackend: CPUBackend {
         "relu"
       case .reluGrad:
         "relu_grad"
+      case .abs:
+        "abs"
+      case .absGrad:
+        "abs_grad"
       case .log:
         "log"
       case .recip:
@@ -1123,7 +1127,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      #define ELEMWISE_KERNELS(name, expr) \
+      #define BINARY_KERNELS(name, expr) \
           kernel void name##vv_fp16(device const half* a [[buffer(0)]], \
                                     device const half* b [[buffer(1)]], \
                                     device half* c [[buffer(2)]], \
@@ -1191,11 +1195,11 @@ open class MPSBackend: CPUBackend {
             } \
           } \
 
-      ELEMWISE_KERNELS(add, x+y)
-      ELEMWISE_KERNELS(sub, x-y)
-      ELEMWISE_KERNELS(mul, x*y)
-      ELEMWISE_KERNELS(div, x/y)
-      ELEMWISE_KERNELS(mod, (pythonFmod(x,y)))
+      BINARY_KERNELS(add, x+y)
+      BINARY_KERNELS(sub, x-y)
+      BINARY_KERNELS(mul, x*y)
+      BINARY_KERNELS(div, x/y)
+      BINARY_KERNELS(mod, (pythonFmod(x,y)))
 
       kernel void vector_pow_fp16(device const half* input [[buffer(0)]],
                                   device half* output [[buffer(1)]],
@@ -1448,6 +1452,44 @@ open class MPSBackend: CPUBackend {
           if (id < N) {
               half x = input[id];
               output[id] = x > half(0.0) ? half(1.0) : half(0.0);
+          }
+      }
+
+      kernel void abs_fp32(device const float* input [[buffer(0)]],
+                           device float* output [[buffer(1)]],
+                           constant uint &N [[buffer(2)]],
+                           uint id [[thread_position_in_grid]]) {
+          if (id < N) {
+              output[id] = abs(input[id]);
+          }
+      }
+
+
+      kernel void abs_fp16(device const half* input [[buffer(0)]],
+                           device half* output [[buffer(1)]],
+                           constant uint &N [[buffer(2)]],
+                           uint id [[thread_position_in_grid]]) {
+          if (id < N) {
+              output[id] = abs(input[id]);
+          }
+      }
+
+      kernel void abs_grad_fp32(device const float* input [[buffer(0)]],
+                                device float* output [[buffer(1)]],
+                                constant uint &N [[buffer(2)]],
+                                uint id [[thread_position_in_grid]]) {
+          if (id < N) {
+              output[id] = input[id] < 0 ? -1 : 1;
+          }
+      }
+
+
+      kernel void abs_grad_fp16(device const half* input [[buffer(0)]],
+                                device half* output [[buffer(1)]],
+                                constant uint &N [[buffer(2)]],
+                                uint id [[thread_position_in_grid]]) {
+          if (id < N) {
+              output[id] = input[id] < 0 ? -1 : 1;
           }
       }
 

@@ -44,5 +44,8 @@ let package = Package(
     .executableTarget(
       name: "MNISTGenExample",
       dependencies: ["MNIST", "Honeycrisp"]),
+    .executableTarget(
+      name: "Text2Image",
+      dependencies: ["Honeycrisp"]),
   ]
 )

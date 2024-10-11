@@ -17,7 +17,7 @@ extension Tensor {
       if newValue != oldValue {
         alwaysAssert(
           oldValue == 1,
-          "axis \(axis) cannot expand from size \(oldValue) to \(newValue)"
+          "axis \(axis) cannot expand from size \(oldValue) to \(newValue): old shape \(shape), new shape \(newShape)"
         )
         result = result.repeating(axis: axis, count: newValue)
       }

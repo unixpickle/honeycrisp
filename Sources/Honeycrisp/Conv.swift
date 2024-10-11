@@ -289,7 +289,8 @@ public struct ConvConfig<Dim: SpatialDim>: Hashable {
   public static func samePadding(kernelSize: Dim, dilation: Dim = Dim(constant: 1))
     -> Padding
   {
-    let effectiveKernel = kernelSize + (kernelSize - Dim(constant: 1)) * dilation
+    let effectiveKernel =
+      kernelSize + (kernelSize - Dim(constant: 1)) * (dilation - Dim(constant: 1))
     return Padding(
       before: (effectiveKernel - Dim(constant: 1)) / Dim(constant: 2),
       after: effectiveKernel / Dim(constant: 2))

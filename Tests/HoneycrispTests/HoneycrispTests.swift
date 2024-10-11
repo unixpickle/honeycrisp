@@ -682,6 +682,11 @@ final class HoneycrispTests: XCTestCase {
       tol: 1e-3
     ) { $0.gelu() }
     try await testF(
+      input: [-100, -2, 2, 100],
+      output: [100, 2, 2, 100],
+      grad: [-1, -1, 1, 1]
+    ) { $0.abs() }
+    try await testF(
       input: [-100, -2, -0.1, 0.1, 1, 2, 3, 100],
       output: [0, 0, 0, 0.1, 1, 2, 3, 100],
       grad: [0, 0, 0, 1, 1, 1, 1, 1]
@@ -1294,6 +1299,16 @@ final class HoneycrispTests: XCTestCase {
       try await assertClose(inputGrad2D!, inputGrad!)
       try await assertClose(kernelGrad2D!, kernelGrad!)
     }
+  }
+
+  func testGroupNorm() async throws {
+    let gnCfirst = GroupNorm(groupCount: 4, channelCount: 16, channelsLast: false)
+    let gnClast = GroupNorm(groupCount: 4, channelCount: 16, channelsLast: true)
+    let inputCfirst = Tensor(rand: [2, 16, 10, 10])
+    let inputClast = inputCfirst.move(axis: 1, to: -1)
+    let outputCfirst = gnCfirst(inputCfirst)
+    let outputClast = gnClast(inputClast).move(axis: -1, to: 1)
+    try await assertClose(outputCfirst, outputClast)
   }
 }
 

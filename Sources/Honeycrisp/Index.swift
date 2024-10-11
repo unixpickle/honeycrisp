@@ -174,6 +174,10 @@ public struct PermuteAxes: TensorIndex {
   public var minTensorIndexDims: Int { perm.count }
 
   public init(_ perm: Int...) {
+    self.init(perm)
+  }
+
+  public init(_ perm: [Int]) {
     for x in perm {
       alwaysAssert(x >= 0 && x < perm.count, "invalid permutation indices \(perm)")
     }
@@ -182,6 +186,17 @@ public struct PermuteAxes: TensorIndex {
   }
 
   public func tensorIndex(forShape inShape: [Int]) -> TensorIndexResult {
+    var newPerm = self.perm
+    var removed = 0
+    while newPerm.count > 0 && newPerm[0] == 0 {
+      newPerm.remove(at: 0)
+      newPerm = newPerm.map { $0 - 1 }
+      removed += 1
+    }
+    if removed > 0 {
+      return [FullRange(dims: removed), PermuteAxes(newPerm)].tensorIndex(forShape: inShape)
+    }
+
     alwaysAssert(
       perm.count <= inShape.count,
       "incompatible permutation \(perm) for shape \(inShape)")
@@ -286,6 +301,32 @@ extension Array: TensorIndex where Element == any TensorIndex {
 extension Tensor {
   public func t() -> Tensor {
     return self[FullRange(dims: shape.count - 2), PermuteAxes(1, 0)]
+  }
+
+  public func swap(axis: Int, with: Int) -> Tensor {
+    let axis = positiveAxis(axis)
+    let with = positiveAxis(with)
+    if axis == with {
+      return self
+    }
+
+    var perm = Array(0..<(Swift.max(axis, with) + 1))
+    perm[axis] = with
+    perm[with] = axis
+    return self[PermuteAxes(perm)]
+  }
+
+  public func move(axis: Int, to: Int) -> Tensor {
+    let axis = positiveAxis(axis)
+    let to = positiveAxis(to)
+    if axis == to {
+      return self
+    }
+
+    var perm = Array(0..<(Swift.max(axis, to) + 1))
+    perm.remove(at: axis)
+    perm.insert(axis, at: to)
+    return self[PermuteAxes(perm)]
   }
 
   public subscript(index: any TensorIndex...) -> Tensor {

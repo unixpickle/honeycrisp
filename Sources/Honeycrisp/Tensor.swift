@@ -306,8 +306,12 @@ public final class Tensor {
     return result
   }
 
-  public func flatten(startAxis: Int = 0) -> Tensor {
-    return reshape(shape[..<startAxis] + [shape[startAxis...].product()])
+  public func flatten(startAxis: Int = 0, endAxis: Int = -1) -> Tensor {
+    let startAxis = positiveAxis(startAxis)
+    let endAxis = positiveAxis(endAxis)
+    alwaysAssert(endAxis >= startAxis, "invalid axes for flatten(): [\(startAxis), \(endAxis)]")
+    return reshape(
+      shape[..<startAxis] + [shape[startAxis...endAxis].product()] + shape[(endAxis + 1)...])
   }
 
   public func squeeze(axis: Int) -> Tensor {
