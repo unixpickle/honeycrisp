@@ -529,100 +529,102 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testIndexing() async throws {
-    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2])
-    XCTAssertEqual(x[0].shape, [2])
-    XCTAssertEqual(x[..., 0].shape, [3])
-    try await assertDataEqual(x[1], [3, 4])
-    try await assertDataEqual(x[1..<3], [3, 4, 5, 6])
-    try await assertDataEqual(x[1...2], [3, 4, 5, 6])
-    try await assertDataEqual(x[1..<2], [3, 4])
-    try await assertDataEqual(x[(-2)..<(-1)], [3, 4])
-    try await assertDataEqual(x[(-2)...(-1)], [3, 4, 5, 6])
-    try await assertDataEqual(x[(-2)...], [3, 4, 5, 6])
-    try await assertDataEqual(x[...(-2)], [1, 2, 3, 4])
-    try await assertDataEqual(x[..<(-2)], [1, 2])
+    try await runInBackends {
+      let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2])
+      XCTAssertEqual(x[0].shape, [2])
+      XCTAssertEqual(x[..., 0].shape, [3])
+      try await assertDataEqual(x[1], [3, 4])
+      try await assertDataEqual(x[1..<3], [3, 4, 5, 6])
+      try await assertDataEqual(x[1...2], [3, 4, 5, 6])
+      try await assertDataEqual(x[1..<2], [3, 4])
+      try await assertDataEqual(x[(-2)..<(-1)], [3, 4])
+      try await assertDataEqual(x[(-2)...(-1)], [3, 4, 5, 6])
+      try await assertDataEqual(x[(-2)...], [3, 4, 5, 6])
+      try await assertDataEqual(x[...(-2)], [1, 2, 3, 4])
+      try await assertDataEqual(x[..<(-2)], [1, 2])
 
-    let y = Tensor(
-      data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], shape: [3, 1, 4], dtype: .float32)
-    XCTAssertEqual(y[..., 0].shape, [3, 4])
-    try await assertDataEqual(y[..., 0], y)
-    XCTAssertEqual(y[0, ..., 0].shape, [1])
-    try await assertDataEqual(y[0, ..., 0], [1])
-    XCTAssertEqual(y[..., 0, ...].shape, [3, 4])
-    try await assertDataEqual(y[0, FullRange(dims: 2)], [1, 2, 3, 4])
-    XCTAssertEqual(y[0, FullRange(dims: 2)].shape, [1, 4])
-    try await assertDataEqual(y[..., 0, ...], y)
-    XCTAssertEqual(y[0, 0, 0].shape, [])
-    try await assertDataEqual(y[0, 0, 0], [1])
-    try await assertDataEqual(y[0...1, ..., 3], [4, 8])
-    try await assertDataEqual(y[0..<2, ..., 3], [4, 8])
-    try await assertDataEqual(y[0...2, ..., 3], [4, 8, 12])
-    try await assertDataEqual(y[0..<3, ..., 3], [4, 8, 12])
-    try await assertDataEqual(y[0..., ..., 3], [4, 8, 12])
-    try await assertDataEqual(y[1...2, ..., 2...3], [7, 8, 11, 12])
-    try await assertDataEqual(y[0...2, ..., 2...3], [3, 4, 7, 8, 11, 12])
-    try await assertDataEqual(y[0...2, 0..<1, 2...3], [3, 4, 7, 8, 11, 12])
-    try await assertDataEqual(y[FullRange(dims: 3), NewAxis()], y)
-    XCTAssertEqual(y[FullRange(dims: 3), NewAxis()].shape, [3, 1, 4, 1])
-    try await assertDataEqual(y[FullRange(dims: 2), NewAxis()], y)
-    XCTAssertEqual(y[FullRange(dims: 2), NewAxis()].shape, [3, 1, 1, 4])
-    try await assertDataEqual(y[FullRange(dims: 1), NewAxis()], y)
-    XCTAssertEqual(y[FullRange(dims: 1), NewAxis()].shape, [3, 1, 1, 4])
-    try await assertDataEqual(y[NewAxis()], y)
-    XCTAssertEqual(y[NewAxis()].shape, [1, 3, 1, 4])
+      let y = Tensor(
+        data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], shape: [3, 1, 4], dtype: .float32)
+      XCTAssertEqual(y[..., 0].shape, [3, 4])
+      try await assertDataEqual(y[..., 0], y)
+      XCTAssertEqual(y[0, ..., 0].shape, [1])
+      try await assertDataEqual(y[0, ..., 0], [1])
+      XCTAssertEqual(y[..., 0, ...].shape, [3, 4])
+      try await assertDataEqual(y[0, FullRange(dims: 2)], [1, 2, 3, 4])
+      XCTAssertEqual(y[0, FullRange(dims: 2)].shape, [1, 4])
+      try await assertDataEqual(y[..., 0, ...], y)
+      XCTAssertEqual(y[0, 0, 0].shape, [])
+      try await assertDataEqual(y[0, 0, 0], [1])
+      try await assertDataEqual(y[0...1, ..., 3], [4, 8])
+      try await assertDataEqual(y[0..<2, ..., 3], [4, 8])
+      try await assertDataEqual(y[0...2, ..., 3], [4, 8, 12])
+      try await assertDataEqual(y[0..<3, ..., 3], [4, 8, 12])
+      try await assertDataEqual(y[0..., ..., 3], [4, 8, 12])
+      try await assertDataEqual(y[1...2, ..., 2...3], [7, 8, 11, 12])
+      try await assertDataEqual(y[0...2, ..., 2...3], [3, 4, 7, 8, 11, 12])
+      try await assertDataEqual(y[0...2, 0..<1, 2...3], [3, 4, 7, 8, 11, 12])
+      try await assertDataEqual(y[FullRange(dims: 3), NewAxis()], y)
+      XCTAssertEqual(y[FullRange(dims: 3), NewAxis()].shape, [3, 1, 4, 1])
+      try await assertDataEqual(y[FullRange(dims: 2), NewAxis()], y)
+      XCTAssertEqual(y[FullRange(dims: 2), NewAxis()].shape, [3, 1, 1, 4])
+      try await assertDataEqual(y[FullRange(dims: 1), NewAxis()], y)
+      XCTAssertEqual(y[FullRange(dims: 1), NewAxis()].shape, [3, 1, 1, 4])
+      try await assertDataEqual(y[NewAxis()], y)
+      XCTAssertEqual(y[NewAxis()].shape, [1, 3, 1, 4])
 
-    XCTAssertEqual(y[..., 0, 3].shape, [3])
+      XCTAssertEqual(y[..., 0, 3].shape, [3])
 
-    var yGrad: Tensor?
-    let yParam = y.onGrad { grad in yGrad = grad }
-    yParam[1...2, ..., 2...3].backward(
-      Tensor(data: [1, 2, 3, 4], shape: [2, 1, 2], dtype: .float32))
-    XCTAssertEqual(yGrad!.shape, y.shape)
-    try await assertDataEqual(yGrad!, [0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 4])
+      var yGrad: Tensor?
+      let yParam = y.onGrad { grad in yGrad = grad }
+      yParam[1...2, ..., 2...3].backward(
+        Tensor(data: [1, 2, 3, 4], shape: [2, 1, 2], dtype: .float32))
+      XCTAssertEqual(yGrad!.shape, y.shape)
+      try await assertDataEqual(yGrad!, [0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 4])
 
-    let yParam1 = y.onGrad { grad in yGrad = grad }
-    yParam1[..., 0, 3].backward(Tensor(data: [1, 2, 3], shape: [3], dtype: .float32))
-    XCTAssertEqual(yGrad!.shape, y.shape)
-    try await assertDataEqual(yGrad!, [0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3])
+      let yParam1 = y.onGrad { grad in yGrad = grad }
+      yParam1[..., 0, 3].backward(Tensor(data: [1, 2, 3], shape: [3], dtype: .float32))
+      XCTAssertEqual(yGrad!.shape, y.shape)
+      try await assertDataEqual(yGrad!, [0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3])
 
-    // High dimensional permutations.
-    let bigArr = Tensor(
-      data: [
-        4, 8, 7, 2, 9, 6, 6, 7, 6, 8, 4, 9, 1, 9, 9, 7, 2, 3, 0, 9, 7, 6, 9, 8, 1, 3, 5, 0, 1, 5, 9,
-        5, 0, 5, 4, 0, 2, 9, 8, 7, 5, 5, 7, 3, 0, 1, 5, 1, 9, 6, 3, 3, 6, 7, 1, 4, 6, 1, 6, 3, 2, 8,
-        1, 2, 1, 2, 1, 8, 0, 4, 2, 7, 1, 0, 0, 7, 3, 9, 5, 5, 6, 5, 7, 3, 9, 3, 9, 0, 9, 8, 9, 9, 0,
-        7, 0, 6, 2, 8, 7, 6, 8, 8, 3, 7, 8, 3, 8, 9, 4, 0, 7, 7, 0, 4, 3, 3, 9, 4, 3, 5,
-      ], shape: [2, 1, 3, 5, 4], dtype: .float32)
-    let perm1 = bigArr[PermuteAxes(1, 2, 3, 4, 0)]
-    XCTAssertEqual(perm1.shape, [1, 3, 5, 4, 2])
-    try await assertDataEqual(
-      perm1,
-      [
-        4, 2, 8, 8, 7, 1, 2, 2, 9, 1, 6, 2, 6, 1, 7, 8, 6, 0, 8, 4, 4, 2, 9, 7, 1, 1, 9, 0, 9, 0, 7,
-        7, 2, 3, 3, 9, 0, 5, 9, 5, 7, 6, 6, 5, 9, 7, 8, 3, 1, 9, 3, 3, 5, 9, 0, 0, 1, 9, 5, 8, 9, 9,
-        5, 9, 0, 0, 5, 7, 4, 0, 0, 6, 2, 2, 9, 8, 8, 7, 7, 6, 5, 8, 5, 8, 7, 3, 3, 7, 0, 8, 1, 3, 5,
-        8, 1, 9, 9, 4, 6, 0, 3, 7, 3, 7, 6, 0, 7, 4, 1, 3, 4, 3, 6, 9, 1, 4, 6, 3, 3, 5,
-      ])
-    let perm2 = bigArr[FullRange(dims: 2), PermuteAxes(2, 1, 0)]
-    XCTAssertEqual(perm2.shape, [2, 1, 4, 5, 3])
-    try await assertDataEqual(
-      perm2,
-      [
-        4, 7, 5, 9, 1, 0, 6, 1, 9, 1, 0, 6, 2, 2, 6, 8, 6, 5, 6, 3, 1, 8, 5, 6, 9, 5, 7, 3, 9, 1, 7,
-        9, 7, 6, 5, 5, 4, 9, 3, 9, 4, 1, 0, 8, 6, 2, 8, 3, 7, 0, 1, 9, 5, 3, 7, 0, 4, 9, 7, 3, 2, 6,
-        8, 1, 9, 8, 0, 9, 4, 1, 0, 0, 3, 2, 9, 8, 5, 8, 2, 3, 3, 4, 8, 0, 0, 7, 4, 9, 8, 4, 1, 7, 3,
-        1, 9, 8, 2, 9, 7, 0, 0, 3, 5, 7, 3, 2, 3, 7, 8, 0, 9, 7, 9, 7, 7, 6, 3, 5, 6, 5,
-      ])
-    let perm3 = bigArr[PermuteAxes(1, 0)]
-    XCTAssertEqual(perm3.shape, [1, 2, 3, 5, 4])
-    try await assertDataEqual(
-      perm3,
-      [
-        4, 8, 7, 2, 9, 6, 6, 7, 6, 8, 4, 9, 1, 9, 9, 7, 2, 3, 0, 9, 7, 6, 9, 8, 1, 3, 5, 0, 1, 5, 9,
-        5, 0, 5, 4, 0, 2, 9, 8, 7, 5, 5, 7, 3, 0, 1, 5, 1, 9, 6, 3, 3, 6, 7, 1, 4, 6, 1, 6, 3, 2, 8,
-        1, 2, 1, 2, 1, 8, 0, 4, 2, 7, 1, 0, 0, 7, 3, 9, 5, 5, 6, 5, 7, 3, 9, 3, 9, 0, 9, 8, 9, 9, 0,
-        7, 0, 6, 2, 8, 7, 6, 8, 8, 3, 7, 8, 3, 8, 9, 4, 0, 7, 7, 0, 4, 3, 3, 9, 4, 3, 5,
-      ])
+      // High dimensional permutations.
+      let bigArr = Tensor(
+        data: [
+          4, 8, 7, 2, 9, 6, 6, 7, 6, 8, 4, 9, 1, 9, 9, 7, 2, 3, 0, 9, 7, 6, 9, 8, 1, 3, 5, 0, 1, 5,
+          9, 5, 0, 5, 4, 0, 2, 9, 8, 7, 5, 5, 7, 3, 0, 1, 5, 1, 9, 6, 3, 3, 6, 7, 1, 4, 6, 1, 6, 3,
+          2, 8, 1, 2, 1, 2, 1, 8, 0, 4, 2, 7, 1, 0, 0, 7, 3, 9, 5, 5, 6, 5, 7, 3, 9, 3, 9, 0, 9, 8,
+          9, 9, 0, 7, 0, 6, 2, 8, 7, 6, 8, 8, 3, 7, 8, 3, 8, 9, 4, 0, 7, 7, 0, 4, 3, 3, 9, 4, 3, 5,
+        ], shape: [2, 1, 3, 5, 4], dtype: .float32)
+      let perm1 = bigArr[PermuteAxes(1, 2, 3, 4, 0)]
+      XCTAssertEqual(perm1.shape, [1, 3, 5, 4, 2])
+      try await assertDataEqual(
+        perm1,
+        [
+          4, 2, 8, 8, 7, 1, 2, 2, 9, 1, 6, 2, 6, 1, 7, 8, 6, 0, 8, 4, 4, 2, 9, 7, 1, 1, 9, 0, 9, 0,
+          7, 7, 2, 3, 3, 9, 0, 5, 9, 5, 7, 6, 6, 5, 9, 7, 8, 3, 1, 9, 3, 3, 5, 9, 0, 0, 1, 9, 5, 8,
+          9, 9, 5, 9, 0, 0, 5, 7, 4, 0, 0, 6, 2, 2, 9, 8, 8, 7, 7, 6, 5, 8, 5, 8, 7, 3, 3, 7, 0, 8,
+          1, 3, 5, 8, 1, 9, 9, 4, 6, 0, 3, 7, 3, 7, 6, 0, 7, 4, 1, 3, 4, 3, 6, 9, 1, 4, 6, 3, 3, 5,
+        ])
+      let perm2 = bigArr[FullRange(dims: 2), PermuteAxes(2, 1, 0)]
+      XCTAssertEqual(perm2.shape, [2, 1, 4, 5, 3])
+      try await assertDataEqual(
+        perm2,
+        [
+          4, 7, 5, 9, 1, 0, 6, 1, 9, 1, 0, 6, 2, 2, 6, 8, 6, 5, 6, 3, 1, 8, 5, 6, 9, 5, 7, 3, 9, 1,
+          7, 9, 7, 6, 5, 5, 4, 9, 3, 9, 4, 1, 0, 8, 6, 2, 8, 3, 7, 0, 1, 9, 5, 3, 7, 0, 4, 9, 7, 3,
+          2, 6, 8, 1, 9, 8, 0, 9, 4, 1, 0, 0, 3, 2, 9, 8, 5, 8, 2, 3, 3, 4, 8, 0, 0, 7, 4, 9, 8, 4,
+          1, 7, 3, 1, 9, 8, 2, 9, 7, 0, 0, 3, 5, 7, 3, 2, 3, 7, 8, 0, 9, 7, 9, 7, 7, 6, 3, 5, 6, 5,
+        ])
+      let perm3 = bigArr[PermuteAxes(1, 0)]
+      XCTAssertEqual(perm3.shape, [1, 2, 3, 5, 4])
+      try await assertDataEqual(
+        perm3,
+        [
+          4, 8, 7, 2, 9, 6, 6, 7, 6, 8, 4, 9, 1, 9, 9, 7, 2, 3, 0, 9, 7, 6, 9, 8, 1, 3, 5, 0, 1, 5,
+          9, 5, 0, 5, 4, 0, 2, 9, 8, 7, 5, 5, 7, 3, 0, 1, 5, 1, 9, 6, 3, 3, 6, 7, 1, 4, 6, 1, 6, 3,
+          2, 8, 1, 2, 1, 2, 1, 8, 0, 4, 2, 7, 1, 0, 0, 7, 3, 9, 5, 5, 6, 5, 7, 3, 9, 3, 9, 0, 9, 8,
+          9, 9, 0, 7, 0, 6, 2, 8, 7, 6, 8, 8, 3, 7, 8, 3, 8, 9, 4, 0, 7, 7, 0, 4, 3, 3, 9, 4, 3, 5,
+        ])
+    }
   }
 
   func testElemwise() async throws {
@@ -706,6 +708,21 @@ final class HoneycrispTests: XCTestCase {
       output: [Float](repeating: 9.0, count: 1024),
       grad: [Float](repeating: 1.0, count: 1024)
     ) { $0.exp().log() }
+    try await testF(
+      input: [-1, -2, -3, 1.1, 2, 3],
+      output: [1, 1, 1, 1.1, 2, 3],
+      grad: [0, 0, 0, 1, 1, 1]
+    ) { $0.clamp(min: 1) }
+    try await testF(
+      input: [-1, -2, -3, 0.9, 1.1, 2, 3],
+      output: [-1, -2, -3, 0.9, 1, 1, 1],
+      grad: [1, 1, 1, 1, 0, 0, 0]
+    ) { $0.clamp(max: 1) }
+    try await testF(
+      input: [-1, -2, -3, 0.9, 1.1, 2, 3],
+      output: [-1, -1.5, -1.5, 0.9, 1, 1, 1],
+      grad: [1, 0, 0, 1, 0, 0, 0]
+    ) { $0.clamp(min: -1.5, max: 1) }
   }
 
   func testMinMax() async throws {

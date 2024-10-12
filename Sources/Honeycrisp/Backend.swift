@@ -192,6 +192,15 @@ open class Backend {
     throw BackendError.notImplemented("pow")
   }
 
+  public func clamp<T: NumericTensorElement>(
+    _ a: Tensor.Data, min: T?, max: T?, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("clamp")
+  }
+
   public func reduce(
     _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
   )
@@ -744,6 +753,50 @@ open class CPUBackend: Backend {
       return try await apply(b.toInt64())
     } else {
       return try await apply(b.toFloat())
+    }
+  }
+
+  override public func clamp<T: NumericTensorElement>(
+    _ a: Tensor.Data, min: T?, max: T?, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(a)
+
+    alwaysAssert(min != nil || max != nil, "cannot use clamp() without bounds")
+
+    func apply<T1: NumericTensorElement>(_ min: T1?, _ max: T1?) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: count * dtype.byteSize)
+      try await serialize {
+        try readBuffer(T1.self, a.buffer, count: count, dtype: dtype) { arr in
+          try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in
+            if let max = max, let min = min {
+              for (i, x) in arr.enumerated() {
+                out[i] = Swift.max(min, Swift.min(max, x))
+              }
+            } else if let max = max {
+              for (i, x) in arr.enumerated() {
+                out[i] = Swift.min(max, x)
+              }
+            } else if let min = min {
+              for (i, x) in arr.enumerated() {
+                out[i] = Swift.max(min, x)
+              }
+            } else {
+              for (i, x) in arr.enumerated() {
+                out[i] = x
+              }
+            }
+          }
+        }
+      }
+      return Tensor.Data(backend: self, buffer: buffer)
+    }
+    if dtype == .int64 {
+      return try await apply(min?.toInt64(), max?.toInt64())
+    } else {
+      return try await apply(min?.toFloat(), max?.toFloat())
     }
   }
 
@@ -1351,16 +1404,15 @@ open class CPUBackend: Backend {
     let buffer = try await allocate(length: shape.product() * Tensor.DType.int64.byteSize)
     try await serialize {
       let oldStrides = stridesForShape(shape)
-
       let permutedStrides = permutation.map { oldStrides[$0] }
       let newShape = permutation.map { shape[$0] }
       let newStrides = stridesForShape(newShape)
       var newIndices = [Int](repeating: 0, count: shape.product())
       for i in 0..<newIndices.count {
-        let newIndex = zip(newStrides, newShape).map { stride, shape in (i / stride) % shape }
-        let flatIndex = zip(newIndex, permutedStrides).map { $0 * $1 }.sum()
-        alwaysAssert(
-          flatIndex >= 0 && flatIndex < newIndices.count, "bad flat index for \(newIndex)")
+        var flatIndex = 0
+        for j in 0..<newStrides.count {
+          flatIndex += permutedStrides[j] * ((i / newStrides[j]) % newShape[j])
+        }
         newIndices[i] = flatIndex
       }
       try arrayToPointer(newIndices, output: buffer.contents(), dtype: .int64)

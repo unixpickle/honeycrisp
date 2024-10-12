@@ -103,24 +103,14 @@ open class MPSBackend: CPUBackend {
       let output = try await mpsBackend.allocate(length: count * dtype.byteSize)
 
       return try await mpsBackend.serialize { [self] in
-        let completion = try mpsBackend.completionBuffer { buf in
+        let completion = try mpsBackend.completionBufferAndEncoder { buf, enc in
           let state = try mpsBackend.getFunction(name: functionName)
-          guard let computeEncoder = buf.makeComputeCommandEncoder() else {
-            throw BackendError.kernelFailed("could not create compute encoder")
-          }
-          computeEncoder.setBuffer(output, offset: 0, index: 0)
-          computeEncoder.setBuffer(try mpsBackend.makeUIntBuffer(UInt32(seed)), offset: 0, index: 1)
-          computeEncoder.setBuffer(
-            try mpsBackend.makeUIntBuffer(UInt32(seed >> 32)), offset: 0, index: 2)
-          computeEncoder.setBuffer(
-            try mpsBackend.makeUIntBuffer(UInt32(offset)), offset: 0, index: 3)
-          computeEncoder.setBuffer(
-            try mpsBackend.makeUIntBuffer(UInt32(count)), offset: 0, index: 4)
-
+          try mpsBackend.setArguments(
+            enc, .buffer(output), .uint(UInt32(seed)), .uint(UInt32(seed >> 32)),
+            .uint(UInt32(offset)), .uint(UInt32(count)))
           let chunkSize = dist == .normal ? 2 : 4
           let totalThreads = (count + chunkSize - 1) / chunkSize
-          mpsBackend.dispatch1D(computeEncoder, state: state, threadCount: totalThreads)
-          computeEncoder.endEncoding()
+          mpsBackend.dispatch1D(enc, state: state, threadCount: totalThreads)
           offset += UInt64(totalThreads)
         }
         return Tensor.Data(backend: mpsBackend, buffer: output, completeOnAllDevices: completion)
@@ -163,14 +153,15 @@ open class MPSBackend: CPUBackend {
       source: MPSBackend.KernelCode, options: MTLCompileOptions())
 
     // Lookup all functions in the library.
-    var names = [
-      "vector_pow_fp16", "vector_pow_fp32", "log_fp16", "log_fp32", "recip_fp16", "recip_fp32",
-      "exp_fp16", "exp_fp32", "sigmoid_fp16", "sigmoid_fp32", "sigmoid_grad_fp16",
-      "sigmoid_grad_fp32", "gelu_fp32", "gelu_fp16", "gelu_grad_fp32", "gelu_grad_fp16", "sin_fp32",
-      "sin_fp16", "cos_fp32", "cos_fp16", "minus_sin_fp32", "minus_sin_fp16", "relu_fp32",
-      "relu_fp16", "relu_grad_fp32", "relu_grad_fp16", "abs_fp16", "abs_fp32", "abs_grad_fp16",
-      "abs_grad_fp32", "repeat", "rand_fp32", "rand_fp16", "randn_fp32", "randn_fp16",
-    ]
+    var names = ["repeat", "axis_permutation"]
+    for type in ["fp32", "fp16"] {
+      for op in [
+        "vector_pow", "log", "recip", "exp", "sigmoid", "sigmoid_grad", "gelu", "gelu_grad", "sin",
+        "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "rand", "randn",
+      ] {
+        names.append("\(op)_\(type)")
+      }
+    }
     for type in ["char", "short", "int", "long"] {
       for mode in ["", "_bcast"] {
         for op in ["gather", "scatter"] {
@@ -224,18 +215,13 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let completion = try completionBuffer { buf in
+      let completion = try completionBufferAndEncoder { buf, enc in
         let funcName = "vector_pow_\(dtype == .float16 ? "fp16" : "fp32")"
         let state = try getFunction(name: funcName)
-        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
-          throw BackendError.kernelFailed("could not create compute encoder")
-        }
         try setArguments(
-          computeEncoder, .buffer(a.buffer), .buffer(output), .float(b.toFloat()),
+          enc, .buffer(a.buffer), .buffer(output), .float(b.toFloat()),
           .uint(UInt32(count)))
-        dispatch1D(computeEncoder, state: state, threadCount: count)
-        computeEncoder.endEncoding()
-
+        dispatch1D(enc, state: state, threadCount: count)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
     }
@@ -287,14 +273,10 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let completion = try completionBuffer { buf in
+      let completion = try completionBufferAndEncoder { buf, enc in
         let state = try getFunction(name: functionName)
-        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
-          throw BackendError.kernelFailed("could not create compute encoder")
-        }
-        try setArguments(computeEncoder, .buffer(a.buffer), .buffer(output), .uint(UInt32(count)))
-        dispatch1D(computeEncoder, state: state, threadCount: count)
-        computeEncoder.endEncoding()
+        try setArguments(enc, .buffer(a.buffer), .buffer(output), .uint(UInt32(count)))
+        dispatch1D(enc, state: state, threadCount: count)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
     }
@@ -330,16 +312,12 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let completion = try completionBuffer { buf in
+      let completion = try completionBufferAndEncoder { buf, enc in
         let state = try getFunction(name: functionName)
-        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
-          throw BackendError.kernelFailed("could not create compute encoder")
-        }
         try setArguments(
-          computeEncoder, .buffer(a.buffer), .buffer(b.buffer), .buffer(output),
+          enc, .buffer(a.buffer), .buffer(b.buffer), .buffer(output),
           .uint(UInt32(count)))
-        dispatch1D(computeEncoder, state: state, threadCount: count)
-        computeEncoder.endEncoding()
+        dispatch1D(enc, state: state, threadCount: count)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
     }
@@ -375,16 +353,11 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let completion = try completionBuffer { buf in
+      let completion = try completionBufferAndEncoder { buf, enc in
         let state = try getFunction(name: functionName)
-        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
-          throw BackendError.kernelFailed("could not create compute encoder")
-        }
         try setArguments(
-          computeEncoder, .buffer(a.buffer), .float(b.toFloat()), .buffer(output),
-          .uint(UInt32(count)))
-        dispatch1D(computeEncoder, state: state, threadCount: count)
-        computeEncoder.endEncoding()
+          enc, .buffer(a.buffer), .float(b.toFloat()), .buffer(output), .uint(UInt32(count)))
+        dispatch1D(enc, state: state, threadCount: count)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
     }
@@ -420,16 +393,11 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(b)
     return try await serialize { [self] in
-      let completion = try completionBuffer { buf in
+      let completion = try completionBufferAndEncoder { buf, enc in
         let state = try getFunction(name: functionName)
-        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
-          throw BackendError.kernelFailed("could not create compute encoder")
-        }
         try setArguments(
-          computeEncoder, .float(a.toFloat()), .buffer(b.buffer), .buffer(output),
-          .uint(UInt32(count)))
-        dispatch1D(computeEncoder, state: state, threadCount: count)
-        computeEncoder.endEncoding()
+          enc, .float(a.toFloat()), .buffer(b.buffer), .buffer(output), .uint(UInt32(count)))
+        dispatch1D(enc, state: state, threadCount: count)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
     }
@@ -450,17 +418,17 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let completion = try completionBuffer { buf in
+      let completion = try completionBufferAndEncoder { buf, enc in
         let state = try getFunction(name: "repeat")
-        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
-          throw BackendError.kernelFailed("could not create compute encoder")
-        }
         try setArguments(
-          computeEncoder, .buffer(a.buffer), .buffer(output),
-          .uint(UInt32(innerCount * dtype.byteSize)), .uint(UInt32(outerCount)),
-          .uint(UInt32(repeats)))
-        dispatch1D(computeEncoder, state: state, threadCount: outBytes)
-        computeEncoder.endEncoding()
+          enc,
+          .buffer(a.buffer),
+          .buffer(output),
+          .uint(UInt32(innerCount * dtype.byteSize)),
+          .uint(UInt32(outerCount)),
+          .uint(UInt32(repeats))
+        )
+        dispatch1D(enc, state: state, threadCount: outBytes)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
     }
@@ -475,7 +443,7 @@ open class MPSBackend: CPUBackend {
     try await waitForGPUData(a, s.indices)
     let output = try await allocate(length: s.gatherOutCount * dtype.byteSize)
     return try await serialize { [self] in
-      let completion = try completionBuffer { buf in
+      let completion = try completionBufferAndEncoder { buf, enc in
         let typeName =
           switch dtype {
           case .bool:
@@ -489,16 +457,17 @@ open class MPSBackend: CPUBackend {
           }
         let functionName = "gather\(s.broadcasted ? "_bcast" : "")_\(typeName)"
         let state = try getFunction(name: functionName)
-
-        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
-          throw BackendError.kernelFailed("could not create compute encoder")
-        }
         try setArguments(
-          computeEncoder, .buffer(a.buffer), .buffer(s.indices.buffer), .buffer(output),
-          .uint(UInt32(s.outerCount)), .uint(UInt32(s.outCount)), .uint(UInt32(s.middleCount)),
-          .uint(UInt32(s.innerCount)))
-        dispatch1D(computeEncoder, state: state, threadCount: s.gatherOutCount)
-        computeEncoder.endEncoding()
+          enc,
+          .buffer(a.buffer),
+          .buffer(s.indices.buffer),
+          .buffer(output),
+          .uint(UInt32(s.outerCount)),
+          .uint(UInt32(s.outCount)),
+          .uint(UInt32(s.middleCount)),
+          .uint(UInt32(s.innerCount))
+        )
+        dispatch1D(enc, state: state, threadCount: s.gatherOutCount)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
     }
@@ -516,7 +485,7 @@ open class MPSBackend: CPUBackend {
     let needsAddition = try await allocate(length: 4)
 
     let result = try await serialize { [self] in
-      let completion = try completionBuffer { buf in
+      let completion = try completionBufferAndEncoder { buf, enc in
         let typeName =
           switch dtype {
           case .bool:
@@ -530,16 +499,11 @@ open class MPSBackend: CPUBackend {
           }
         let functionName = "scatter\(s.broadcasted ? "_bcast" : "")_\(typeName)"
         let state = try getFunction(name: functionName)
-
-        guard let computeEncoder = buf.makeComputeCommandEncoder() else {
-          throw BackendError.kernelFailed("could not create compute encoder")
-        }
         try setArguments(
-          computeEncoder, .buffer(a.buffer), .buffer(s.indices.buffer), .buffer(output),
+          enc, .buffer(a.buffer), .buffer(s.indices.buffer), .buffer(output),
           .buffer(counts), .buffer(needsAddition), .uint(UInt32(s.outerCount)),
           .uint(UInt32(s.outCount)), .uint(UInt32(s.middleCount)), .uint(UInt32(s.innerCount)))
-        dispatch1D(computeEncoder, state: state, threadCount: s.gatherOutCount)
-        computeEncoder.endEncoding()
+        dispatch1D(enc, state: state, threadCount: s.gatherOutCount)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
     }
@@ -551,6 +515,36 @@ open class MPSBackend: CPUBackend {
       return try await super.scatter(a, s, dtype: dtype)
     } else {
       return Tensor.Data(backend: self, buffer: result.buffer)
+    }
+  }
+
+  override public func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data
+  {
+    let outputCount = shape.product()
+    alwaysAssert(outputCount <= Int(UInt32.max), "cannot apply kernel to this many values")
+
+    let buffer = try await allocate(length: outputCount * Tensor.DType.int64.byteSize)
+    return try await serialize { [self] in
+      let oldStrides = stridesForShape(shape)
+      let permutedStrides = permutation.map { oldStrides[$0] }
+      let newShape = permutation.map { shape[$0] }
+      let newStrides = stridesForShape(newShape)
+
+      let completion = try completionBufferAndEncoder { buf, enc in
+        let functionName = "axis_permutation"
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc,
+          .uints(newStrides.map { UInt32($0) }),
+          .uints(newShape.map { UInt32($0) }),
+          .uints(permutedStrides.map { UInt32($0) }),
+          .buffer(buffer),
+          .uint(UInt32(newShape.count)),
+          .uint(UInt32(outputCount))
+        )
+        dispatch1D(enc, state: state, threadCount: outputCount)
+      }
+      return Tensor.Data(backend: self, buffer: buffer, completeOnAllDevices: completion)
     }
   }
 
@@ -991,12 +985,15 @@ open class MPSBackend: CPUBackend {
 
   internal enum KernelArgument {
     case uint(UInt32)
+    case uints([UInt32])
     case float(Float)
     case buffer(any MTLBuffer)
 
     internal func intoBuffer(_ b: MPSBackend) throws -> MTLBuffer {
       switch self {
       case .uint(let x):
+        try b.makeUIntBuffer(x)
+      case .uints(let x):
         try b.makeUIntBuffer(x)
       case .float(let x):
         try b.makeFloatBuffer(x)
@@ -1039,11 +1036,19 @@ open class MPSBackend: CPUBackend {
   }
 
   internal func makeUIntBuffer(_ x: UInt32) throws -> MTLBuffer {
-    var x = x
-    guard let result = (try device).makeBuffer(bytes: &x, length: 4, options: []) else {
-      throw BackendError.allocationFailed(4)
+    try makeUIntBuffer([x])
+  }
+
+  internal func makeUIntBuffer(_ x: [UInt32]) throws -> MTLBuffer {
+    return try x.withUnsafeBytes { bytes in
+      guard
+        let result = (try device).makeBuffer(
+          bytes: bytes.baseAddress!, length: 4 * x.count, options: [])
+      else {
+        throw BackendError.allocationFailed(4)
+      }
+      return result
     }
-    return result
   }
 
   internal func makeFloatBuffer(_ x: Float) throws -> MTLBuffer {
@@ -1105,6 +1110,20 @@ open class MPSBackend: CPUBackend {
       try await withCheckedThrowingContinuation { continuation in
         cb.putContinuation(continuation.resume)
       }
+    }
+  }
+
+  internal func completionBufferAndEncoder(
+    _ action: (MTLCommandBuffer, MTLComputeCommandEncoder) throws -> Void
+  ) throws -> Task<
+    (), Error
+  > {
+    try completionBuffer { buf in
+      guard let computeEncoder = buf.makeComputeCommandEncoder() else {
+        throw BackendError.kernelFailed("could not create compute encoder")
+      }
+      try action(buf, computeEncoder)
+      computeEncoder.endEncoding()
     }
   }
 
@@ -1763,6 +1782,23 @@ open class MPSBackend: CPUBackend {
       DEFINE_SCATTER(scatter_bcast, int)
       DEFINE_SCATTER(scatter, long)
       DEFINE_SCATTER(scatter_bcast, long)
+
+      kernel void axis_permutation(device const uint* newStrides [[buffer(0)]], \
+                                   device const uint* newShape [[buffer(1)]], \
+                                   device const uint* permutedStrides [[buffer(2)]], \
+                                   device ulong* output [[buffer(3)]], \
+                                   constant uint &numAxes [[buffer(4)]], \
+                                   constant uint &outputCount [[buffer(5)]], \
+                                   uint id [[thread_position_in_grid]]) { \
+          uint flatIndex = 0;
+          for (uint i = 0; i < numAxes; i++) {
+              uint oldIdx = (id / newStrides[i]) % newShape[i];
+              flatIndex += oldIdx * permutedStrides[i];
+          }
+          if (id < outputCount) {
+              output[id] = (ulong)flatIndex;
+          }
+      }
     """
 
 }
