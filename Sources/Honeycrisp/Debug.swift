@@ -5,8 +5,8 @@ extension Tensor {
     if onForward == nil && onGrad == nil {
       return self
     }
-    let task = Task {
-      let result = try await dataTask.value
+    let task = createDataTask { t in
+      let result = try await t.data
       if let onForward = onForward {
         print(onForward)
       }
@@ -27,13 +27,13 @@ extension Tensor {
     if onForward == nil && onGrad == nil {
       return self
     }
-    let task = Task {
-      let result = try await dataTask.value
+    let task = createDataTask { t in
+      let result = try await t.data
       if let c = result.completeOnAllDevices {
         let _ = try await c.value
       }
-      var floats = [Float](repeating: 0, count: shape.product())
-      try pointerToArray(result.buffer.contents(), output: &floats, dtype: dtype)
+      var floats = [Float](repeating: 0, count: t.shape.product())
+      try pointerToArray(result.buffer.contents(), output: &floats, dtype: t.dtype)
       if let onForward = onForward, !floats.allSatisfy({ !$0.isNaN }) {
         print("nan detected: \(onForward)")
       }

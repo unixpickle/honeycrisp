@@ -12,10 +12,10 @@ extension Tensor {
       "when() mask shape \(self.shape) does not match argument \(isTrue.shape)")
 
     let backend = Backend.current
-    let newData = Task {
+    let newData = Tensor.createDataTask(self, isTrue, isFalse) { t, isTrue, isFalse in
       try await backend.when(
-        try await self.data, .tensor(try await isTrue.data), .tensor(try await isFalse.data),
-        Float.self, count: self.shape.product(), dtype: isTrue.dtype)
+        try await t.data, .tensor(try await isTrue.data), .tensor(try await isFalse.data),
+        Float.self, count: t.shape.product(), dtype: isTrue.dtype)
     }
     if !Tensor.isGradEnabled || (!isTrue.needsGrad && !isFalse.needsGrad) {
       return Tensor(dataTask: newData, shape: shape, dtype: isTrue.dtype)
@@ -36,10 +36,10 @@ extension Tensor {
       "when() mask shape \(self.shape) does not match argument \(isTrue.shape)")
 
     let backend = Backend.current
-    let newData = Task {
+    let newData = Tensor.createDataTask(self, isTrue) { t, isTrue in
       try await backend.when(
-        try await self.data, .tensor(try await isTrue.data), .scalar(isFalse),
-        T.self, count: self.shape.product(), dtype: isTrue.dtype)
+        try await t.data, .tensor(try await isTrue.data), .scalar(isFalse), T.self,
+        count: t.shape.product(), dtype: isTrue.dtype)
     }
     if !Tensor.isGradEnabled || (!isTrue.needsGrad) {
       return Tensor(dataTask: newData, shape: shape, dtype: isTrue.dtype)
@@ -58,10 +58,10 @@ extension Tensor {
       "when() mask shape \(self.shape) does not match argument \(isFalse.shape)")
 
     let backend = Backend.current
-    let newData = Task {
+    let newData = Tensor.createDataTask(self, isFalse) { t, isFalse in
       try await backend.when(
-        try await self.data, .scalar(isTrue), .tensor(try await isFalse.data),
-        T.self, count: self.shape.product(), dtype: isFalse.dtype)
+        try await t.data, .scalar(isTrue), .tensor(try await isFalse.data), T.self,
+        count: t.shape.product(), dtype: isFalse.dtype)
     }
     if !Tensor.isGradEnabled || (!isFalse.needsGrad) {
       return Tensor(dataTask: newData, shape: shape, dtype: isFalse.dtype)
@@ -75,12 +75,11 @@ extension Tensor {
 
   public func when<T: TensorElement>(isTrue: T, isFalse: T, dtype: DType) -> Tensor {
     alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
-
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask { t in
       try await backend.when(
-        try await self.data, .scalar(isTrue), .scalar(isFalse),
-        T.self, count: self.shape.product(), dtype: dtype)
+        try await t.data, .scalar(isTrue), .scalar(isFalse), T.self, count: t.shape.product(),
+        dtype: dtype)
     }
     return Tensor(dataTask: newData, shape: shape, dtype: dtype)
   }

@@ -58,6 +58,7 @@ func loadImage(path: String, imageSize: Int) -> Tensor? {
 }
 
 func tensorToImage(tensor: Tensor) async throws -> Data {
+  assert(tensor.shape.count == 3)
   assert(tensor.shape[2] == 4, "tensor must be RGBA")
   let height = tensor.shape[0]
   let width = tensor.shape[1]
@@ -87,7 +88,7 @@ func tensorToImage(tensor: Tensor) async throws -> Data {
   }
   let buffer = data.bindMemory(to: UInt8.self, capacity: height * bytesPerRow)
   for (i, f) in floats.enumerated() {
-    buffer[i] = UInt8(floor(f * 255.999))
+    buffer[i] = UInt8(floor(min(1, max(0, f)) * 255.999))
   }
 
   guard let cgImage = context.makeImage() else {

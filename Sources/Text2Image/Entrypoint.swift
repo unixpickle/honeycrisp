@@ -3,7 +3,7 @@ import Foundation
 import Honeycrisp
 import MNIST
 
-struct ImageIterator: Sequence, IteratorProtocol {
+class ImageIterator: Sequence, IteratorProtocol {
   let imageSize: Int
   var imagePaths: [String]
   var offset = 0
@@ -21,7 +21,7 @@ struct ImageIterator: Sequence, IteratorProtocol {
     self.imagePaths = paths
   }
 
-  mutating func next() -> (String, Tensor)? {
+  func next() -> (String, Tensor)? {
     while imagePaths.count > 0 {
       offset = offset % imagePaths.count
       guard let image = loadImage(path: imagePaths[offset], imageSize: imageSize) else {
@@ -36,11 +36,16 @@ struct ImageIterator: Sequence, IteratorProtocol {
   }
 }
 
-struct DataLoader: Sequence, IteratorProtocol {
+class DataLoader: Sequence, IteratorProtocol {
   let batchSize: Int
   var images: ImageIterator
 
-  mutating func next() -> Tensor? {
+  init(batchSize: Int, images: ImageIterator) {
+    self.batchSize = batchSize
+    self.images = images
+  }
+
+  func next() -> Tensor? {
     var batch = [Tensor]()
     for (_, x) in images {
       batch.append(x)
@@ -58,9 +63,9 @@ struct DataLoader: Sequence, IteratorProtocol {
 @main
 struct Main {
   static func main() async {
-    let bs = 1
-    let clusterInterval = 1000
-    let clusterBatches = 1
+    let bs = 8
+    let clusterInterval = 100
+    let clusterBatches = 8
     let commitCoeff = 0.5
     let lr: Float = 0.001
 
@@ -81,18 +86,25 @@ struct Main {
     do {
       let dataset = DataLoader(
         batchSize: bs, images: try ImageIterator(imageDir: imageDir, imageSize: 256))
+
+      func takeDataset(_ n: Int) -> some Collection<Tensor> {
+        return (0..<n).lazy.map { _ in dataset.next()! }
+      }
+
       let opt = Adam(model.parameters, lr: lr)
       var step = 0
       while true {
         print("recomputing VQ centers...")
         Tensor.withGrad(enabled: false) {
           print(" => collecting features...")
-          let features = Tensor(concat: dataset.prefix(clusterBatches).map(model.features))
-          print(" => fitting features...")
+          let features = Tensor(concat: takeDataset(clusterBatches).map(model.features))
+          print(" => fitting \(features.shape[0]) features...")
           model.bottleneck.fitFeatures(features)
         }
+        let _ = try await model.bottleneck.dictionary.sum().item()
+
         print("training...")
-        for batch in dataset.prefix(clusterInterval) {
+        for batch in takeDataset(clusterInterval) {
           step += 1
           let (output, vqLosses) = model(batch)
           let loss = (output - batch).abs().mean()
@@ -104,6 +116,13 @@ struct Main {
               + " loss=\(try await loss.item())"
               + " commitment=\(try await vqLosses.commitmentLoss.item())")
         }
+
+        print("dumping samples to: samples.tiff ...")
+        let input = dataset.next()!
+        let (output, _) = Tensor.withGrad(enabled: false) { model(input) }
+        let images = Tensor(concat: [input, output], axis: -1)
+        let img = try await tensorToImage(tensor: images.move(axis: 1, to: -1).flatten(endAxis: 1))
+        try img.write(to: URL(filePath: "samples.tiff"))
       }
       /*
           print("writing tiff for \(path) ...")

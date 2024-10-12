@@ -481,7 +481,7 @@ extension Tensor {
     alwaysAssert(kernel.shape == kernelShape)
 
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(image, kernel) { image, kernel in
       switch Dim.dimCount {
       case 1:
         try await backend.conv1D(
@@ -534,7 +534,7 @@ extension Tensor {
       "invalid input shape for transposed conv2D: \(image.shape) (expected \(inShape))")
 
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(image, kernel) { image, kernel in
       switch Dim.dimCount {
       case 1:
         try await backend.conv1DTranspose(
@@ -585,7 +585,7 @@ extension Tensor {
     )
 
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(image, outGrad) { image, outGrad in
       switch Dim.dimCount {
       case 1:
         try await backend.conv1DKernelGrad(

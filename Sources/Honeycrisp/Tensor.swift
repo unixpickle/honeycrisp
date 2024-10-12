@@ -252,6 +252,41 @@ public final class Tensor {
     return Tensor(dataTask: dataTask, shape: shape, dtype: dtype)
   }
 
+  internal func createDataTask(_ fn: @escaping (Tensor) async throws -> Data) -> Task<Data, Error> {
+    Tensor.createDataTask(self, fn)
+  }
+
+  static internal func createDataTask(
+    _ x: Tensor, _ fn: @escaping (Tensor) async throws -> Data
+  ) -> Task<Data, Error> {
+    let safeRef1 = x.noGrad()
+    return Task {
+      try await fn(safeRef1)
+    }
+  }
+
+  static internal func createDataTask(
+    _ x: Tensor, _ y: Tensor, _ fn: @escaping (Tensor, Tensor) async throws -> Data
+  ) -> Task<Data, Error> {
+    let safeRef1 = x.noGrad()
+    let safeRef2 = y.noGrad()
+    return Task {
+      try await fn(safeRef1, safeRef2)
+    }
+  }
+
+  static internal func createDataTask(
+    _ x: Tensor, _ y: Tensor, _ z: Tensor,
+    _ fn: @escaping (Tensor, Tensor, Tensor) async throws -> Data
+  ) -> Task<Data, Error> {
+    let safeRef1 = x.noGrad()
+    let safeRef2 = y.noGrad()
+    let safeRef3 = z.noGrad()
+    return Task {
+      try await fn(safeRef1, safeRef2, safeRef3)
+    }
+  }
+
   public func onGrad(_ action: @escaping ((Tensor) -> Void)) -> Tensor {
     alwaysAssert(dtype.supportsGrad, "cannot compute gradients for dtype \(dtype)")
     if !Tensor.isGradEnabled {
@@ -339,9 +374,9 @@ public final class Tensor {
       return self
     }
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask { t in
       try await backend.cast(
-        try await self.data, count: shape.product(), inType: dtype, outType: newType)
+        try await t.data, count: t.shape.product(), inType: t.dtype, outType: newType)
     }
     if !needsGrad || !Tensor.isGradEnabled || !newType.supportsGrad {
       return Tensor(dataTask: newData, shape: shape, dtype: newType)
@@ -359,7 +394,7 @@ public final class Tensor {
       "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
     alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs) { lhs in
       try await backend.binaryOp(
         try await lhs.data, rhs, op: .add, count: lhs.shape.product(), dtype: lhs.dtype)
     }
@@ -386,7 +421,7 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for + operator do not match: \(lhs.dtype) and \(rhs.dtype)")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
         try await lhs.data, try await rhs.data, op: .add, count: lhs.shape.product(),
         dtype: lhs.dtype)
@@ -408,7 +443,7 @@ public final class Tensor {
       lhs.dtype.canUseScalarType(T.self),
       "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs) { lhs in
       try await backend.binaryOp(
         try await lhs.data, rhs, op: .mul, count: lhs.shape.product(), dtype: lhs.dtype)
     }
@@ -435,7 +470,7 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for * operator do not match: \(lhs.dtype) and \(rhs.dtype)")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
         try await lhs.data, try await rhs.data, op: .mul, count: lhs.shape.product(),
         dtype: lhs.dtype)
@@ -458,7 +493,7 @@ public final class Tensor {
       "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
     alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with - operator")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs) { lhs in
       try await backend.binaryOp(
         try await lhs.data, rhs, op: .sub, count: lhs.shape.product(), dtype: lhs.dtype)
     }
@@ -479,7 +514,7 @@ public final class Tensor {
       rhs.dtype.canUseScalarType(T.self),
       "scalar type \(T.self) cannot be used with dtype \(rhs.dtype)")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(rhs) { rhs in
       try await backend.binaryOp(
         lhs, try await rhs.data, op: .sub, count: rhs.shape.product(), dtype: rhs.dtype)
     }
@@ -502,7 +537,7 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
         try await lhs.data, try await rhs.data, op: .sub, count: lhs.shape.product(),
         dtype: lhs.dtype)
@@ -530,7 +565,7 @@ public final class Tensor {
       "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
     alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with / operator")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs) { lhs in
       try await backend.binaryOp(
         try await lhs.data, rhs, op: .div, count: lhs.shape.product(), dtype: lhs.dtype)
     }
@@ -550,7 +585,7 @@ public final class Tensor {
       "scalar type \(T.self) cannot be used with dtype \(rhs.dtype)")
     alwaysAssert(rhs.dtype.isNumeric, "dtype \(rhs.dtype) cannot be used with / operator")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(rhs) { rhs in
       try await backend.binaryOp(
         lhs, try await rhs.data, op: .div, count: rhs.shape.product(), dtype: rhs.dtype)
     }
@@ -573,7 +608,7 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
         try await lhs.data, try await rhs.data, op: .div, count: lhs.shape.product(),
         dtype: lhs.dtype)
@@ -596,7 +631,7 @@ public final class Tensor {
       "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
     alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with % operator")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs) { lhs in
       try await backend.binaryOp(
         try await lhs.data, rhs, op: .mod, count: lhs.shape.product(), dtype: lhs.dtype)
     }
@@ -617,7 +652,7 @@ public final class Tensor {
       rhs.dtype.canUseScalarType(T.self),
       "scalar type \(T.self) cannot be used with dtype \(rhs.dtype)")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(rhs) { rhs in
       try await backend.binaryOp(
         lhs, try await rhs.data, op: .mod, count: rhs.shape.product(), dtype: rhs.dtype)
     }
@@ -640,7 +675,7 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
         try await lhs.data, try await rhs.data, op: .mod, count: lhs.shape.product(),
         dtype: lhs.dtype)
@@ -660,9 +695,8 @@ public final class Tensor {
   public func pow<T: NumericTensorElement>(_ exponent: T) -> Tensor {
     alwaysAssert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
     let backend = Backend.current
-    let newData = Task {
-      try await backend.pow(
-        try await self.data, exponent, count: self.shape.product(), dtype: self.dtype)
+    let newData = createDataTask { t in
+      try await backend.pow(try await t.data, exponent, count: t.shape.product(), dtype: t.dtype)
     }
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: shape, dtype: dtype)
@@ -683,7 +717,7 @@ public final class Tensor {
       lhs.dtype == rhs.dtype, "dtypes for == operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.compare(
         try await lhs.data, try await rhs.data, op: op, count: lhs.shape.product(), dtype: lhs.dtype
       )
@@ -693,7 +727,7 @@ public final class Tensor {
 
   internal static func compare<T: TensorElement>(lhs: Tensor, rhs: T, op: ComparisonOp) -> Tensor {
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(lhs) { lhs in
       try await backend.compare(
         try await lhs.data, rhs, op: op, count: lhs.shape.product(), dtype: lhs.dtype
       )
@@ -703,7 +737,7 @@ public final class Tensor {
 
   internal static func compare<T: TensorElement>(lhs: T, rhs: Tensor, op: ComparisonOp) -> Tensor {
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(rhs) { rhs in
       try await backend.compare(
         lhs, try await rhs.data, op: op, count: rhs.shape.product(), dtype: rhs.dtype
       )

@@ -41,18 +41,18 @@ extension Tensor {
     }
 
     let backend = Backend.current
-    let newData = Task {
+    let newData = Tensor.createDataTask(self, indices) { t, indices in
       try await backend.gather(
-        try await self.data,
+        try await t.data,
         ScatterGatherIndices(
-          broadcasted: indices.shape.count != shape.count,
+          broadcasted: indices.shape.count != t.shape.count,
           indices: try await indices.data,
           outCount: indices.shape.count == 1 ? indices.shape[0] : indices.shape[axis],
-          outerCount: shape[..<axis].product(),
-          middleCount: shape[axis],
-          innerCount: shape[(axis + 1)...].product()
+          outerCount: t.shape[..<axis].product(),
+          middleCount: t.shape[axis],
+          innerCount: t.shape[(axis + 1)...].product()
         ),
-        dtype: dtype)
+        dtype: t.dtype)
     }
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype)
@@ -77,17 +77,17 @@ extension Tensor {
     newShape[axis] = count
 
     let backend = Backend.current
-    let newData = Task { [self] in
+    let newData = Tensor.createDataTask(self, indices) { t, indices in
       try await backend.scatter(
-        try await self.data,
+        try await t.data,
         ScatterGatherIndices(
-          broadcasted: indices.shape.count != shape.count,
+          broadcasted: indices.shape.count != t.shape.count,
           indices: try await indices.data,
           outCount: indices.shape.count == 1 ? indices.shape[0] : indices.shape[axis],
-          outerCount: shape[..<axis].product(),
+          outerCount: t.shape[..<axis].product(),
           middleCount: count,
-          innerCount: shape[(axis + 1)...].product()
-        ), dtype: dtype)
+          innerCount: t.shape[(axis + 1)...].product()
+        ), dtype: t.dtype)
     }
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype)

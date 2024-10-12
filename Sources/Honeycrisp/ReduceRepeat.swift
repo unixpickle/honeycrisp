@@ -96,8 +96,8 @@ extension Tensor {
     }
     alwaysAssert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
     let backend = Backend.current
-    let newData = Task {
-      try await backend.reduce(try await self.data, op: op, dims: reduceDims(axis), dtype: dtype)
+    let newData = createDataTask { t in
+      try await backend.reduce(try await t.data, op: op, dims: t.reduceDims(axis), dtype: t.dtype)
     }
     let newShape = Array(shape[..<axis]) + (keepdims ? [1] : []) + Array(shape[(axis + 1)...])
     if !Tensor.isGradEnabled || !needsGrad || (op != .sum) {
@@ -123,10 +123,10 @@ extension Tensor {
     let outerCount = shape[..<axis].product()
     let innerCount = shape[axis...].product()
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask { t in
       try await backend.repeated(
-        try await self.data, outerCount: outerCount, innerCount: innerCount, repeats: count,
-        dtype: dtype)
+        try await t.data, outerCount: outerCount, innerCount: innerCount, repeats: count,
+        dtype: t.dtype)
     }
     let newShape =
       if axis == shape.count {

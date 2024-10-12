@@ -25,7 +25,7 @@ extension Tensor {
       aShape[1] == bShape[0], "shape mismatch for matmul (with transposes): \(aShape), \(bShape)")
     let outShape = transOut ? [bShape[1], aShape[0]] : [aShape[0], bShape[1]]
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(a, b) { a, b in
       try await backend.matmul(
         a: try await a.data, transA: transA, b: try await b.data, transB: transB,
         transOut: transOut, rows: aShape[0],
@@ -69,7 +69,7 @@ extension Tensor {
     )
     let outShape = batchShape + (transOut ? [bShape[1], aShape[0]] : [aShape[0], bShape[1]])
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask(a, b) { a, b in
       return try await backend.batchedMatmul(
         matrixCount: batchShape.product(), a: try await a.data, transA: transA, b: try await b.data,
         transB: transB, transOut: transOut, rows: aShape[0], inner: aShape[1], cols: bShape[1],
@@ -99,12 +99,12 @@ extension Tensor {
 
   public func tril() -> Tensor {
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask { t in
       return try await backend.tril(
-        try await self.data,
-        batch: shape[..<(shape.count - 2)].product(),
-        rows: shape[shape.count - 2],
-        cols: shape[shape.count - 1], dtype: dtype)
+        try await t.data,
+        batch: t.shape[..<(t.shape.count - 2)].product(),
+        rows: t.shape[t.shape.count - 2],
+        cols: t.shape[t.shape.count - 1], dtype: t.dtype)
     }
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: shape, dtype: dtype)

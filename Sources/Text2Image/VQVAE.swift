@@ -63,9 +63,10 @@ class UpsampleBlock: Trainable {
 class VQEncoder: Trainable {
   @Child var inProj: Conv2D
   @Child var blocks: TrainableArray<DownsampleBlock>
+  @Child var outNorm: GroupNorm
   @Child var outProj: Conv2D
 
-  init(inChannels: Int, outChannels: Int, downsamples: Int) {
+  init(inChannels: Int, outChannels: Int, downsamples: Int, maxChannels: Int = 256) {
     super.init()
     self.inProj = Conv2D(
       inChannels: inChannels, outChannels: 64, kernelSize: .square(3), padding: .same)
@@ -73,12 +74,14 @@ class VQEncoder: Trainable {
     var blockArr = [DownsampleBlock]()
     var ch = 64
     for _ in 0..<downsamples {
-      blockArr.append(DownsampleBlock(inChannels: ch, outChannels: ch * 2))
+      blockArr.append(
+        DownsampleBlock(inChannels: min(maxChannels, ch), outChannels: min(maxChannels, ch * 2)))
       ch *= 2
     }
     self.blocks = TrainableArray(blockArr)
-
-    self.outProj = Conv2D(inChannels: ch, outChannels: outChannels, kernelSize: .square(1))
+    self.outNorm = GroupNorm(groupCount: 32, channelCount: min(maxChannels, ch))
+    self.outProj = Conv2D(
+      inChannels: min(ch, maxChannels), outChannels: outChannels, kernelSize: .square(1))
   }
 
   func callAsFunction(_ x: Tensor) -> Tensor {
@@ -86,6 +89,7 @@ class VQEncoder: Trainable {
     for layer in blocks.children {
       h = layer(h)
     }
+    h = outNorm(h)
     h = self.outProj(h)
     return h
   }
@@ -94,23 +98,26 @@ class VQEncoder: Trainable {
 class VQDecoder: Trainable {
   @Child var inProj: Conv2D
   @Child var blocks: TrainableArray<UpsampleBlock>
+  @Child var outNorm: GroupNorm
   @Child var outProj: Conv2D
 
-  init(inChannels: Int, outChannels: Int, upsamples: Int) {
+  init(inChannels: Int, outChannels: Int, upsamples: Int, maxChannels: Int = 256) {
     super.init()
     self.inProj = Conv2D(
-      inChannels: inChannels, outChannels: 64 * (1 << upsamples), kernelSize: .square(3),
-      padding: .same)
+      inChannels: inChannels, outChannels: min(maxChannels, 64 * (1 << upsamples)),
+      kernelSize: .square(3), padding: .same)
 
     var blockArr = [UpsampleBlock]()
     var ch = 64 * (1 << upsamples)
     for _ in 0..<upsamples {
-      blockArr.append(UpsampleBlock(inChannels: ch, outChannels: ch / 2))
+      blockArr.append(
+        UpsampleBlock(inChannels: min(ch, maxChannels), outChannels: min(ch / 2, maxChannels)))
       ch /= 2
     }
     self.blocks = TrainableArray(blockArr)
-
-    self.outProj = Conv2D(inChannels: ch, outChannels: outChannels, kernelSize: .square(1))
+    self.outNorm = GroupNorm(groupCount: 32, channelCount: min(maxChannels, ch))
+    self.outProj = Conv2D(
+      inChannels: min(maxChannels, ch), outChannels: outChannels, kernelSize: .square(1))
   }
 
   func callAsFunction(_ x: Tensor) -> Tensor {
@@ -118,6 +125,7 @@ class VQDecoder: Trainable {
     for layer in blocks.children {
       h = layer(h)
     }
+    h = outNorm(h)
     h = self.outProj(h)
     return h
   }
@@ -217,7 +225,6 @@ class VQVAE: Trainable {
   }
 
   func features(_ x: Tensor) -> Tensor {
-    print("computing features...")
-    return encoder(x).move(axis: 1, to: -1).flatten(endAxis: -2)
+    encoder(x).move(axis: 1, to: -1).flatten(endAxis: -2)
   }
 }

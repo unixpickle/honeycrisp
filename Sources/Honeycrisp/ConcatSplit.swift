@@ -25,9 +25,11 @@ extension Tensor {
     let outerCount = tensors[0].shape[..<axis].product()
     let dtype = tensors[0].dtype
 
+    // We cannot use createDataTask(), so we explicitly detach all arguments.
+    let capturedTensors = tensors.map { $0.noGrad() }
     let newData = Task {
       var datas: [Tensor.Data] = []
-      for tensor in tensors {
+      for tensor in capturedTensors {
         datas.append(try await tensor.data)
       }
       return try await backend.concat(

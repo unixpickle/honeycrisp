@@ -80,9 +80,9 @@ private func safeTanh(_ x: Float) -> Float {
 extension Tensor {
   public func elemwise(op: ElemwiseOp, grad gradOp: ElemwiseOp? = nil) -> Tensor {
     let backend = Backend.current
-    let newData = Task {
+    let newData = createDataTask { t in
       try await backend.elemwise(
-        try await self.data, op: op, count: shape.product(), dtype: dtype)
+        try await t.data, op: op, count: t.shape.product(), dtype: t.dtype)
     }
     if let gradOp = gradOp, needsGrad && Tensor.isGradEnabled {
       let handle = self.saveForBackward()
