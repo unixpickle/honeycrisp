@@ -127,6 +127,15 @@ class VQDecoder: Trainable {
     }
     h = outNorm(h)
     h = self.outProj(h)
+
+    // Pixels are bounded in [0, 1]
+    //h = h.sigmoid()
+
+    // Pre-multiply output alpha
+    let nonAlpha = h[..., ..<(-1)]
+    let alpha = h[..., (-1)...]
+    h = Tensor(concat: [nonAlpha * alpha.expand(as: nonAlpha), alpha], axis: 1)
+
     return h
   }
 }
@@ -145,12 +154,14 @@ class VQBottleneck: Trainable {
 
   let vocab: Int
   let channels: Int
+  var usageCounter: Tensor
 
   @Param var dictionary: Tensor
 
   init(vocab: Int, channels: Int) {
     self.vocab = vocab
     self.channels = channels
+    self.usageCounter = Tensor(zeros: [vocab], dtype: .int64)
     super.init()
     self.dictionary = Tensor(randn: [vocab, channels])
   }
@@ -162,6 +173,12 @@ class VQBottleneck: Trainable {
 
     let vecs = x.move(axis: 1, to: -1).flatten(endAxis: -2)
     let codes = nearestIndices(vecs, dictionary)
+
+    if mode == .training {
+      usageCounter =
+        usageCounter + Tensor(onesLike: codes).scatter(axis: 0, count: vocab, indices: codes)
+    }
+
     let selection = self.dictionary.gather(axis: 0, indices: codes)
     let out = selection.reshape([batch] + spatialShape + [channels]).move(axis: -1, to: 1)
     return Output(
@@ -174,31 +191,35 @@ class VQBottleneck: Trainable {
     )
   }
 
-  func fitFeatures(_ x: Tensor) {
-    // Make sure there's enough centers.
-    var x = x
-    while x.shape[0] < vocab {
-      x = Tensor(concat: [x, x + Tensor(randnLike: x) * 0.001])
-    }
+  func revive(_ x: Tensor) -> Tensor {
+    Tensor.withGrad(enabled: false) {
+      // Make sure there's enough centers.
+      var x = x
+      while x.shape[0] < vocab {
+        x = Tensor(concat: [x, x + Tensor(randnLike: x) * 0.001])
+      }
 
-    let indices = Tensor(data: Array((0..<x.shape[0]).shuffled()[..<vocab]), shape: [vocab])
-    var centers = x.gather(axis: 0, indices: indices)
-    for _ in 0..<10 {
-      let indices = nearestIndices(x, centers)
-      let sums = x.scatter(axis: 0, count: vocab, indices: indices)
-      let counts = Tensor(onesLike: indices).scatter(axis: 0, count: vocab, indices: indices)
-      centers = sums / (counts.cast(.float32) + 1e-5).unsqueeze(axis: 1).expand(as: sums)
+      let shuffleInds = Tensor(data: Array((0..<x.shape[0]).shuffled()[..<vocab]), shape: [vocab])
+      let newCenters = x.gather(axis: 0, indices: shuffleInds)
+
+      let mask = (usageCounter > 0).unsqueeze(axis: 1).expand(as: dictionary)
+      dictionary = mask.when(isTrue: dictionary, isFalse: newCenters)
+
+      let reviveCount = (usageCounter == 0).cast(.int64).sum()
+      usageCounter = Tensor(zerosLike: usageCounter)
+      return reviveCount
     }
-    dictionary = centers
   }
 }
 
 func nearestIndices(_ vecs: Tensor, _ centers: Tensor) -> Tensor {
-  let dots = Tensor.matmul(a: vecs, transA: false, b: centers, transB: true, transOut: false)
-  let vecsNorm = vecs.pow(2).sum(axis: 1, keepdims: true).expand(as: dots)
-  let dictNorm = centers.pow(2).sum(axis: 1).unsqueeze(axis: 0).expand(as: dots)
-  let dists = vecsNorm + dictNorm - 2 * dots
-  return dists.argmin(axis: 1)
+  Tensor.withGrad(enabled: false) {
+    let dots = Tensor.matmul(a: vecs, transA: false, b: centers, transB: true, transOut: false)
+    let vecsNorm = vecs.pow(2).sum(axis: 1, keepdims: true).expand(as: dots)
+    let dictNorm = centers.pow(2).sum(axis: 1).unsqueeze(axis: 0).expand(as: dots)
+    let dists = vecsNorm + dictNorm - 2 * dots
+    return dists.argmin(axis: 1)
+  }
 }
 
 class VQVAE: Trainable {

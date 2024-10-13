@@ -5,7 +5,7 @@ enum ImageError: Error {
   case createCGContext
   case createCGImage
   case createData
-  case encodeTIFF
+  case encodePNG
 }
 
 func loadImage(path: String, imageSize: Int) -> Tensor? {
@@ -65,40 +65,22 @@ func tensorToImage(tensor: Tensor) async throws -> Data {
 
   let floats = try await tensor.floats()
 
-  let bitsPerComponent = 8
   let bytesPerRow = width * 4
-  let colorSpace = CGColorSpaceCreateDeviceRGB()
-  let bitmapInfo: CGImageAlphaInfo = .premultipliedLast
-
-  guard
-    let context = CGContext(
-      data: nil,
-      width: width,
-      height: height,
-      bitsPerComponent: bitsPerComponent,
-      bytesPerRow: bytesPerRow,
-      space: colorSpace,
-      bitmapInfo: bitmapInfo.rawValue
-    )
-  else {
-    throw ImageError.createCGContext
-  }
-  guard let data = context.data else {
-    throw ImageError.createData
-  }
-  let buffer = data.bindMemory(to: UInt8.self, capacity: height * bytesPerRow)
+  var buffer = [UInt8](repeating: 0, count: height * bytesPerRow)
   for (i, f) in floats.enumerated() {
     buffer[i] = UInt8(floor(min(1, max(0, f)) * 255.999))
   }
 
-  guard let cgImage = context.makeImage() else {
-    throw ImageError.createCGImage
+  return try buffer.withUnsafeMutableBytes { ptr in
+    var ptr: UnsafeMutablePointer<UInt8>? = ptr.bindMemory(to: UInt8.self).baseAddress!
+    let rep = NSBitmapImageRep(
+      bitmapDataPlanes: &ptr, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8,
+      samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+      bytesPerRow: width * 4, bitsPerPixel: 32)!
+    if let result = rep.representation(using: .png, properties: [:]) {
+      return result
+    } else {
+      throw ImageError.encodePNG
+    }
   }
-  guard
-    let result = NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
-      .tiffRepresentation
-  else {
-    throw ImageError.encodeTIFF
-  }
-  return result
 }

@@ -64,10 +64,10 @@ class DataLoader: Sequence, IteratorProtocol {
 struct Main {
   static func main() async {
     let bs = 8
-    let clusterInterval = 100
-    let clusterBatches = 8
+    let reviveInterval = 100
+    let reviveBatches = 2
     let commitCoeff = 0.5
-    let lr: Float = 0.001
+    let lr: Float = 0.0001
 
     if CommandLine.arguments.count != 2 {
       print("Usage: Text2Image <image_dir>")
@@ -81,7 +81,7 @@ struct Main {
       print("failed to init MPS backend: \(error)")
     }
 
-    let model = VQVAE(channels: 4, vocab: 16384, latentChannels: 4, downsamples: 5)
+    let model = VQVAE(channels: 4, vocab: 16384, latentChannels: 4, downsamples: 4)
 
     do {
       let dataset = DataLoader(
@@ -94,17 +94,20 @@ struct Main {
       let opt = Adam(model.parameters, lr: lr)
       var step = 0
       while true {
-        print("recomputing VQ centers...")
-        Tensor.withGrad(enabled: false) {
+        print("revining unused dictionary entries...")
+        let revivedCount = Tensor.withGrad(enabled: false) {
           print(" => collecting features...")
-          let features = Tensor(concat: takeDataset(clusterBatches).map(model.features))
-          print(" => fitting \(features.shape[0]) features...")
-          model.bottleneck.fitFeatures(features)
+          let features = model.withMode(.inference) {
+            Tensor(concat: takeDataset(reviveBatches).map(model.features))
+          }
+          print(" => reviving with \(features.shape[0]) features...")
+          return model.bottleneck.revive(features)
         }
+        print(" => revived \(try await revivedCount.ints()[0]) entries")
         let _ = try await model.bottleneck.dictionary.sum().item()
 
         print("training...")
-        for batch in takeDataset(clusterInterval) {
+        for batch in takeDataset(reviveInterval) {
           step += 1
           let (output, vqLosses) = model(batch)
           let loss = (output - batch).abs().mean()
@@ -117,19 +120,17 @@ struct Main {
               + " commitment=\(try await vqLosses.commitmentLoss.item())")
         }
 
-        print("dumping samples to: samples.tiff ...")
+        print("dumping samples to: samples.png ...")
         let input = dataset.next()!
-        let (output, _) = Tensor.withGrad(enabled: false) { model(input) }
+        let (output, _) = Tensor.withGrad(enabled: false) {
+          model.withMode(.inference) {
+            model(input)
+          }
+        }
         let images = Tensor(concat: [input, output], axis: -1)
         let img = try await tensorToImage(tensor: images.move(axis: 1, to: -1).flatten(endAxis: 1))
-        try img.write(to: URL(filePath: "samples.tiff"))
+        try img.write(to: URL(filePath: "samples.png"))
       }
-      /*
-          print("writing tiff for \(path) ...")
-          let img = try await tensorToImage(tensor: img)
-          try img.write(to: URL(filePath: "output.tiff"))
-          break
-      */
     } catch {
       print("error while training: \(error)")
     }
