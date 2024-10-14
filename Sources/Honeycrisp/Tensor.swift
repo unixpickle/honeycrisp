@@ -2,7 +2,7 @@ import Metal
 
 public final class Tensor {
 
-  public enum DType {
+  public enum DType: Codable {
     case int64
     case bool
     case float16
@@ -238,6 +238,18 @@ public final class Tensor {
 
   public func ints() async throws -> [Int] {
     var out = [Int](repeating: 0, count: shape.product())
+    try await copyToArray(&out)
+    return out
+  }
+
+  public func int64s() async throws -> [Int64] {
+    var out = [Int64](repeating: 0, count: shape.product())
+    try await copyToArray(&out)
+    return out
+  }
+
+  public func bools() async throws -> [Bool] {
+    var out = [Bool](repeating: false, count: shape.product())
     try await copyToArray(&out)
     return out
   }

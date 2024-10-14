@@ -206,6 +206,82 @@ open class Trainable {
     return try action()
   }
 
+  public enum StateItem: Codable {
+    case tensor(TensorState)
+    case child([String: StateItem])
+  }
+
+  public typealias State = [String: StateItem]
+
+  public func state() async throws -> State {
+    var result = State()
+    for (name, param) in registeredParams {
+      if let data = param.data {
+        result[name] = .tensor(try await data.state())
+      }
+    }
+    for (name, child) in registeredChildren {
+      result[name] = .child(try await child.state())
+    }
+    return result
+  }
+
+  public enum LoadStateError: Error {
+    case stateMissingKey(String)
+    case missingParameterInState(String)
+    case unexpectedType(String)
+    case shapeMismatch(String)
+    case dtypeMismatch(String)
+  }
+
+  public func loadState(
+    _ state: State, mustSetAllParameters: Bool = true, mustUseAllStates: Bool = true
+  ) throws {
+    var state = state
+    for (name, var param) in registeredParams {
+      if !state.keys.contains(name) {
+        if mustSetAllParameters {
+          throw LoadStateError.stateMissingKey(
+            "the state has no parameter key \(name) while the module does")
+        }
+      } else if case .tensor(let x) = state[name]! {
+        if let data = param.data {
+          if data.dtype != x.dtype {
+            throw LoadStateError.dtypeMismatch(
+              "key \(name) has parameter dtype \(data.dtype) but dtype in state is \(x.dtype)")
+          } else if data.shape != x.shape {
+            throw LoadStateError.shapeMismatch(
+              "key \(name) has parameter shape \(data.dtype) but shape in state is \(x.dtype)")
+          }
+        }
+        param.data = Tensor(state: x)
+        state.removeValue(forKey: name)
+      } else {
+        throw LoadStateError.unexpectedType(
+          "expected parameter for \(name) but got another kind of object")
+      }
+    }
+    for (name, child) in registeredChildren {
+      if !state.keys.contains(name) {
+        if mustSetAllParameters {
+          throw LoadStateError.stateMissingKey(
+            "the state has no child key \(name) while the module does")
+        }
+      } else if case .child(let x) = state[name]! {
+        try child.loadState(
+          x, mustSetAllParameters: mustSetAllParameters, mustUseAllStates: mustUseAllStates)
+        state.removeValue(forKey: name)
+      } else {
+        throw LoadStateError.unexpectedType(
+          "expected child for \(name) but got another kind of object")
+      }
+    }
+    if mustUseAllStates && !state.keys.isEmpty {
+      throw LoadStateError.missingParameterInState(
+        "state has keys which do not correspond to keys in the model: \(state.keys)")
+    }
+  }
+
 }
 
 public class TrainableArray<T: Trainable>: Trainable {

@@ -60,4 +60,40 @@ public class Adam: Optimizer {
       param.data! = param.data! - lr * mt / (vt.sqrt() + eps)
     }
   }
+
+  public struct State: Codable {
+    public var stepIndex: [String: Int] = [:]
+    public var moment1: [String: TensorState] = [:]
+    public var moment2: [String: TensorState] = [:]
+  }
+
+  public func state() async throws -> State {
+    State(
+      stepIndex: stepIndex,
+      moment1: try await tensorsToStates(moment1),
+      moment2: try await tensorsToStates(moment2)
+    )
+  }
+
+  public func loadState(_ state: State) throws {
+    stepIndex = state.stepIndex
+    moment1 = statesToTensors(state.moment1)
+    moment2 = statesToTensors(state.moment2)
+  }
+}
+
+private func tensorsToStates(_ d: [String: Tensor]) async throws -> [String: TensorState] {
+  var result = [String: TensorState]()
+  for (k, v) in d {
+    result[k] = try await v.state()
+  }
+  return result
+}
+
+private func statesToTensors(_ d: [String: TensorState]) -> [String: Tensor] {
+  var result = [String: Tensor]()
+  for (k, v) in d {
+    result[k] = Tensor(state: v)
+  }
+  return result
 }

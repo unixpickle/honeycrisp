@@ -924,7 +924,25 @@ final class HoneycrispTests: XCTestCase {
     try await assertDataEqual(Tensor(oneHot: [3, 1], count: 5), [0, 0, 0, 1, 0, 0, 1, 0, 0, 0])
   }
 
-  func testTrainable() throws {
+  func testTensorState() async throws {
+    for t1 in [
+      Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [4], dtype: .float32),
+      Tensor(data: [1, 2, 3, 4], shape: [4], dtype: .int64),
+      Tensor(data: [false, true, false, false], shape: [4], dtype: .bool),
+      Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [4], dtype: .float16),
+    ] {
+      let t1State = try await t1.state()
+      let encoder = PropertyListEncoder()
+      let data = try encoder.encode(t1State)
+      let decoded = try PropertyListDecoder().decode(TensorState.self, from: data)
+      let t1Copy = Tensor(state: decoded)
+      XCTAssertEqual(t1.shape, t1Copy.shape)
+      XCTAssertEqual(t1.dtype, t1Copy.dtype)
+      try await assertDataEqual(t1, t1Copy)
+    }
+  }
+
+  func testTrainable() async throws {
     class Linear: Trainable {
       @Param(name: "weight") var weight: Tensor
       @Param(name: "bias") var bias: Tensor
@@ -932,8 +950,8 @@ final class HoneycrispTests: XCTestCase {
 
       init(inSize: Int, outSize: Int) {
         super.init()
-        weight = Tensor(zeros: [inSize, outSize])
-        bias = Tensor(zeros: [outSize])
+        weight = Tensor(rand: [inSize, outSize])
+        bias = Tensor(rand: [outSize])
       }
     }
 
@@ -980,6 +998,14 @@ final class HoneycrispTests: XCTestCase {
     XCTAssertEqual(netParams[2].1.data!.shape, [7])
     XCTAssertEqual(netParams[3].0, "layer1.weight")
     XCTAssertEqual(netParams[3].1.data!.shape, [5, 7])
+
+    let net1 = Network()
+    try net1.loadState(try await net.state())
+    for ((name1, param1), (name2, param2)) in zip(net.parameters, net1.parameters) {
+      XCTAssertEqual(param1.data!.dtype, param2.data!.dtype)
+      XCTAssertEqual(param1.data!.shape, param2.data!.shape)
+      try await assertClose(param1.data!, param2.data!, "params differ for names \(name1)/\(name2)")
+    }
   }
 
   func testAdam() async throws {
