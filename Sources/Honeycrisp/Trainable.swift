@@ -251,7 +251,7 @@ open class Trainable {
               "key \(name) has parameter dtype \(data.dtype) but dtype in state is \(x.dtype)")
           } else if data.shape != x.shape {
             throw LoadStateError.shapeMismatch(
-              "key \(name) has parameter shape \(data.dtype) but shape in state is \(x.dtype)")
+              "key \(name) has parameter shape \(data.shape) but shape in state is \(x.shape)")
           }
         }
         param.data = Tensor(state: x)

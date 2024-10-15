@@ -117,7 +117,7 @@ class VQDecoder: Trainable {
     self.blocks = TrainableArray(blockArr)
     self.outNorm = GroupNorm(groupCount: 32, channelCount: min(maxChannels, ch))
     self.outProj = Conv2D(
-      inChannels: min(maxChannels, ch), outChannels: outChannels, kernelSize: .square(1))
+      inChannels: min(maxChannels, ch), outChannels: outChannels, kernelSize: .square(3), padding: .same)
   }
 
   func callAsFunction(_ x: Tensor) -> Tensor {
@@ -126,10 +126,10 @@ class VQDecoder: Trainable {
       h = layer(h)
     }
     h = outNorm(h)
+    h = h.gelu()
     h = self.outProj(h)
 
-    // Pixels are bounded in [0, 1]
-    //h = h.sigmoid()
+    h = h / 2 + 0.5
 
     // Pre-multiply output alpha
     let nonAlpha = h[..., ..<(-1)]

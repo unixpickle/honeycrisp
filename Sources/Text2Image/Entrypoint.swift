@@ -3,7 +3,7 @@ import Foundation
 import Honeycrisp
 import MNIST
 
-class ImageIterator: Sequence, IteratorProtocol {
+class ImageIterator: Sequence, IteratorProtocol, Codable {
   let imageSize: Int
   var imagePaths: [String]
   var offset = 0
@@ -36,7 +36,7 @@ class ImageIterator: Sequence, IteratorProtocol {
   }
 }
 
-class DataLoader: Sequence, IteratorProtocol {
+class DataLoader: Sequence, IteratorProtocol, Codable {
   let batchSize: Int
   var images: ImageIterator
 
@@ -60,6 +60,13 @@ class DataLoader: Sequence, IteratorProtocol {
   }
 }
 
+public struct State: Codable {
+  let step: Int
+  let dataset: DataLoader
+  let opt: Adam.State
+  let model: Trainable.State
+}
+
 @main
 struct Main {
   static func main() async {
@@ -69,11 +76,12 @@ struct Main {
     let commitCoeff = 0.5
     let lr: Float = 0.0001
 
-    if CommandLine.arguments.count != 2 {
-      print("Usage: Text2Image <image_dir>")
+    if CommandLine.arguments.count != 3 {
+      print("Usage: Text2Image <image_dir> <save_path>")
       return
     }
     let imageDir = CommandLine.arguments[1]
+    let savePath = CommandLine.arguments[2]
 
     do {
       Backend.defaultBackend = try MPSBackend()
@@ -82,25 +90,36 @@ struct Main {
     }
 
     let model = VQVAE(channels: 4, vocab: 16384, latentChannels: 4, downsamples: 4)
+    let opt = Adam(model.parameters, lr: lr)
+    var step = 0
 
     do {
-      let dataset = DataLoader(
+      var dataset = DataLoader(
         batchSize: bs, images: try ImageIterator(imageDir: imageDir, imageSize: 256))
+
+      if FileManager.default.fileExists(atPath: savePath) {
+        print("loading from checkpoint: \(savePath) ...")
+        let data = try Data(contentsOf: URL(fileURLWithPath: savePath))
+        let decoder = PropertyListDecoder()
+        let state = try decoder.decode(State.self, from: data)
+        try model.loadState(state.model)
+        try opt.loadState(state.opt)
+        step = state.step
+        dataset = state.dataset
+      }
 
       func takeDataset(_ n: Int) -> some Collection<Tensor> {
         return (0..<n).lazy.map { _ in dataset.next()! }
       }
 
-      let opt = Adam(model.parameters, lr: lr)
-      var step = 0
       while true {
-        print("revining unused dictionary entries...")
+        print("reviving unused dictionary entries...")
         let revivedCount = Tensor.withGrad(enabled: false) {
           print(" => collecting features...")
           let features = model.withMode(.inference) {
             Tensor(concat: takeDataset(reviveBatches).map(model.features))
           }
-          print(" => reviving with \(features.shape[0]) features...")
+          print(" => collected \(features.shape[0]) features")
           return model.bottleneck.revive(features)
         }
         print(" => revived \(try await revivedCount.ints()[0]) entries")
@@ -110,7 +129,7 @@ struct Main {
         for batch in takeDataset(reviveInterval) {
           step += 1
           let (output, vqLosses) = model(batch)
-          let loss = (output - batch).abs().mean()
+          let loss = (output - batch).pow(2).mean()
           (loss + vqLosses.codebookLoss + commitCoeff * vqLosses.commitmentLoss).backward()
           opt.step()
           opt.clearGrads()
@@ -130,6 +149,12 @@ struct Main {
         let images = Tensor(concat: [input, output], axis: -1)
         let img = try await tensorToImage(tensor: images.move(axis: 1, to: -1).flatten(endAxis: 1))
         try img.write(to: URL(filePath: "samples.png"))
+
+        print("saving to \(savePath) ...")
+        let state = State(
+          step: step, dataset: dataset, opt: try await opt.state(), model: try await model.state())
+        let stateData = try PropertyListEncoder().encode(state)
+        try stateData.write(to: URL(filePath: savePath), options: .atomic)
       }
     } catch {
       print("error while training: \(error)")
