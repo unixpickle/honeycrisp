@@ -48,6 +48,17 @@ open class MPSBackend: CPUBackend {
     let dtype: MPSDataType
   }
 
+  private struct ScatterKey: Hashable {
+    let broadcasted: Bool
+    let outCount: Int
+
+    let outerCount: Int
+    let middleCount: Int
+    let innerCount: Int
+
+    let dtype: MPSDataType
+  }
+
   public class MPSRandomGenerator: NativeRandomGenerator {
     public let mpsBackend: MPSBackend
     private var seed: UInt64
@@ -122,6 +133,7 @@ open class MPSBackend: CPUBackend {
   private var commandQueue: MTLCommandQueue? = nil
   private var matmuls: [MatmulKey: TwoToOneGraph] = [:]
   private var conv2D: [Conv2DKey: TwoToOneGraph] = [:]
+  private var scatters: [ScatterKey: TwoToOneGraph] = [:]
   private var reductions: [ReduceKey: OneToOneGraph] = [:]
   private var defaultRNG: MPSRandomGenerator? = nil
   private var functions: [String: MTLComputePipelineState] = [:]
@@ -480,7 +492,39 @@ open class MPSBackend: CPUBackend {
     -> Tensor.Data
   {
     try await waitForGPUData(a, s.indices)
+
     let output = try await allocate(length: s.gatherInCount * dtype.byteSize)
+
+    if let mpsDType = dtype.mpsDType {
+      return try await serialize { [self] in
+        let scatter = self.createScatter(scatter: s, dtype: mpsDType)
+        let completion = completionBuffer { buf in
+          scatter.graph.encode(
+            to: buf as! MPSCommandBuffer,
+            feeds: [
+              scatter.inputA: MPSGraphTensorData(
+                MPSVector(
+                  buffer: a.buffer,
+                  descriptor: MPSVectorDescriptor(
+                    length: s.gatherOutCount, dataType: mpsDType))),
+              scatter.inputB: MPSGraphTensorData(
+                MPSVector(
+                  buffer: s.indices.buffer,
+                  descriptor: MPSVectorDescriptor(length: s.indicesCount, dataType: .int64))),
+            ],
+            targetOperations: nil,
+            resultsDictionary: [
+              scatter.output: MPSGraphTensorData(
+                MPSVector(
+                  buffer: output,
+                  descriptor: MPSVectorDescriptor(length: s.gatherInCount, dataType: mpsDType)))
+            ],
+            executionDescriptor: nil)
+        }
+        return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      }
+    }
+
     let counts = try await allocate(length: s.gatherInCount * 4)
     let needsAddition = try await allocate(length: 4)
 
@@ -515,6 +559,44 @@ open class MPSBackend: CPUBackend {
       return try await super.scatter(a, s, dtype: dtype)
     } else {
       return Tensor.Data(backend: self, buffer: result.buffer)
+    }
+  }
+
+  private func createScatter(scatter: ScatterGatherIndices, dtype: MPSDataType) -> TwoToOneGraph {
+    let key = ScatterKey(
+      broadcasted: scatter.broadcasted, outCount: scatter.outCount, outerCount: scatter.outerCount,
+      middleCount: scatter.middleCount, innerCount: scatter.innerCount, dtype: dtype)
+    if let r = scatters[key] {
+      return r
+    } else {
+      let graph = MPSGraph()
+      let inputShape = [scatter.outerCount, scatter.outCount, scatter.innerCount]
+      let indexShape =
+        scatter.broadcasted
+        ? [scatter.outCount] : [scatter.outerCount, scatter.outCount, scatter.innerCount]
+      let outputShape = [scatter.outerCount, scatter.middleCount, scatter.innerCount]
+      let input = graph.placeholder(
+        shape: mpsShape([inputShape.product()]), dataType: dtype, name: "input")
+      let indices = graph.placeholder(
+        shape: mpsShape([indexShape.product()]), dataType: .int64, name: "indices")
+      let inputReshaped = graph.reshape(input, shape: mpsShape(inputShape), name: "inputReshaped")
+      let indicesReshaped = graph.reshape(
+        indices, shape: mpsShape(indexShape), name: "indexReshaped")
+      let unshapedOutput =
+        if scatter.broadcasted {
+          graph.scatter(
+            inputReshaped, indices: indicesReshaped, shape: mpsShape(outputShape), axis: 1,
+            mode: .add, name: "scatter")
+        } else {
+          graph.scatterAlongAxis(
+            1, updates: inputReshaped, indices: indicesReshaped, shape: mpsShape(outputShape),
+            mode: .add, name: "scatter")
+        }
+      let output = graph.reshape(
+        unshapedOutput, shape: mpsShape([outputShape.product()]), name: "output")
+      let r = TwoToOneGraph(graph: graph, inputA: input, inputB: indices, output: output)
+      scatters[key] = r
+      return r
     }
   }
 
@@ -1810,6 +1892,8 @@ extension Tensor.DType {
       .float32
     case .float16:
       .float16
+    case .int64:
+      .int64
     default:
       nil
     }

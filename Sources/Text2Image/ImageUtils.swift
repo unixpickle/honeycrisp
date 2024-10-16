@@ -35,10 +35,10 @@ func loadImage(path: String, imageSize: Int) -> Tensor? {
 
   let size = loadedImage.size
   let scale = CGFloat(imageSize) / min(CGFloat(size.width), CGFloat(size.height))
-  let scaledX = (CGFloat(imageSize) - scale * CGFloat(size.width)) / 2
-  let scaledY = (CGFloat(imageSize) - scale * CGFloat(size.height)) / 2
-  let imageRect = CGRect(
-    origin: CGPoint(x: scaledX, y: scaledY), size: CGSize(width: imageSize, height: imageSize))
+  let scaledSize = CGSize(width: scale * size.width, height: scale * size.height)
+  let x = (CGFloat(imageSize) - scaledSize.width) / 2
+  let y = (CGFloat(imageSize) - scaledSize.height) / 2
+  let imageRect = CGRect(origin: CGPoint(x: x, y: y), size: scaledSize)
   guard let loadedCGImage = loadedImage.cgImage(forProposedRect: nil, context: nil, hints: [:])
   else {
     return nil
