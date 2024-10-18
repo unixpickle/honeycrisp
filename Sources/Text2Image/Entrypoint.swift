@@ -74,6 +74,7 @@ struct Main {
     let reviveInterval = 100
     let reviveBatches = 2
     let commitCoeff = 0.5
+    let ssimCoeff = 1.0
     let lr: Float = 0.0001
 
     if CommandLine.arguments.count != 3 {
@@ -91,6 +92,7 @@ struct Main {
 
     let model = VQVAE(channels: 4, vocab: 16384, latentChannels: 4, downsamples: 4)
     let opt = Adam(model.parameters, lr: lr)
+    let ssimMetric = SSIM()
     var step = 0
 
     do {
@@ -130,12 +132,16 @@ struct Main {
           step += 1
           let (output, vqLosses) = model(batch)
           let loss = (output - batch).pow(2).mean()
-          (loss + vqLosses.codebookLoss + commitCoeff * vqLosses.commitmentLoss).backward()
+          let ssimLoss = ssimMetric(output, batch)
+          let ssimMSE = (2 * (1 - ssimLoss)).mean()  // scale more similarly to MSE
+          (loss + ssimMSE * ssimCoeff + vqLosses.codebookLoss + commitCoeff
+            * vqLosses.commitmentLoss).backward()
           opt.step()
           opt.clearGrads()
           print(
             "step \(step):"
               + " loss=\(try await loss.item())"
+              + " ssim=\(try await ssimLoss.mean().item())"
               + " commitment=\(try await vqLosses.commitmentLoss.item())")
         }
 

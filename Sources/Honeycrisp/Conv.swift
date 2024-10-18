@@ -237,6 +237,11 @@ public struct ConvConfig<Dim: SpatialDim>: Hashable {
   public struct Padding: Hashable {
     public let before: Dim
     public let after: Dim
+
+    public init(before: Dim, after: Dim) {
+      self.before = before
+      self.after = after
+    }
   }
 
   public let inChannels: Int
@@ -478,7 +483,9 @@ extension Tensor {
 
     let outShape = conv.outputTensorShape(batch: image.shape[0])
     let kernelShape = conv.kernelTensorShape()
-    alwaysAssert(kernel.shape == kernelShape)
+    alwaysAssert(
+      kernel.shape == kernelShape,
+      "kernel argument shape \(kernel.shape) does not match expected shape \(kernelShape)")
 
     let backend = Backend.current
     let newData = createDataTask(image, kernel) { image, kernel in

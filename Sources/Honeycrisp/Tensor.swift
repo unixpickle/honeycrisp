@@ -194,6 +194,13 @@ public final class Tensor {
     self.init(data: arr, shape: [arr.count], dtype: dtype ?? T.dtype)
   }
 
+  public convenience init<T: NumericTensorElement>(
+    range: ClosedRange<T>, dtype: DType? = nil
+  ) where ClosedRange<T>: Collection {
+    let arr = Array(range)
+    self.init(data: arr, shape: [arr.count], dtype: dtype ?? T.dtype)
+  }
+
   public convenience init(zerosLike: Tensor) {
     self.init(constant: 0, like: zerosLike)
   }
