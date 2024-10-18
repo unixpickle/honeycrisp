@@ -300,7 +300,13 @@ public class Linear: Trainable {
   @Param(name: "weight") public var weight: Tensor
   @Param(name: "bias") public var bias: Tensor?
 
-  public init(inCount: Int, outCount: Int, dtype: Tensor.DType = .float32, bias: Bool = true) {
+  public let castParams: Tensor.DType?
+
+  public init(
+    inCount: Int, outCount: Int, dtype: Tensor.DType = .float32, castParams: Tensor.DType? = nil,
+    bias: Bool = true
+  ) {
+    self.castParams = castParams
     super.init()
     self.weight =
       (Tensor(rand: [inCount, outCount], dtype: dtype) - 0.5)
@@ -318,9 +324,9 @@ public class Linear: Trainable {
       let out = self(squashedBatch)
       return out.reshape(x.shape[..<(x.shape.count - 1)] + [out.shape[out.shape.count - 1]])
     }
-    var h = x &* weight
+    var h = x &* weight.cast(castParams ?? weight.dtype)
     if let bias = bias {
-      h = h + bias.expand(as: h)
+      h = h + bias.cast(castParams ?? bias.dtype).expand(as: h)
     }
     return h
   }

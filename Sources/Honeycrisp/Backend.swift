@@ -59,62 +59,78 @@ open class Backend {
     }
   }
 
-  private var backgroundWork: [() -> Void] = []
-  private var backgroundLock: NSLock = NSLock()
-  private var backgroundSem: DispatchSemaphore = DispatchSemaphore(value: 0)
-  private var backgroundCancel: Bool = false
-  private var backgroundThread: Thread?
+  /// A lightweight thread-safe FIFO queue.
+  public class Queue<T: Sendable> {
+    private var items: [T] = []
+    private var lock: NSLock = NSLock()
+    private var closed: Bool = false
+    private var sem: DispatchSemaphore = DispatchSemaphore(value: 0)
 
-  public init() {
-    backgroundThread = Thread { [self] in
-      while true {
-        backgroundSem.wait()
+    /// Push an item to the queue.
+    /// This should never be called after close().
+    public func put(_ x: T) {
+      lock.lock()
+      alwaysAssert(!closed, "cannot put() on queue after closing")
+      items.insert(x, at: 0)
+      lock.unlock()
+      sem.signal()
+    }
+
+    /// Wait for the next item on the queue.
+    ///
+    /// Returns nil forever once the queue has been closed and depleted.
+    public func get() -> T? {
+      sem.wait()
+      lock.lock()
+      let item = items.popLast()
+      if closed {
+        // We don't want to block future get() calls.
+        sem.signal()
+      }
+      lock.unlock()
+      return item
+    }
+
+    /// Finish writing to the queue and unblock all future get() calls.
+    public func close() {
+      lock.lock()
+      closed = true
+      lock.unlock()
+      sem.signal()
+    }
+  }
+
+  /// A background thread which executes blocks serially.
+  ///
+  /// Once this is deinitialized, the background thread will complete its
+  /// remaining work and then exit.
+  public class WorkerThread {
+    public typealias Job = () -> Void
+
+    private let queue = Queue<Job>()
+    private var thread: Thread? = nil
+
+    deinit {
+      queue.close()
+    }
+
+    public init() {
+      thread = Thread { [queue = self.queue] in
         while true {
-          backgroundLock.lock()
-          if backgroundCancel {
-            backgroundLock.unlock()
+          guard let job = queue.get() else {
             return
           }
-          if let workItem = backgroundWork.popLast() {
-            backgroundLock.unlock()
-            autoreleasepool {
-              workItem()
-            }
-          } else {
-            backgroundLock.unlock()
-            break
+          autoreleasepool {
+            job()
           }
         }
       }
+      thread!.name = "Backend.WorkerThread"
+      thread!.start()
     }
-    backgroundThread!.start()
-  }
 
-  deinit {
-    backgroundLock.lock()
-    backgroundCancel = true
-    backgroundSem.signal()
-    backgroundLock.unlock()
-  }
-
-  internal func serialize<T>(_ work: @escaping () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-      backgroundLock.lock()
-      backgroundWork.insert(
-        {
-          var result: Result<T, Error>?
-          do {
-            result = Result.success(try work())
-          } catch {
-            result = Result.failure(error)
-          }
-          let constResult = result!
-          // Task.detached {
-          continuation.resume(with: constResult)
-          // }
-        }, at: 0)
-      backgroundLock.unlock()
-      backgroundSem.signal()
+    public func schedule(_ job: @escaping Job) {
+      queue.put(job)
     }
   }
 
@@ -389,7 +405,7 @@ open class CPUBackend: Backend {
       -> Tensor.Data
     {
       let buffer = try await backend.allocate(length: count * dtype.byteSize)
-      try await backend.serialize {
+      try await cpuBackend.serialize {
         switch dist {
         case .uniform:
           let arr = (0..<count).map { _ in Float.random(in: 0..<1.0) }
@@ -417,7 +433,7 @@ open class CPUBackend: Backend {
 
     public func sample(count: Int, in range: Range<Int64>) async throws -> Tensor.Data {
       let buffer = try await backend.allocate(length: count * Tensor.DType.int64.byteSize)
-      try await backend.serialize {
+      try await cpuBackend.serialize {
         let ints = (0..<count).map { _ in Int64.random(in: range) }
         try arrayToPointer(ints, output: buffer.contents(), dtype: .int64)
       }
@@ -439,6 +455,23 @@ open class CPUBackend: Backend {
         return d
       }
       throw BackendError.failedToCreateMTLDevice
+    }
+  }
+
+  internal var worker = Backend.WorkerThread()
+
+  internal func serialize<T>(_ work: @escaping () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+      worker.schedule {
+        var result: Result<T, Error>?
+        do {
+          result = Result.success(try work())
+        } catch {
+          result = Result.failure(error)
+        }
+        let constResult = result!
+        continuation.resume(with: constResult)
+      }
     }
   }
 

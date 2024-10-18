@@ -21,16 +21,21 @@ let package = Package(
     .package(url: "https://github.com/1024jp/GzipSwift", "6.0.0"..<"6.1.0"),
     .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.9.0"),
     .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0"..<"4.0.0"),
+    .package(url: "https://github.com/unixpickle/coreml-builder.git", "0.1.0"..<"0.2.0"),
   ],
   targets: [
     .target(
-      name: "Honeycrisp"),
+      name: "Honeycrisp",
+      dependencies: [.product(name: "CoreMLBuilder", package: "coreml-builder")]),
     .testTarget(
       name: "HoneycrispTests",
       dependencies: ["Honeycrisp", .product(name: "Gzip", package: "GzipSwift")],
       resources: [
         .process("Resources")
       ]),
+    .executableTarget(
+      name: "HCMatrixBench",
+      dependencies: ["Honeycrisp"]),
     .target(
       name: "MNIST",
       dependencies: [

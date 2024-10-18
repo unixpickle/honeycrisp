@@ -188,6 +188,14 @@ open class MPSBackend: CPUBackend {
         }
       }
     }
+    for t1 in ["half", "float", "long"] {
+      for t2 in ["half", "float", "long"] {
+        if t1 == t2 {
+          continue
+        }
+        names.append("cast_\(t1)_\(t2)")
+      }
+    }
     for name in names {
       guard let f = library.makeFunction(name: name) else {
         throw BackendError.kernelFailed("could not create kernel with name '\(name)'")
@@ -409,6 +417,31 @@ open class MPSBackend: CPUBackend {
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .float(a.toFloat()), .buffer(b.buffer), .buffer(output), .uint(UInt32(count)))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  override public func cast(
+    _ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let types: [Tensor.DType: String] = [.float16: "half", .float32: "float", .int64: "long"]
+    guard let inTypeName = types[inType], let outTypeName = types[outType] else {
+      return try await super.cast(a, count: count, inType: inType, outType: outType)
+    }
+
+    let functionName = "cast_\(inTypeName)_\(outTypeName)"
+    let output = try await allocate(length: count * outType.byteSize)
+
+    try await waitForGPUData(a)
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(enc, .buffer(a.buffer), .buffer(output), .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
@@ -1881,6 +1914,23 @@ open class MPSBackend: CPUBackend {
               output[id] = (ulong)flatIndex;
           }
       }
+
+      #define DEFINE_CAST(inType, outType) \
+      kernel void cast_##inType##_##outType(device const inType* input [[buffer(0)]], \
+                                            device outType* output [[buffer(1)]], \
+                                            constant uint &count [[buffer(2)]], \
+                                            uint id [[thread_position_in_grid]]) { \
+          if (id < count) { \
+            output[id] = (outType)input[id]; \
+          } \
+      }
+
+      DEFINE_CAST(float, half)
+      DEFINE_CAST(float, long)
+      DEFINE_CAST(half, float)
+      DEFINE_CAST(half, long)
+      DEFINE_CAST(long, float)
+      DEFINE_CAST(long, half)
     """
 
 }
