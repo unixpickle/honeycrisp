@@ -2,16 +2,43 @@ import Foundation
 
 extension Tensor {
   public func printing(onForward: String? = nil, onGrad: String? = nil) -> Tensor {
+    let forwardFn: ((Tensor) async throws -> Void)? =
+      if let onForward = onForward {
+        { t in
+          let _ = try await t.data
+          print(onForward)
+        }
+      } else {
+        nil
+      }
+    let bwdFn: ((Tensor) async throws -> Void)? =
+      if let onGrad = onGrad {
+        { t in
+          let _ = try await t.data
+          print(onGrad)
+        }
+      } else {
+        nil
+      }
+    return printing(onForward: forwardFn, onGrad: bwdFn)
+  }
+
+  public func printing(
+    onForward: ((Tensor) async throws -> Void)? = nil,
+    onGrad: ((Tensor) async throws -> Void)? = nil
+  ) -> Tensor {
     if onForward == nil && onGrad == nil {
       return self
     }
-    let task = createDataTask { t in
-      let result = try await t.data
+    let task =
       if let onForward = onForward {
-        print(onForward)
+        createDataTask { t in
+          try await onForward(t)
+          return try await t.data
+        }
+      } else {
+        dataTask
       }
-      return result
-    }
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: task, shape: shape, dtype: dtype)
     } else {
