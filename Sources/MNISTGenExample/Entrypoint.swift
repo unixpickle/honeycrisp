@@ -154,10 +154,9 @@ class Transformer: Trainable {
 
   func callAsFunction(_ x: Tensor, kvCache: KVCache? = nil) -> Tensor {
     // Input should be a [N x T] tensor of indices
-    var h = embed.expand(shape: [x.shape[0], x.shape[1], VocabSize, ModelDim]).gather(
-      axis: 2,
-      indices: x.reshape([x.shape[0], x.shape[1], 1, 1]).repeating(axis: -1, count: ModelDim)
-    ).reshape([x.shape[0], x.shape[1], ModelDim])
+    var h = embed.gather(axis: 0, indices: x.flatten()).reshape([
+      x.shape[0], x.shape[1], -1,
+    ])
 
     let posOffset = kvCache?.tokenCount ?? 0
     h = h + posEmbed[posOffset..<(posOffset + x.shape[1])].expand(as: h)

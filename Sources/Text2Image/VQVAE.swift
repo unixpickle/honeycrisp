@@ -117,7 +117,8 @@ class VQDecoder: Trainable {
     self.blocks = TrainableArray(blockArr)
     self.outNorm = GroupNorm(groupCount: 32, channelCount: min(maxChannels, ch))
     self.outProj = Conv2D(
-      inChannels: min(maxChannels, ch), outChannels: outChannels, kernelSize: .square(3), padding: .same)
+      inChannels: min(maxChannels, ch), outChannels: outChannels, kernelSize: .square(3),
+      padding: .same)
   }
 
   func callAsFunction(_ x: Tensor) -> Tensor {
@@ -189,6 +190,10 @@ class VQBottleneck: Trainable {
         codebookLoss: (out - x.noGrad()).pow(2).mean()
       )
     )
+  }
+
+  func embed(_ x: Tensor) -> Tensor {
+    return dictionary.gather(axis: 0, indices: x.flatten()).reshape(x.shape + [channels])
   }
 
   func revive(_ x: Tensor) -> Tensor {

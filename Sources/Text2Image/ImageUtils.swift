@@ -9,7 +9,10 @@ enum ImageError: Error {
 }
 
 func loadImage(path: String, imageSize: Int) -> Tensor? {
-  guard let loadedImage = NSImage(byReferencingFile: path) else {
+  guard let data = try? Data(contentsOf: URL(filePath: path)) else {
+    return nil
+  }
+  guard let loadedImage = NSImage(data: data) else {
     return nil
   }
 

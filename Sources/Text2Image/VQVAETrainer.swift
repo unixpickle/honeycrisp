@@ -67,8 +67,6 @@ class VQVAETrainer {
   }
 
   private func prepare() async throws {
-    print("creating dataloader...")
-
     if FileManager.default.fileExists(atPath: savePath) {
       print("loading from checkpoint: \(savePath) ...")
       let data = try Data(contentsOf: URL(fileURLWithPath: savePath))

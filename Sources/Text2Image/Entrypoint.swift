@@ -9,14 +9,18 @@ struct Main {
       printHelp()
       return
     }
-    if CommandLine.arguments[1] != "vqvae" {
-      print("Unrecognized subcommand: \(CommandLine.arguments[1])")
-      printHelp()
-      return
-    }
     do {
-      let cmd = try VQVAETrainer(Array(CommandLine.arguments[2...]))
-      try await cmd.run()
+      switch CommandLine.arguments[1] {
+      case "vqvae":
+        let cmd = try VQVAETrainer(Array(CommandLine.arguments[2...]))
+        try await cmd.run()
+      case "transformer":
+        let cmd = try TransformerTrainer(Array(CommandLine.arguments[2...]))
+        try await cmd.run()
+      default:
+        print("Unrecognized subcommand: \(CommandLine.arguments[1])")
+        printHelp()
+      }
     } catch {
       print("ERROR: \(error)")
       return
@@ -27,6 +31,7 @@ struct Main {
     print("Usage: Text2Image <subcommand> ...")
     print("Subcommands:")
     print("    vqvae <image_dir> <state_path>")
+    print("    transformer <image_dir> <vqvae_path> <state_path>")
   }
 }
 

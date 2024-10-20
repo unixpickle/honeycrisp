@@ -70,3 +70,56 @@ class DataLoader: Sequence, IteratorProtocol {
     return (Tensor(stack: batch).move(axis: -1, to: 1), state!)
   }
 }
+
+class CaptionedDataLoader: Sequence, IteratorProtocol {
+  typealias State = ImageIterator.State
+
+  struct Metadata: Codable {
+    let url: String
+    let width: Int
+    let height: Int
+    let caption: String
+  }
+
+  let batchSize: Int
+  var images: ImageIterator
+
+  var state: State {
+    get { images.state }
+    set { images.state = newValue }
+  }
+
+  init(batchSize: Int, images: ImageIterator) {
+    self.batchSize = batchSize
+    self.images = images
+  }
+
+  func next() -> (Tensor, [String], State)? {
+    var batch = [Tensor]()
+    var captions = [String]()
+    var state: State?
+    for (imagePath, x, s) in images {
+      state = s
+      batch.append(x)
+      let metaPath = URL(filePath: imagePath).deletingLastPathComponent()
+        .deletingLastPathComponent().appending(component: "success").appending(
+          component: URL(filePath: imagePath).lastPathComponent + ".json")
+      let metadata: Metadata
+      do {
+        let data = try Data(contentsOf: metaPath)
+        let decoder = JSONDecoder()
+        metadata = try decoder.decode(Metadata.self, from: data)
+      } catch {
+        fatalError("failed to read metadata at \(metaPath): \(error)")
+      }
+      captions.append(metadata.caption)
+      if batch.count == batchSize {
+        break
+      }
+    }
+    if batch.count == 0 {
+      fatalError("failed to load data")
+    }
+    return (Tensor(stack: batch).move(axis: -1, to: 1), captions, state!)
+  }
+}
