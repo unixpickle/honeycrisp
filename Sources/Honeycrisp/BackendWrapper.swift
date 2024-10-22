@@ -1,4 +1,5 @@
 import Accelerate
+import Atomics
 import Foundation
 import Metal
 import MetalPerformanceShaders
@@ -300,4 +301,135 @@ open class BackendWrapper: Backend {
     WrappedRandomGenerator(wrappedBackend: self, wrapped: try await wrapped.createRandom())
   }
 
+}
+
+open class BackendFLOPCounter: BackendWrapper {
+  internal var lock = NSLock()
+  internal var counter: Int64 = 0
+
+  public var flopCount: Int64 {
+    get {
+      lock.lock()
+      defer { lock.unlock() }
+      return counter
+    }
+    set {
+      lock.lock()
+      counter = newValue
+      lock.unlock()
+    }
+  }
+
+  public func addFLOPs(_ c: Int64) {
+    lock.lock()
+    defer { lock.unlock() }
+    counter += c
+  }
+
+  override public init(wrapping: Backend) {
+    super.init(wrapping: wrapping)
+  }
+
+  override public func matmul(
+    a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
+    inner: Int, cols: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let result = try await super.matmul(
+      a: a, transA: transA, b: b, transB: transB, transOut: transOut, rows: rows, inner: inner,
+      cols: cols, dtype: dtype)
+    addFLOPs(Int64(2 * rows * inner * cols))
+    return result
+  }
+
+  override public func batchedMatmul(
+    matrixCount: Int, a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool,
+    rows: Int, inner: Int, cols: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let result = try await super.batchedMatmul(
+      matrixCount: matrixCount, a: a, transA: transA, b: b, transB: transB, transOut: transOut,
+      rows: rows, inner: inner, cols: cols, dtype: dtype)
+    addFLOPs(Int64(2 * matrixCount * rows * inner * cols))
+    return result
+  }
+
+  override public func conv1D(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let result = try await super.conv1D(
+      config, batch: batch, image: image, kernel: kernel, dtype: dtype)
+    self.addFLOPs(Int64(config.forwardFLOPs(batch: batch)))
+    return result
+  }
+
+  override public func conv1DTranspose(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let result = try await super.conv1DTranspose(
+      config, batch: batch, image: image, kernel: kernel, dtype: dtype)
+    self.addFLOPs(Int64(config.transposeFLOPs(batch: batch)))
+    return result
+  }
+
+  override public func conv1DKernelGrad(
+    _ config: Conv1DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let result = try await super.conv1DKernelGrad(
+      config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
+    self.addFLOPs(Int64(config.kernelGradFLOPs(batch: batch)))
+    return result
+  }
+
+  override public func conv2D(
+    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let result = try await super.conv2D(
+      config, batch: batch, image: image, kernel: kernel, dtype: dtype)
+    self.addFLOPs(Int64(config.forwardFLOPs(batch: batch)))
+    return result
+  }
+
+  override public func conv2DTranspose(
+    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let result = try await super.conv2DTranspose(
+      config, batch: batch, image: image, kernel: kernel, dtype: dtype)
+    self.addFLOPs(Int64(config.transposeFLOPs(batch: batch)))
+    return result
+  }
+
+  override public func conv2DKernelGrad(
+    _ config: Conv2DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let result = try await super.conv2DKernelGrad(
+      config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
+    self.addFLOPs(Int64(config.kernelGradFLOPs(batch: batch)))
+    return result
+  }
 }
