@@ -196,16 +196,34 @@ class Transformer: Trainable {
     return h
   }
 
-  func sample(prefixes: Tensor) async throws -> Tensor {
+  func sample(prefixes: Tensor, cfgScale: Float? = nil) async throws -> Tensor {
     assert(prefixes.shape.count == 2, "\(prefixes.shape)")
     assert(prefixes.shape[1] >= 1, "\(prefixes.shape)")
+    let prefixes =
+      cfgScale == nil ? prefixes : Tensor(concat: [prefixes, Tensor(zerosLike: prefixes)], axis: 0)
     let kvCache = KVCache(batchSize: prefixes.shape[0], config: config)
     var outputs: [Tensor] = []
     var prevToken = prefixes
     for _ in 0..<(config.TokenCount - prefixes.shape[1]) {
       let logits = self(prevToken, kvCache: kvCache)[..., -1]
-      let gumbels = -(-Tensor(randLike: logits).log()).log()
-      prevToken = (logits + gumbels).argmax(axis: -1).unsqueeze(axis: 1)
+      let guidedLogits =
+        if let cfgScale = cfgScale {
+          {
+            let pieces = logits.chunk(axis: 0, count: 2)
+            let cond = pieces[0]
+            let uncond = pieces[1]
+            return uncond + cfgScale * (cond - uncond)
+          }()
+        } else {
+          logits
+        }
+      let gumbels = -(-Tensor(randLike: guidedLogits).log()).log()
+      let samples = (guidedLogits + gumbels).argmax(axis: -1).unsqueeze(axis: 1)
+      if cfgScale == nil {
+        prevToken = samples
+      } else {
+        prevToken = samples.repeating(axis: 0, count: 2)
+      }
       outputs.append(prevToken)
     }
     return Tensor(concat: outputs, axis: 1)

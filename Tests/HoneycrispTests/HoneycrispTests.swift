@@ -647,6 +647,25 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testChunk() async throws {
+    for i in 1..<10 {
+      for count in 1...i {
+        if i % count != 0 {
+          continue
+        }
+        let input = Tensor(range: 0..<i)
+        let split = input.chunk(axis: 0, count: count)
+        XCTAssertEqual(split.count, count)
+        if i % count == 0 {
+          XCTAssert(split.allSatisfy { $0.shape[0] == split[0].shape[0] })
+        } else {
+          XCTAssert(split[..<(split.count - 1)].allSatisfy { $0.shape[0] == split[0].shape[0] })
+          XCTAssert(split.map { $0.shape[0] }.sum() == i)
+        }
+      }
+    }
+  }
+
   func testElemwise() async throws {
     func testF(
       input: [Float], output: [Float], grad: [Float], tol: Float = 1e-4, _ op: (Tensor) -> Tensor

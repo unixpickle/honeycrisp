@@ -23,7 +23,9 @@ class TransformerTrainer {
   let lr: Float = 0.0001
   let bs = 8
   let captionBytes: Int = 128
-  let saveInterval: Int = 100
+  let saveInterval: Int = 2
+  let cfgProb: Float = 0.1
+  let cfgScale: Float = 1.1
 
   let savePath: String
   let vqPath: String
@@ -119,8 +121,11 @@ class TransformerTrainer {
     return dataStream!.prefix(n).map { [self] (images, captions, state) in
       let tokens = vqvae.bottleneck(vqvae.encoder(images)).codes.flatten(startAxis: 1)
       let textTensor = captionTensor(captions)
+      let mask = (Tensor(rand: [textTensor.shape[0]]) > cfgProb).unsqueeze(axis: -1).expand(
+        as: textTensor)
+      let maskedText = mask.when(isTrue: textTensor, isFalse: Tensor(zerosLike: textTensor))
       let zeros = Tensor(zeros: [textTensor.shape[0], 1], dtype: textTensor.dtype)
-      return (Tensor(concat: [zeros, textTensor, tokens], axis: 1), state)
+      return (Tensor(concat: [zeros, maskedText, tokens], axis: 1), state)
     }
   }
 
@@ -148,7 +153,7 @@ class TransformerTrainer {
     let filename = "text2im_samples.png"
     print("sampling to \(filename) ...")
     let captions = captionTensor(testCaptions)
-    let samples = try await model.sample(prefixes: captions)
+    let samples = try await model.sample(prefixes: captions, cfgScale: cfgScale)
     let embs = vqvae.bottleneck.embed(samples.reshape([-1, 16, 16]))
     let sampleImages = vqvae.decoder(embs.move(axis: -1, to: 1)).move(axis: 1, to: -1)
     let img = try await tensorToImage(tensor: sampleImages.flatten(endAxis: 1))

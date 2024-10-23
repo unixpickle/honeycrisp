@@ -68,4 +68,16 @@ extension Tensor {
     }
     return results
   }
+
+  public func chunk(axis: Int, count: Int) -> [Tensor] {
+    let axis = positiveAxis(axis)
+    alwaysAssert(
+      shape[axis] >= count,
+      "shape \(shape) incompatible with chunk of count \(count) on axis \(axis)")
+    alwaysAssert(
+      shape[axis] % count == 0,
+      "shape \(shape) incompatible with chunk of count \(count) on axis \(axis)")
+    let sizes = [Int](repeating: shape[axis] / count, count: count)
+    return split(axis: axis, counts: sizes)
+  }
 }
