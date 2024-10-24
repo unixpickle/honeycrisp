@@ -1,16 +1,13 @@
 import Foundation
 import Honeycrisp
 
-class VQVAETrainer {
+class CommandVQVAE: Command {
+
   public struct State: Codable {
     let step: Int
     let model: Trainable.State
     let dataset: DataLoader.State?
     let opt: Adam.State?
-  }
-
-  public enum ArgumentError: Error {
-    case invalidArgs
   }
 
   let lr: Float = 0.0001
@@ -31,17 +28,11 @@ class VQVAETrainer {
 
   init(_ args: [String]) throws {
     if args.count != 2 {
-      print("Usage: Text2Image vqvae <image_dir> <save_path>")
+      print("Usage: ... vqvae <image_dir> <save_path>")
       throw ArgumentError.invalidArgs
     }
     imageDir = args[0]
     savePath = args[1]
-
-    do {
-      Backend.defaultBackend = try MPSBackend()
-    } catch {
-      print("failed to init MPS backend: \(error)")
-    }
 
     model = VQVAE(channels: 4, vocab: 16384, latentChannels: 4, downsamples: 4)
     opt = Adam(model.parameters, lr: lr)
@@ -50,13 +41,7 @@ class VQVAETrainer {
       batchSize: bs, images: try ImageIterator(imageDir: imageDir, imageSize: 256))
   }
 
-  func run() async throws {
-    do {
-      Backend.defaultBackend = try MPSBackend()
-    } catch {
-      print("failed to init MPS backend: \(error)")
-    }
-
+  override public func run() async throws {
     try await prepare()
 
     while true {
@@ -123,7 +108,8 @@ class VQVAETrainer {
         "step \(step):"
           + " loss=\(try await loss.item())"
           + " ssim=\(try await ssimLoss.mean().item())"
-          + " commitment=\(try await vqLosses.commitmentLoss.item())")
+          + " commitment=\(try await vqLosses.commitmentLoss.item())"
+          + " gflops=\(gflops)")
     }
   }
 
@@ -150,4 +136,5 @@ class VQVAETrainer {
     let stateData = try PropertyListEncoder().encode(state)
     try stateData.write(to: URL(filePath: savePath), options: .atomic)
   }
+
 }

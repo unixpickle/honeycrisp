@@ -381,10 +381,7 @@ public struct ConvConfig<Dim: SpatialDim>: Hashable {
   }
 
   func transposeFLOPs(batch: Int) -> Int {
-    let outerShape = imageShape(batch: batch)
-    let middleCount = kernelSize.dims.product() / stride.dims.product()
-    let innerCount = middleCount * outChannels / groups
-    return 2 * outerShape.0 * outerShape.1 * outerShape.2.dims.product() * innerCount
+    return forwardFLOPs(batch: batch)
   }
 
   func lazyTranspose<T: NumericTensorElement>(image: LazyTensor<T>, kernel: LazyTensor<T>)
@@ -420,9 +417,7 @@ public struct ConvConfig<Dim: SpatialDim>: Hashable {
   }
 
   func kernelGradFLOPs(batch: Int) -> Int {
-    let kernelShape: [Int] = [outChannels, inChannels / groups, kernelSize.dims.product()]
-    let outShape = outShape(batch: batch)
-    return kernelShape.product() * outShape.0 * outShape.1 * outShape.2.dims.product()
+    return forwardFLOPs(batch: batch)
   }
 
   func lazyKernelGrad<T: NumericTensorElement>(image: LazyTensor<T>, outGrad: LazyTensor<T>)

@@ -9,21 +9,22 @@ struct Main {
       printHelp()
       return
     }
+    let commands = [
+      "vqvae": CommandVQVAE.init,
+      "transformer": CommandTransformer.init,
+      "tokenize": CommandTokenize.init,
+    ]
+    guard let command = commands[CommandLine.arguments[1]] else {
+      print("Unrecognized subcommand: \(CommandLine.arguments[1])")
+      printHelp()
+      return
+    }
     do {
-      switch CommandLine.arguments[1] {
-      case "vqvae":
-        let cmd = try VQVAETrainer(Array(CommandLine.arguments[2...]))
-        try await cmd.run()
-      case "transformer":
-        let cmd = try TransformerTrainer(Array(CommandLine.arguments[2...]))
-        try await cmd.run()
-      default:
-        print("Unrecognized subcommand: \(CommandLine.arguments[1])")
-        printHelp()
-      }
+      Backend.defaultBackend = try MPSBackend()
+      let runner = try command(Array(CommandLine.arguments[2...]))
+      try await runner.run()
     } catch {
       print("ERROR: \(error)")
-      return
     }
   }
 
@@ -31,6 +32,7 @@ struct Main {
     print("Usage: Text2Image <subcommand> ...")
     print("Subcommands:")
     print("    vqvae <image_dir> <state_path>")
+    print("    tokenize <image_dir> <vqvae_path> <output_dir>")
     print("    transformer <image_dir> <vqvae_path> <state_path>")
   }
 }

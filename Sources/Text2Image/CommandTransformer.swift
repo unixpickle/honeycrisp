@@ -1,16 +1,13 @@
 import Foundation
 import Honeycrisp
 
-class TransformerTrainer {
+class CommandTransformer: Command {
+
   public struct State: Codable {
     let step: Int
     let model: Trainable.State
     let dataset: DataLoader.State?
     let opt: Adam.State?
-  }
-
-  public enum ArgumentError: Error {
-    case invalidArgs
   }
 
   let testCaptions = [
@@ -47,12 +44,6 @@ class TransformerTrainer {
     vqPath = args[1]
     savePath = args[2]
 
-    do {
-      Backend.defaultBackend = try MPSBackend()
-    } catch {
-      print("failed to init MPS backend: \(error)")
-    }
-
     vqvae = VQVAE(channels: 4, vocab: 16384, latentChannels: 4, downsamples: 4)
     model = Transformer(
       config: TransformerConfig(
@@ -62,13 +53,7 @@ class TransformerTrainer {
       batchSize: bs, images: try ImageIterator(imageDir: imageDir, imageSize: 256))
   }
 
-  func run() async throws {
-    do {
-      Backend.defaultBackend = try MPSBackend()
-    } catch {
-      print("failed to init MPS backend: \(error)")
-    }
-
+  override public func run() async throws {
     try await prepare()
 
     while true {
@@ -81,7 +66,7 @@ class TransformerTrainer {
     print("loading VQVAE from checkpoint: \(vqPath) ...")
     let data = try Data(contentsOf: URL(fileURLWithPath: vqPath))
     let decoder = PropertyListDecoder()
-    let state = try decoder.decode(VQVAETrainer.State.self, from: data)
+    let state = try decoder.decode(CommandVQVAE.State.self, from: data)
     try vqvae.loadState(state.model)
 
     if FileManager.default.fileExists(atPath: savePath) {
@@ -145,7 +130,7 @@ class TransformerTrainer {
       loss.backward()
       opt.step()
       opt.clearGrads()
-      print("step \(step):" + " loss=\(try await loss.item())")
+      print("step \(step):" + " loss=\(try await loss.item()) gflops=\(gflops)")
     }
   }
 
@@ -169,4 +154,5 @@ class TransformerTrainer {
     let stateData = try PropertyListEncoder().encode(state)
     try stateData.write(to: URL(filePath: savePath), options: .atomic)
   }
+
 }
