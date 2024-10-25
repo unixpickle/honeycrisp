@@ -21,6 +21,8 @@ class CommandTokenize: Command {
     public var records: [Record]
   }
 
+  let batchSize = 8
+
   let imageDir: String
   let vqPath: String
   let outputDir: String
@@ -38,6 +40,11 @@ class CommandTokenize: Command {
 
     metaDir = URL(filePath: imageDir).deletingLastPathComponent().appending(
       component: "success")
+
+    if !FileManager.default.fileExists(atPath: outputDir) {
+      try FileManager.default.createDirectory(
+        at: URL(filePath: outputDir), withIntermediateDirectories: false)
+    }
 
     vqvae = VQVAE(channels: 4, vocab: 16384, latentChannels: 4, downsamples: 4)
   }
@@ -96,6 +103,25 @@ class CommandTokenize: Command {
     let existingIDs = Set(shard.records.map { $0.id })
     var numFailed = 0
     var numSucceeded = 0
+
+    var currentBatch: [Tensor] = []
+    var currentIDs: [String] = []
+    var currentMeta: [Shard.Record.Metadata] = []
+
+    func flushBatch() async throws {
+      let vqs = Tensor.withGrad(enabled: false) {
+        vqvae.bottleneck(vqvae.encoder(Tensor(stack: currentBatch).move(axis: -1, to: 1))).codes
+      }
+      for (i, (id, meta)) in zip(currentIDs, currentMeta).enumerated() {
+        let tokens = try await vqs[i].ints().map { UInt16($0) }
+        shard.records.append(
+          Shard.Record(id: id, metadata: meta, tokens: tokens))
+      }
+      currentBatch = []
+      currentIDs = []
+      currentMeta = []
+    }
+
     for (imagePath, metaPath) in pathsAndMeta {
       let imageID = imagePath.lastPathComponent
       if existingIDs.contains(imageID) {
@@ -108,16 +134,20 @@ class CommandTokenize: Command {
           numFailed += 1
           continue
         }
-        let vqs = vqvae.bottleneck(vqvae.encoder(image.unsqueeze(axis: 0).move(axis: -1, to: 1)))
-          .codes.flatten()
-        let tokens = try await vqs.ints().map { UInt16($0) }
-        shard.records.append(
-          Shard.Record(id: imageID, metadata: metadata, tokens: tokens))
+        currentBatch.append(image)
+        currentIDs.append(imageID)
+        currentMeta.append(metadata)
+        if currentBatch.count == batchSize {
+          try await flushBatch()
+        }
         numSucceeded += 1
       } catch {
         print("\(error)")
         numFailed += 1
       }
+    }
+    if !currentBatch.isEmpty {
+      try await flushBatch()
     }
     let data = try PropertyListEncoder().encode(shard)
     try data.write(to: shardURL, options: .atomic)

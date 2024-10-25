@@ -165,7 +165,7 @@ open class MPSBackend: CPUBackend {
       source: MPSBackend.KernelCode, options: MTLCompileOptions())
 
     // Lookup all functions in the library.
-    var names = ["repeat", "axis_permutation"]
+    var names = ["axis_permutation"]
     for type in ["fp32", "fp16"] {
       for op in [
         "vector_pow", "log", "recip", "exp", "sigmoid", "sigmoid_grad", "gelu", "gelu_grad", "sin",
@@ -175,6 +175,7 @@ open class MPSBackend: CPUBackend {
       }
     }
     for type in ["char", "short", "int", "long"] {
+      names.append("repeat_\(type)")
       for mode in ["", "_bcast"] {
         for op in ["gather", "scatter"] {
           names.append("\(op)\(mode)_\(type)")
@@ -454,26 +455,38 @@ open class MPSBackend: CPUBackend {
     async throws
     -> Tensor.Data
   {
-    let outBytes = innerCount * outerCount * repeats * dtype.byteSize
+    let outCount = innerCount * outerCount * repeats
     alwaysAssert(
-      outBytes <= Int(UInt32.max),
-      "cannot apply kernel to this many values")
+      outCount <= Int(UInt32.max),
+      "cannot apply repeat kernel to this many values")
 
-    let output = try await allocate(length: outBytes)
+    let output = try await allocate(length: outCount * dtype.byteSize)
+
+    let typeName =
+      switch dtype {
+      case .bool:
+        "char"
+      case .float16:
+        "short"
+      case .float32:
+        "int"
+      case .int64:
+        "long"
+      }
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder { buf, enc in
-        let state = try getFunction(name: "repeat")
+        let state = try getFunction(name: "repeat_\(typeName)")
         try setArguments(
           enc,
           .buffer(a.buffer),
           .buffer(output),
-          .uint(UInt32(innerCount * dtype.byteSize)),
+          .uint(UInt32(innerCount)),
           .uint(UInt32(outerCount)),
           .uint(UInt32(repeats))
         )
-        dispatch1D(enc, state: state, threadCount: outBytes)
+        dispatch1D(enc, state: state, threadCount: outCount)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
     }
@@ -1627,17 +1640,23 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void repeat(device const char* input [[buffer(0)]],
-                         device char* output [[buffer(1)]],
-                         constant uint &inner [[buffer(2)]],
-                         constant uint &outer [[buffer(3)]],
-                         constant uint &reps [[buffer(4)]],
-                         uint id [[thread_position_in_grid]]) {
-          if (id < inner * outer * reps) {
-              uint sourceIdx = (id % inner) + (id / (inner * reps)) * inner;
-              output[id] = input[sourceIdx];
-          }
+      #define DEFINE_REPEAT(type) \
+      kernel void repeat_##type(device const type* input [[buffer(0)]], \
+                               device type* output [[buffer(1)]], \
+                               constant uint &inner [[buffer(2)]], \
+                               constant uint &outer [[buffer(3)]], \
+                               constant uint &reps [[buffer(4)]], \
+                               uint id [[thread_position_in_grid]]) { \
+          if (id < inner * outer * reps) { \
+              uint sourceIdx = (id % inner) + (id / (inner * reps)) * inner; \
+              output[id] = input[sourceIdx]; \
+          } \
       }
+
+      DEFINE_REPEAT(char)
+      DEFINE_REPEAT(short)
+      DEFINE_REPEAT(int)
+      DEFINE_REPEAT(long)
 
       constant uint PHILOX_ROUND_A = 0xD2511F53;
       constant uint PHILOX_ROUND_B = 0xCD9E8D57;
