@@ -80,6 +80,24 @@ open class BackendWrapper: Backend {
     try await wrapped.binaryOp(a, b, op: op, count: count, dtype: dtype)
   }
 
+  override public func mulAdd(
+    _ input: Tensor.Data, coeff: Tensor.Data, bias: Tensor.Data, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.mulAdd(input, coeff: coeff, bias: bias, count: count, dtype: dtype)
+  }
+
+  override public func addMul(
+    _ input: Tensor.Data, bias: Tensor.Data, coeff: Tensor.Data, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.addMul(input, bias: bias, coeff: coeff, count: count, dtype: dtype)
+  }
+
   override public func compare(
     _ a: Tensor.Data, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
@@ -141,6 +159,29 @@ open class BackendWrapper: Backend {
     -> Tensor.Data
   {
     try await wrapped.reduce(a, op: op, dims: dims, dtype: dtype)
+  }
+
+  override public func logSoftmax(
+    _ a: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.logSoftmax(
+      a, outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: dtype)
+  }
+
+  override public func logSoftmaxGrad(
+    _ a: Tensor.Data, _ outGrad: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.logSoftmaxGrad(
+      a, outGrad, outerCount: outerCount, middleCount: middleCount, innerCount: innerCount,
+      dtype: dtype)
+
   }
 
   override public func repeated(

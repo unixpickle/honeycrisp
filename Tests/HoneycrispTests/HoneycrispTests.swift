@@ -141,6 +141,45 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testFusedAddMul() async throws {
+    try await runInBackends {
+      for dtype: Tensor.DType in [.float32, .float16, .int64] {
+        func testEquiv(a: (Tensor, Tensor, Tensor) -> Tensor, b: (Tensor, Tensor, Tensor) -> Tensor)
+          async throws
+        {
+          var realXGrad: Tensor?
+          var realYGrad: Tensor?
+          var realZGrad: Tensor?
+          var expXGrad: Tensor?
+          var expYGrad: Tensor?
+          var expZGrad: Tensor?
+
+          let x = Tensor(data: [1, 2, 0], shape: [3], dtype: dtype)
+          let y = Tensor(data: [-2, 3, -4], shape: [3], dtype: dtype)
+          let z = Tensor(data: [2, 3, 0], shape: [3], dtype: dtype)
+          if !dtype.supportsGrad {
+            let out1 = a(x, y, z)
+            let out2 = b(x, y, z)
+            try await assertDataEqual(out1, out2)
+          } else {
+            let out1 = a(
+              x.onGrad { realXGrad = $0 }, y.onGrad { realYGrad = $0 }, z.onGrad { realZGrad = $0 })
+            let out2 = b(
+              x.onGrad { expXGrad = $0 }, y.onGrad { expYGrad = $0 }, z.onGrad { expZGrad = $0 })
+            try await assertDataEqual(out1, out2)
+            out1.backward(Tensor(onesLike: out1))
+            out2.backward(Tensor(onesLike: out2))
+            try await assertDataEqual(realXGrad!, expXGrad!)
+            try await assertDataEqual(realYGrad!, expYGrad!)
+            try await assertDataEqual(realZGrad!, expZGrad!)
+          }
+        }
+        try await testEquiv(a: { $0.add($1, thenMul: $2) }, b: { ($0 + $1) * $2 })
+        try await testEquiv(a: { $0.mul($1, thenAdd: $2) }, b: { ($0 * $1) + $2 })
+      }
+    }
+  }
+
   func testMod() async throws {
     try await runInBackends {
       func testSimple(
@@ -765,42 +804,44 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testMinMax() async throws {
-    let input = Tensor(data: [1, 10, 2, 7, 8, 9, 6, 4, 5], shape: [3, 3], dtype: .float32)
-    var gradA: Tensor?
-    let maxA = input.onGrad({ g in gradA = g }).max(axis: 1)
-    try await assertDataEqual(maxA, [10, 9, 6])
-    maxA.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
-    try await assertDataEqual(gradA!, [0, -1, 0, 0, 0, -2, -3, 0, 0])
+    try await runInBackends {
+      let input = Tensor(data: [1, 10, 2, 7, 8, 9, 6, 4, 5], shape: [3, 3], dtype: .float32)
+      var gradA: Tensor?
+      let maxA = input.onGrad({ g in gradA = g }).max(axis: 1)
+      try await assertDataEqual(maxA, [10, 9, 6])
+      maxA.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
+      try await assertDataEqual(gradA!, [0, -1, 0, 0, 0, -2, -3, 0, 0])
 
-    var gradB: Tensor?
-    let maxB = input.onGrad({ g in gradB = g }).max(axis: 0)
-    try await assertDataEqual(maxB, [7, 10, 9])
-    maxB.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
-    try await assertDataEqual(gradB!, [0, -2, 0, -1, 0, -3, 0, 0, 0])
+      var gradB: Tensor?
+      let maxB = input.onGrad({ g in gradB = g }).max(axis: 0)
+      try await assertDataEqual(maxB, [7, 10, 9])
+      maxB.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
+      try await assertDataEqual(gradB!, [0, -2, 0, -1, 0, -3, 0, 0, 0])
 
-    var gradC: Tensor?
-    let minC = input.onGrad({ g in gradC = g }).min(axis: 0)
-    try await assertDataEqual(minC, [1, 4, 2])
-    minC.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
-    try await assertDataEqual(gradC!, [-1, 0, -3, 0, 0, 0, 0, -2, 0])
+      var gradC: Tensor?
+      let minC = input.onGrad({ g in gradC = g }).min(axis: 0)
+      try await assertDataEqual(minC, [1, 4, 2])
+      minC.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
+      try await assertDataEqual(gradC!, [-1, 0, -3, 0, 0, 0, 0, -2, 0])
 
-    var gradD: Tensor?
-    let maxD = input.onGrad({ g in gradD = g }).max()
-    XCTAssertEqual(maxD.shape, [])
-    try await assertDataEqual(maxD, [10])
-    maxD.backward(Tensor(data: [-1], shape: [], dtype: .float32))
-    try await assertDataEqual(gradD!, [0, -1, 0, 0, 0, 0, 0, 0, 0])
+      var gradD: Tensor?
+      let maxD = input.onGrad({ g in gradD = g }).max()
+      XCTAssertEqual(maxD.shape, [])
+      try await assertDataEqual(maxD, [10])
+      maxD.backward(Tensor(data: [-1], shape: [], dtype: .float32))
+      try await assertDataEqual(gradD!, [0, -1, 0, 0, 0, 0, 0, 0, 0])
 
-    var gradE: Tensor?
-    let maxE = input.onGrad({ g in gradE = g }).min()
-    XCTAssertEqual(maxE.shape, [])
-    try await assertDataEqual(maxE, [1])
-    maxE.backward(Tensor(data: [-1], shape: [], dtype: .float32))
-    try await assertDataEqual(gradE!, [-1.0, 0, 0, 0, 0, 0, 0, 0, 0])
+      var gradE: Tensor?
+      let maxE = input.onGrad({ g in gradE = g }).min()
+      XCTAssertEqual(maxE.shape, [])
+      try await assertDataEqual(maxE, [1])
+      maxE.backward(Tensor(data: [-1], shape: [], dtype: .float32))
+      try await assertDataEqual(gradE!, [-1.0, 0, 0, 0, 0, 0, 0, 0, 0])
 
-    XCTAssertEqual(input.max(keepdims: true).shape, [1, 1])
-    XCTAssertEqual(input.max(axis: 0, keepdims: true).shape, [1, 3])
-    XCTAssertEqual(input.max(axis: 1, keepdims: true).shape, [3, 1])
+      XCTAssertEqual(input.max(keepdims: true).shape, [1, 1])
+      XCTAssertEqual(input.max(axis: 0, keepdims: true).shape, [1, 3])
+      XCTAssertEqual(input.max(axis: 1, keepdims: true).shape, [3, 1])
+    }
   }
 
   func testExpandAndRepeat() async throws {
@@ -835,94 +876,100 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testSoftmax() async throws {
-    let x = Tensor(
-      data: [
-        -0.10201670974493027, 0.19515414535999298, 0.5986292362213135, 1.340445637702942,
-        -0.11801239848136902, -0.24393606185913086, -1.264183521270752, -1.2100555896759033,
-        0.2798837423324585, -2.8798062801361084, -0.5698361992835999, 0.44209930300712585,
-        -0.7118728160858154, -0.6576670408248901, -0.4293822646141052,
-      ], shape: [3, 5])
-    let outGrad: Tensor = Tensor(
-      data: [
-        1.2432453632354736, 1.933882474899292, -1.1054673194885254, -0.5737214684486389,
-        1.2679708003997803, 2.3119640350341797, 0.44090110063552856, -1.0582382678985596,
-        1.030942440032959, -0.6020350456237793, -0.5935935378074646, 0.4871285855770111,
-        0.17254149913787842, -2.5286428928375244, -0.32286253571510315,
-      ], shape: [3, 5])
+    try await runInBackends {
+      let x = Tensor(
+        data: [
+          -0.10201670974493027, 0.19515414535999298, 0.5986292362213135, 1.340445637702942,
+          -0.11801239848136902, -0.24393606185913086, -1.264183521270752, -1.2100555896759033,
+          0.2798837423324585, -2.8798062801361084, -0.5698361992835999, 0.44209930300712585,
+          -0.7118728160858154, -0.6576670408248901, -0.4293822646141052,
+        ], shape: [3, 5])
+      let outGrad: Tensor = Tensor(
+        data: [
+          1.2432453632354736, 1.933882474899292, -1.1054673194885254, -0.5737214684486389,
+          1.2679708003997803, 2.3119640350341797, 0.44090110063552856, -1.0582382678985596,
+          1.030942440032959, -0.6020350456237793, -0.5935935378074646, 0.4871285855770111,
+          0.17254149913787842, -2.5286428928375244, -0.32286253571510315,
+        ], shape: [3, 5])
 
-    var axis0Grad: Tensor?
-    let axis0Out = x.onGrad({ g in axis0Grad = g }).logSoftmax(axis: 0)
-    try await assertClose(
-      axis0Out,
-      Tensor(
-        data: [
-          -0.9139110445976257, -0.9212778806686401, -0.3601568043231964, -0.39329278469085693,
-          -0.5853509902954102, -1.0558303594589233, -2.380615711212158, -2.168841600418091,
-          -1.4538546800613403, -3.347144842147827, -1.381730556488037, -0.6743327379226685,
-          -1.670658826828003, -2.3914055824279785, -0.8967208862304688,
-        ], shape: [3, 5]))
-    axis0Out.backward(outGrad)
-    try await assertClose(
-      axis0Grad!,
-      Tensor(
-        data: [
-          0.05577663704752922, 0.7948125600814819, 0.2835029065608978, 0.8241385221481323,
-          1.0769097805023193, 1.281607747077942, 0.1761925369501114, -0.8306283950805664,
-          1.5149670839309692, -0.6141059398651123, -1.3373842239379883, -0.9710049033164978,
-          0.5471253991127014, -2.3391058444976807, -0.46280384063720703,
-        ], shape: [3, 5]))
+      var axis0Grad: Tensor?
+      let axis0Out = x.onGrad({ g in axis0Grad = g }).logSoftmax(axis: 0)
+      try await assertClose(
+        axis0Out,
+        Tensor(
+          data: [
+            -0.9139110445976257, -0.9212778806686401, -0.3601568043231964, -0.39329278469085693,
+            -0.5853509902954102, -1.0558303594589233, -2.380615711212158, -2.168841600418091,
+            -1.4538546800613403, -3.347144842147827, -1.381730556488037, -0.6743327379226685,
+            -1.670658826828003, -2.3914055824279785, -0.8967208862304688,
+          ], shape: [3, 5]))
+      axis0Out.backward(outGrad)
+      try await assertClose(
+        axis0Grad!,
+        Tensor(
+          data: [
+            0.05577663704752922, 0.7948125600814819, 0.2835029065608978, 0.8241385221481323,
+            1.0769097805023193, 1.281607747077942, 0.1761925369501114, -0.8306283950805664,
+            1.5149670839309692, -0.6141059398651123, -1.3373842239379883, -0.9710049033164978,
+            0.5471253991127014, -2.3391058444976807, -0.46280384063720703,
+          ], shape: [3, 5]))
 
-    var axis1Grad: Tensor?
-    let axis1Out = x.onGrad({ g in axis1Grad = g }).logSoftmax(axis: 1)
-    try await assertClose(
-      axis1Out,
-      Tensor(
-        data: [
-          -2.2592945098876953, -1.9621237516403198, -1.558648705482483, -0.8168323040008545,
-          -2.2752904891967773, -1.2531013488769531, -2.273348808288574, -2.2192208766937256,
-          -0.7292815446853638, -3.8889713287353516, -1.8998993635177612, -0.8879638910293579,
-          -2.041935920715332, -1.9877302646636963, -1.7594454288482666,
-        ], shape: [3, 5]))
-    axis1Out.backward(outGrad)
-    try await assertClose(
-      axis1Grad!,
-      Tensor(
-        data: [
-          0.9544176459312439, 1.545107364654541, -1.6874706745147705, -1.7957807779312134,
-          0.9837263822555542, 1.7054452896118164, 0.22224761545658112, -1.289053201675415,
-          0.006856732070446014, -0.645496129989624, -0.17693884670734406, 1.6333123445510864,
-          0.5340267419815063, -2.147022247314453, 0.156622052192688,
-        ], shape: [3, 5]))
+      var axis1Grad: Tensor?
+      let axis1Out = x.onGrad({ g in axis1Grad = g }).logSoftmax(axis: 1)
+      try await assertClose(
+        axis1Out,
+        Tensor(
+          data: [
+            -2.2592945098876953, -1.9621237516403198, -1.558648705482483, -0.8168323040008545,
+            -2.2752904891967773, -1.2531013488769531, -2.273348808288574, -2.2192208766937256,
+            -0.7292815446853638, -3.8889713287353516, -1.8998993635177612, -0.8879638910293579,
+            -2.041935920715332, -1.9877302646636963, -1.7594454288482666,
+          ], shape: [3, 5]))
+      axis1Out.backward(outGrad)
+      try await assertClose(
+        axis1Grad!,
+        Tensor(
+          data: [
+            0.9544176459312439, 1.545107364654541, -1.6874706745147705, -1.7957807779312134,
+            0.9837263822555542, 1.7054452896118164, 0.22224761545658112, -1.289053201675415,
+            0.006856732070446014, -0.645496129989624, -0.17693884670734406, 1.6333123445510864,
+            0.5340267419815063, -2.147022247314453, 0.156622052192688,
+          ], shape: [3, 5]))
+    }
   }
 
   func testConcatInner() async throws {
-    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3]).cast(.float32)
-    let y = Tensor(data: [7, 8, 9, 10], shape: [2, 2]).cast(.float32)
-    var xGrad: Tensor?
-    var yGrad: Tensor?
-    let xWithGrad = x.onGrad({ g in xGrad = g })
-    let yWithGrad = y.onGrad({ g in yGrad = g })
-    let combined = Tensor(concat: [xWithGrad, yWithGrad], axis: 1)
-    XCTAssertEqual(combined.shape, [2, 5])
-    try await assertDataEqual(combined, [1, 2, 3, 7, 8, 4, 5, 6, 9, 10])
-    combined.backward(Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], shape: [2, 5]).cast(as: x))
-    try await assertDataEqual(xGrad!, [1, 2, 3, 6, 7, 8])
-    try await assertDataEqual(yGrad!, [4, 5, 9, 10])
+    try await runInBackends {
+      let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3]).cast(.float32)
+      let y = Tensor(data: [7, 8, 9, 10], shape: [2, 2]).cast(.float32)
+      var xGrad: Tensor?
+      var yGrad: Tensor?
+      let xWithGrad = x.onGrad({ g in xGrad = g })
+      let yWithGrad = y.onGrad({ g in yGrad = g })
+      let combined = Tensor(concat: [xWithGrad, yWithGrad], axis: 1)
+      XCTAssertEqual(combined.shape, [2, 5])
+      try await assertDataEqual(combined, [1, 2, 3, 7, 8, 4, 5, 6, 9, 10])
+      combined.backward(Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], shape: [2, 5]).cast(as: x))
+      try await assertDataEqual(xGrad!, [1, 2, 3, 6, 7, 8])
+      try await assertDataEqual(yGrad!, [4, 5, 9, 10])
+    }
   }
 
   func testConcatOuter() async throws {
-    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3]).cast(.float32)
-    let y = Tensor(data: [7, 8, 9], shape: [1, 3]).cast(.float32)
-    var xGrad: Tensor?
-    var yGrad: Tensor?
-    let xWithGrad = x.onGrad({ g in xGrad = g })
-    let yWithGrad = y.onGrad({ g in yGrad = g })
-    let combined = Tensor(concat: [xWithGrad, yWithGrad], axis: 0)
-    XCTAssertEqual(combined.shape, [3, 3])
-    try await assertDataEqual(combined, [1, 2, 3, 4, 5, 6, 7, 8, 9])
-    combined.backward(Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9], shape: [3, 3]).cast(as: x))
-    try await assertDataEqual(xGrad!, [1, 2, 3, 4, 5, 6])
-    try await assertDataEqual(yGrad!, [7, 8, 9])
+    try await runInBackends {
+      let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3]).cast(.float32)
+      let y = Tensor(data: [7, 8, 9], shape: [1, 3]).cast(.float32)
+      var xGrad: Tensor?
+      var yGrad: Tensor?
+      let xWithGrad = x.onGrad({ g in xGrad = g })
+      let yWithGrad = y.onGrad({ g in yGrad = g })
+      let combined = Tensor(concat: [xWithGrad, yWithGrad], axis: 0)
+      XCTAssertEqual(combined.shape, [3, 3])
+      try await assertDataEqual(combined, [1, 2, 3, 4, 5, 6, 7, 8, 9])
+      combined.backward(Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9], shape: [3, 3]).cast(as: x))
+      try await assertDataEqual(xGrad!, [1, 2, 3, 4, 5, 6])
+      try await assertDataEqual(yGrad!, [7, 8, 9])
+    }
   }
 
   func testStack() async throws {

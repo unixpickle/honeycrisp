@@ -48,6 +48,13 @@ open class MPSBackend: CPUBackend {
     let dtype: MPSDataType
   }
 
+  private struct SoftmaxKey: Hashable {
+    let outerCount: Int
+    let middleCount: Int
+    let innerCount: Int
+    let dtype: MPSDataType
+  }
+
   private struct ScatterKey: Hashable {
     let broadcasted: Bool
     let outCount: Int
@@ -129,12 +136,18 @@ open class MPSBackend: CPUBackend {
     }
   }
 
+  private static let CastTypes: [Tensor.DType: String] = [
+    .float16: "half", .float32: "float", .int64: "long",
+  ]
+
   private var queue = DispatchQueue(label: "mps-backend-worker")
   private var commandQueue: MTLCommandQueue? = nil
   private var matmuls: [MatmulKey: TwoToOneGraph] = [:]
   private var conv2D: [Conv2DKey: TwoToOneGraph] = [:]
   private var scatters: [ScatterKey: TwoToOneGraph] = [:]
   private var reductions: [ReduceKey: OneToOneGraph] = [:]
+  private var logSoftmaxes: [SoftmaxKey: OneToOneGraph] = [:]
+  private var logSoftmaxGrads: [SoftmaxKey: TwoToOneGraph] = [:]
   private var defaultRNG: MPSRandomGenerator? = nil
   private var functions: [String: MTLComputePipelineState] = [:]
 
@@ -176,6 +189,7 @@ open class MPSBackend: CPUBackend {
     }
     for type in ["char", "short", "int", "long"] {
       names.append("repeat_\(type)")
+      names.append("strided_copy_\(type)")
       for mode in ["", "_bcast"] {
         for op in ["gather", "scatter"] {
           names.append("\(op)\(mode)_\(type)")
@@ -190,6 +204,8 @@ open class MPSBackend: CPUBackend {
       }
     }
     for t1 in ["half", "float", "long"] {
+      names.append("add_mul_\(t1)")
+      names.append("mul_add_\(t1)")
       for t2 in ["half", "float", "long"] {
         if t1 == t2 {
           continue
@@ -424,14 +440,67 @@ open class MPSBackend: CPUBackend {
     }
   }
 
+  override public func mulAdd(
+    _ input: Tensor.Data, coeff: Tensor.Data, bias: Tensor.Data, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await addMulOrMulAdd(
+      input, a: coeff, b: bias, method: "mul_add", count: count, dtype: dtype)
+
+  }
+
+  override public func addMul(
+    _ input: Tensor.Data, bias: Tensor.Data, coeff: Tensor.Data, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await addMulOrMulAdd(
+      input, a: bias, b: coeff, method: "add_mul", count: count, dtype: dtype)
+  }
+
+  private func addMulOrMulAdd(
+    _ input: Tensor.Data, a: Tensor.Data, b: Tensor.Data, method: String, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    alwaysAssert(count <= UInt32.max, "\(method) cannot operate on as many as \(count) values")
+    guard let typeName = MPSBackend.CastTypes[dtype] else {
+      if method == "mul_add" {
+        return try await super.mulAdd(input, coeff: a, bias: b, count: count, dtype: dtype)
+      } else {
+        return try await super.addMul(input, bias: a, coeff: b, count: count, dtype: dtype)
+      }
+    }
+    let functionName = "\(method)_\(typeName)"
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    try await waitForGPUData(input, a, b)
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc, .buffer(input.buffer), .buffer(a.buffer), .buffer(b.buffer), .buffer(output),
+          .uint(UInt32(count)))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
   override public func cast(
     _ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    let types: [Tensor.DType: String] = [.float16: "half", .float32: "float", .int64: "long"]
-    guard let inTypeName = types[inType], let outTypeName = types[outType] else {
+    guard let inTypeName = MPSBackend.CastTypes[inType],
+      let outTypeName = MPSBackend.CastTypes[outType]
+    else {
       return try await super.cast(a, count: count, inType: inType, outType: outType)
     }
 
@@ -462,17 +531,7 @@ open class MPSBackend: CPUBackend {
 
     let output = try await allocate(length: outCount * dtype.byteSize)
 
-    let typeName =
-      switch dtype {
-      case .bool:
-        "char"
-      case .float16:
-        "short"
-      case .float32:
-        "int"
-      case .int64:
-        "long"
-      }
+    let typeName = dtype.metalSizeType
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
@@ -492,6 +551,42 @@ open class MPSBackend: CPUBackend {
     }
   }
 
+  override public func concat(
+    _ inputs: [Tensor.Data], outerCount: Int, innerCounts: [Int], dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    alwaysAssert(inputs.count == innerCounts.count)
+    for input in inputs {
+      try await waitForData(input)
+    }
+    let totalInner = innerCounts.sum()
+    let buffer = try await allocate(length: outerCount * totalInner * dtype.byteSize)
+
+    let typeName = dtype.metalSizeType
+
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder { buf, enc in
+        for (i, innerCount) in innerCounts.enumerated() {
+          let offset = innerCounts[..<i].sum()
+          let state = try getFunction(name: "strided_copy_\(typeName)")
+          try setArguments(
+            enc,
+            .buffer(inputs[i].buffer),
+            .buffer(buffer),
+            .uint(UInt32(innerCount)),
+            .uint(UInt32(totalInner)),
+            .uint(UInt32(outerCount)),
+            .uint(UInt32(offset))
+          )
+          dispatch1D(enc, state: state, threadCount: innerCount * outerCount)
+        }
+      }
+      return Tensor.Data(backend: self, buffer: buffer, completeOnAllDevices: completion)
+    }
+  }
+
   override public func gather(
     _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
   )
@@ -502,17 +597,7 @@ open class MPSBackend: CPUBackend {
     let output = try await allocate(length: s.gatherOutCount * dtype.byteSize)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder { buf, enc in
-        let typeName =
-          switch dtype {
-          case .bool:
-            "char"
-          case .float16:
-            "short"
-          case .float32:
-            "int"
-          case .int64:
-            "long"
-          }
+        let typeName = dtype.metalSizeType
         let functionName = "gather\(s.broadcasted ? "_bcast" : "")_\(typeName)"
         let state = try getFunction(name: functionName)
         try setArguments(
@@ -576,17 +661,7 @@ open class MPSBackend: CPUBackend {
 
     let result = try await serialize { [self] in
       let completion = try completionBufferAndEncoder { buf, enc in
-        let typeName =
-          switch dtype {
-          case .bool:
-            "char"
-          case .float16:
-            "short"
-          case .float32:
-            "int"
-          case .int64:
-            "long"
-          }
+        let typeName = dtype.metalSizeType
         let functionName = "scatter\(s.broadcasted ? "_bcast" : "")_\(typeName)"
         let state = try getFunction(name: functionName)
         try setArguments(
@@ -682,11 +757,12 @@ open class MPSBackend: CPUBackend {
     async throws
     -> Tensor.Data
   {
-    guard let mpsDType = dtype.mpsDType, op == .sum else {
+    guard let mpsDType = dtype.mpsDType else {
       return try await super.reduce(a, op: op, dims: dims, dtype: dtype)
     }
 
-    let output = try await allocate(length: dims.outCount * dtype.byteSize)
+    let output = try await allocate(
+      length: dims.outCount * (op == .sum ? dtype : Tensor.DType.int64).byteSize)
     try await waitForGPUData(a)
     return try await serialize { [self] in
       let red = self.createReduction(op: op, dims: dims, dtype: mpsDType)
@@ -705,7 +781,8 @@ open class MPSBackend: CPUBackend {
             red.output: MPSGraphTensorData(
               MPSVector(
                 buffer: output,
-                descriptor: MPSVectorDescriptor(length: dims.outCount, dataType: mpsDType)))
+                descriptor: MPSVectorDescriptor(
+                  length: dims.outCount, dataType: op == .sum ? mpsDType : .int64)))
           ],
           executionDescriptor: nil)
       }
@@ -723,10 +800,169 @@ open class MPSBackend: CPUBackend {
       let input = graph.placeholder(
         shape: mpsShape([dims.inCount]), dataType: dtype, name: "input")
       let reshaped = graph.reshape(input, shape: mpsShape(dims.shape), name: "reshaped")
-      let unshapedOutput = graph.reductionSum(with: reshaped, axis: 1, name: "unshapedOutput")
+      let unshapedOutput =
+        switch op {
+        case .sum:
+          graph.reductionSum(with: reshaped, axis: 1, name: "unshapedOutput")
+        case .argmax:
+          graph.cast(
+            graph.reductionArgMaximum(with: reshaped, axis: 1, name: "unshapedOutput"),
+            to: .int64, name: "castedOutput")
+        case .argmin:
+          graph.cast(
+            graph.reductionArgMinimum(with: reshaped, axis: 1, name: "unshapedOutput"),
+            to: .int64, name: "castedOutput")
+        }
       let output = graph.reshape(unshapedOutput, shape: mpsShape([dims.outCount]), name: "output")
       let r = OneToOneGraph(graph: graph, input: input, output: output)
       reductions[key] = r
+      return r
+    }
+  }
+
+  override public func logSoftmax(
+    _ a: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    guard let mpsDType = dtype.mpsDType else {
+      return try await super.logSoftmax(
+        a, outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: dtype)
+    }
+
+    let totalCount = outerCount * middleCount * innerCount
+    let output = try await allocate(length: totalCount * dtype.byteSize)
+    try await waitForGPUData(a)
+    return try await serialize { [self] in
+      let op = self.createLogSoftmax(
+        outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: mpsDType)
+      let completion = completionBuffer { buf in
+        op.graph.encode(
+          to: buf as! MPSCommandBuffer,
+          feeds: [
+            op.input: MPSGraphTensorData(
+              MPSVector(
+                buffer: a.buffer,
+                descriptor: MPSVectorDescriptor(length: totalCount, dataType: mpsDType)))
+          ],
+          targetOperations: nil,
+          resultsDictionary: [
+            op.output: MPSGraphTensorData(
+              MPSVector(
+                buffer: output,
+                descriptor: MPSVectorDescriptor(length: totalCount, dataType: mpsDType)
+              ))
+          ],
+          executionDescriptor: nil)
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  private func createLogSoftmax(
+    outerCount: Int, middleCount: Int, innerCount: Int, dtype: MPSDataType
+  ) -> OneToOneGraph {
+    let key = SoftmaxKey(
+      outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: dtype)
+    if let r = logSoftmaxes[key] {
+      return r
+    } else {
+      let graph = MPSGraph()
+      let totalCount = outerCount * middleCount * innerCount
+      let input = graph.placeholder(shape: mpsShape([totalCount]), dataType: dtype, name: "input")
+      let reshaped = graph.reshape(
+        input, shape: mpsShape([outerCount, middleCount, innerCount]), name: "reshaped")
+      let maxes = graph.reshape(
+        graph.reductionMaximum(with: reshaped, axes: mpsShape([1]), name: "reduceMax"),
+        shape: mpsShape([outerCount, 1, innerCount]), name: "reshapeMax")
+      let exps = graph.exponent(
+        with: graph.subtraction(reshaped, maxes, name: "subMax"), name: "exp")
+      let sumExp = graph.reshape(
+        graph.reductionSum(with: exps, axes: mpsShape([1]), name: "sumExp"),
+        shape: mpsShape([outerCount, 1, innerCount]), name: "reshapedSumExp")
+      let logSumExp = graph.addition(
+        graph.logarithm(with: sumExp, name: "logSumExp"), maxes, name: "logSumExpWithMaxes")
+      let results = graph.subtraction(reshaped, logSumExp, name: "unshapedResult")
+      let output = graph.reshape(results, shape: mpsShape([totalCount]), name: "flatOut")
+      let r = OneToOneGraph(graph: graph, input: input, output: output)
+      logSoftmaxes[key] = r
+      return r
+    }
+  }
+
+  override public func logSoftmaxGrad(
+    _ a: Tensor.Data, _ outGrad: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    guard let mpsDType = dtype.mpsDType else {
+      return try await super.logSoftmax(
+        a, outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: dtype)
+    }
+
+    let totalCount = outerCount * middleCount * innerCount
+    let output = try await allocate(length: totalCount * dtype.byteSize)
+    try await waitForGPUData(a)
+    return try await serialize { [self] in
+      let op = self.createLogSoftmaxGrad(
+        outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: mpsDType)
+      let completion = completionBuffer { buf in
+        op.graph.encode(
+          to: buf as! MPSCommandBuffer,
+          feeds: [
+            op.inputA: MPSGraphTensorData(
+              MPSVector(
+                buffer: a.buffer,
+                descriptor: MPSVectorDescriptor(length: totalCount, dataType: mpsDType))),
+            op.inputB: MPSGraphTensorData(
+              MPSVector(
+                buffer: outGrad.buffer,
+                descriptor: MPSVectorDescriptor(length: totalCount, dataType: mpsDType))),
+          ],
+          targetOperations: nil,
+          resultsDictionary: [
+            op.output: MPSGraphTensorData(
+              MPSVector(
+                buffer: output,
+                descriptor: MPSVectorDescriptor(length: totalCount, dataType: mpsDType)
+              ))
+          ],
+          executionDescriptor: nil)
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  private func createLogSoftmaxGrad(
+    outerCount: Int, middleCount: Int, innerCount: Int, dtype: MPSDataType
+  ) -> TwoToOneGraph {
+    let key = SoftmaxKey(
+      outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: dtype)
+    if let r = logSoftmaxGrads[key] {
+      return r
+    } else {
+      let graph = MPSGraph()
+      let totalCount = outerCount * middleCount * innerCount
+      let input = graph.placeholder(shape: mpsShape([totalCount]), dataType: dtype, name: "input")
+      let gradInput = graph.placeholder(
+        shape: mpsShape([totalCount]), dataType: dtype, name: "gradInput")
+      let reshaped = graph.reshape(
+        input, shape: mpsShape([outerCount, middleCount, innerCount]), name: "reshaped")
+      let reshapedGrad = graph.reshape(
+        gradInput, shape: mpsShape([outerCount, middleCount, innerCount]), name: "reshapedGrad")
+      let softmaxOutput = graph.softMax(with: reshaped, axis: 1, name: "softmax")
+      let gradSum = graph.reshape(
+        graph.reductionSum(with: reshapedGrad, axes: mpsShape([1]), name: "sumGrad"),
+        shape: mpsShape([outerCount, 1, innerCount]), name: "sumGradReshaped")
+      let results = graph.subtraction(
+        reshapedGrad, graph.multiplication(gradSum, softmaxOutput, name: "gradSumProduct"),
+        name: "unshapedResult")
+      let output = graph.reshape(results, shape: mpsShape([totalCount]), name: "flatOut")
+      let r = TwoToOneGraph(graph: graph, inputA: input, inputB: gradInput, output: output)
+      logSoftmaxGrads[key] = r
       return r
     }
   }
@@ -1348,6 +1584,32 @@ open class MPSBackend: CPUBackend {
       BINARY_KERNELS(div, x/y)
       BINARY_KERNELS(mod, (pythonFmod(x,y)))
 
+      #define DEFINE_FUSED_ADD_MUL(type) \
+          kernel void add_mul_##type(device const type* a [[buffer(0)]], \
+                                     device const type* b [[buffer(1)]], \
+                                     device const type* c [[buffer(2)]], \
+                                     device type* output [[buffer(3)]], \
+                                     constant uint &N [[buffer(4)]], \
+                                     uint id [[thread_position_in_grid]]) { \
+              if (id < N) { \
+                  output[id] = (a[id] + b[id]) * c[id]; \
+              } \
+          } \
+          kernel void mul_add_##type(device const type* a [[buffer(0)]], \
+                                     device const type* b [[buffer(1)]], \
+                                     device const type* c [[buffer(2)]], \
+                                     device type* output [[buffer(3)]], \
+                                     constant uint &N [[buffer(4)]], \
+                                     uint id [[thread_position_in_grid]]) { \
+              if (id < N) { \
+                  output[id] = (a[id] * b[id]) + c[id]; \
+              } \
+          }
+
+      DEFINE_FUSED_ADD_MUL(long)
+      DEFINE_FUSED_ADD_MUL(float)
+      DEFINE_FUSED_ADD_MUL(half)
+
       kernel void vector_pow_fp16(device const half* input [[buffer(0)]],
                                   device half* output [[buffer(1)]],
                                   constant float &exponent [[buffer(2)]],
@@ -1657,6 +1919,26 @@ open class MPSBackend: CPUBackend {
       DEFINE_REPEAT(short)
       DEFINE_REPEAT(int)
       DEFINE_REPEAT(long)
+
+      #define DEFINE_STRIDED_COPY(type) \
+      kernel void strided_copy_##type(device const type* input [[buffer(0)]], \
+                                      device type* output [[buffer(1)]], \
+                                      constant uint &inner [[buffer(2)]], \
+                                      constant uint &fullInner [[buffer(3)]], \
+                                      constant uint &outer [[buffer(4)]], \
+                                      constant uint &offset [[buffer(5)]], \
+                                      uint id [[thread_position_in_grid]]) { \
+          if (id < inner * outer) { \
+              uint sourceCol = id % inner; \
+              uint sourceRow = id / inner; \
+              output[(sourceCol + offset) + sourceRow*fullInner] = input[id]; \
+          } \
+      }
+
+      DEFINE_STRIDED_COPY(char)
+      DEFINE_STRIDED_COPY(short)
+      DEFINE_STRIDED_COPY(int)
+      DEFINE_STRIDED_COPY(long)
 
       constant uint PHILOX_ROUND_A = 0xD2511F53;
       constant uint PHILOX_ROUND_B = 0xCD9E8D57;
@@ -1971,4 +2253,19 @@ extension Tensor.DType {
 
 func mpsShape(_ x: [Int]) -> [NSNumber] {
   x.map { NSNumber(value: $0) }
+}
+
+extension Tensor.DType {
+  fileprivate var metalSizeType: String {
+    switch self {
+    case .bool:
+      "char"
+    case .float16:
+      "short"
+    case .float32:
+      "int"
+    case .int64:
+      "long"
+    }
+  }
 }

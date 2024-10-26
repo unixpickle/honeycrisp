@@ -313,6 +313,8 @@ public class Linear: Trainable {
       * (sqrt(3.0) / 0.5 / sqrt(Float(inCount)))
     if bias {
       self.bias = Tensor(zeros: [outCount])
+    } else {
+      self.bias = nil
     }
   }
 
@@ -409,6 +411,8 @@ public class Conv2D: Trainable {
       * (sqrt(3.0) / 0.5 / sqrt(Float(inChannels * self.kernelSize.dims.product())))
     if bias {
       self.bias = Tensor(zeros: [outChannels])
+    } else {
+      self.bias = nil
     }
   }
 
@@ -477,6 +481,9 @@ public class LayerNorm: Trainable {
     if affine {
       self.gain = Tensor(zeros: shape, dtype: dtype)
       self.bias = Tensor(zeros: shape, dtype: dtype)
+    } else {
+      self.gain = nil
+      self.bias = nil
     }
   }
 
@@ -489,11 +496,12 @@ public class LayerNorm: Trainable {
     let innerCount = shape.product()
     let tmpShape = [batchShape.product(), innerCount]
     let normedShape = Array(batchShape + Array(repeating: 1, count: shape.count))
-    let mean = x.reshape(tmpShape).mean(axis: 1).reshape(normedShape)
-    let variance = x.reshape(tmpShape).variance(axis: 1).reshape(normedShape)
-    let normalized = (x - mean.expand(as: x)) * (variance.expand(as: x) + eps).rsqrt()
+    let (rawMean, rawVariance) = x.reshape(tmpShape).meanAndVariance(axis: 1)
+    let mean = rawMean.reshape(normedShape)
+    let variance = rawVariance.reshape(normedShape)
+    let normalized = x.add((-mean).expand(as: x), thenMul: (variance.expand(as: x) + eps).rsqrt())
     if let gain = gain, let bias = bias {
-      return normalized * (gain.expand(as: x) + 1) + bias.expand(as: x)
+      return normalized.mul(gain.expand(as: x) + 1, thenAdd: bias.expand(as: x))
     } else {
       return normalized
     }
@@ -524,6 +532,9 @@ public class GroupNorm: Trainable {
     if affine {
       self.gain = Tensor(zeros: [channelCount], dtype: dtype)
       self.bias = Tensor(zeros: [channelCount], dtype: dtype)
+    } else {
+      self.gain = nil
+      self.bias = nil
     }
   }
 
@@ -561,10 +572,11 @@ public class GroupNorm: Trainable {
     let result =
       if let gain = gain, let bias = bias {
         if channelsLast {
-          normalized * (1 + gain.expand(as: normalized)) + bias.expand(as: normalized)
+          normalized.mul(1 + gain.expand(as: normalized), thenAdd: bias.expand(as: normalized))
         } else {
-          normalized * (1 + expandVector(gain, axis: 1, shape: x.shape))
-            + expandVector(bias, axis: 1, shape: x.shape)
+          normalized.mul(
+            1 + expandVector(gain, axis: 1, shape: x.shape),
+            thenAdd: expandVector(bias, axis: 1, shape: x.shape))
         }
       } else {
         normalized

@@ -62,6 +62,12 @@ extension Tensor {
     }
   }
 
+  public func meanAndVariance(axis: Int? = nil, keepdims: Bool = false) -> (Tensor, Tensor) {
+    let moment1 = self.mean(axis: axis, keepdims: true)
+    let moment2 = self.pow(2).mean(axis: axis, keepdims: true)
+    return (moment1, (moment2 - moment1.pow(2)).clamp(min: 0))
+  }
+
   public func maxPool2D(width kw: Int, height kh: Int, channelsLast: Bool = false) -> Tensor {
     alwaysAssert(shape.count == 4, "invalid shape for maxPool2D \(shape)")
     let b = shape[0]

@@ -165,6 +165,24 @@ open class Backend {
     throw BackendError.notImplemented("binaryOp")
   }
 
+  public func mulAdd(
+    _ input: Tensor.Data, coeff: Tensor.Data, bias: Tensor.Data, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("mulAdd")
+  }
+
+  public func addMul(
+    _ input: Tensor.Data, bias: Tensor.Data, coeff: Tensor.Data, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("addMul")
+  }
+
   public func compare(
     _ a: Tensor.Data, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
@@ -224,6 +242,25 @@ open class Backend {
     -> Tensor.Data
   {
     throw BackendError.notImplemented("reduce")
+  }
+
+  public func logSoftmax(
+    _ a: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("logSoftmax")
+  }
+
+  public func logSoftmaxGrad(
+    _ a: Tensor.Data, _ outGrad: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("logSoftmaxGrad")
   }
 
   public func repeated(
@@ -639,6 +676,90 @@ open class CPUBackend: Backend {
     }
   }
 
+  override public func mulAdd(
+    _ input: Tensor.Data, coeff: Tensor.Data, bias: Tensor.Data, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(input, coeff, bias)
+    func apply<T1: NumericTensorElement>(_: T1.Type) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: count * dtype.byteSize)
+      try await serialize {
+        if dtype == .float32 {
+          let x = UnsafePointer<Float>(
+            input.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          let coeff = UnsafePointer<Float>(
+            coeff.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          let bias = UnsafePointer<Float>(
+            bias.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          let output = buffer.contents().bindMemory(to: Float.self, capacity: count)
+          vDSP_vma(x, 1, coeff, 1, bias, 1, output, 1, vDSP_Length(count))
+        } else {
+          try readBuffer(T1.self, input.buffer, count: count, dtype: dtype) { inData in
+            try readBuffer(T1.self, coeff.buffer, count: count, dtype: dtype) { coeff in
+              try readBuffer(T1.self, bias.buffer, count: count, dtype: dtype) { bias in
+                try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { outData in
+                  for (i, x) in inData.enumerated() {
+                    outData[i] = x * coeff[i] + bias[i]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      return Tensor.Data(backend: self, buffer: buffer)
+    }
+    if dtype == .int64 {
+      return try await apply(Int64.self)
+    } else {
+      return try await apply(Float.self)
+    }
+  }
+
+  override public func addMul(
+    _ input: Tensor.Data, bias: Tensor.Data, coeff: Tensor.Data, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(input, coeff, bias)
+    func apply<T1: NumericTensorElement>(_: T1.Type) async throws -> Tensor.Data {
+      let buffer = try await allocate(length: count * dtype.byteSize)
+      try await serialize {
+        if dtype == .float32 {
+          let x = UnsafePointer<Float>(
+            input.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          let coeff = UnsafePointer<Float>(
+            coeff.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          let bias = UnsafePointer<Float>(
+            bias.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          let output = buffer.contents().bindMemory(to: Float.self, capacity: count)
+          vDSP_vam(x, 1, bias, 1, coeff, 1, output, 1, vDSP_Length(count))
+        } else {
+          try readBuffer(T1.self, input.buffer, count: count, dtype: dtype) { inData in
+            try readBuffer(T1.self, coeff.buffer, count: count, dtype: dtype) { coeff in
+              try readBuffer(T1.self, bias.buffer, count: count, dtype: dtype) { bias in
+                try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { outData in
+                  for (i, x) in inData.enumerated() {
+                    outData[i] = (x + bias[i]) * coeff[i]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      return Tensor.Data(backend: self, buffer: buffer)
+    }
+    if dtype == .int64 {
+      return try await apply(Int64.self)
+    } else {
+      return try await apply(Float.self)
+    }
+  }
+
   override public func compare(
     _ a: Tensor.Data, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
@@ -920,6 +1041,93 @@ open class CPUBackend: Backend {
     } else {
       return try await apply(Float.self)
     }
+  }
+
+  override public func logSoftmax(
+    _ a: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let totalCount = outerCount * middleCount * innerCount
+    let buffer = try await allocate(length: totalCount * dtype.byteSize)
+    try await serialize {
+      try readBuffer(Float.self, a.buffer, count: totalCount, dtype: dtype) { arr in
+        try writeBuffer(Float.self, buffer, count: totalCount, dtype: dtype) { arrOut in
+          for i in 0..<outerCount {
+            let outerOffset = i * innerCount * middleCount
+            for j in 0..<innerCount {
+              var max: Float = 0
+              for k in 0..<middleCount {
+                let item = arr[j + k * innerCount + outerOffset]
+                if k == 0 || item > max {
+                  max = item
+                }
+              }
+              var expSum: Float = 0
+              for k in 0..<middleCount {
+                let item = arr[j + k * innerCount + outerOffset]
+                expSum += exp(item - max)
+              }
+              let logSum = log(expSum) + max
+              for k in 0..<middleCount {
+                let idx = j + k * innerCount + outerOffset
+                let item = arr[idx]
+                arrOut[idx] = item - logSum
+              }
+            }
+          }
+        }
+      }
+    }
+    return Tensor.Data(backend: self, buffer: buffer)
+  }
+
+  override public func logSoftmaxGrad(
+    _ a: Tensor.Data, _ outGrad: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let totalCount = outerCount * middleCount * innerCount
+    let buffer = try await allocate(length: totalCount * dtype.byteSize)
+    try await serialize {
+      try readBuffer(Float.self, a.buffer, count: totalCount, dtype: dtype) { arr in
+        try readBuffer(Float.self, outGrad.buffer, count: totalCount, dtype: dtype) { arrGrad in
+          try writeBuffer(Float.self, buffer, count: totalCount, dtype: dtype) { arrOut in
+            for i in 0..<outerCount {
+              let outerOffset = i * innerCount * middleCount
+              for j in 0..<innerCount {
+                var max: Float = 0
+                var gradSum: Float = 0
+                for k in 0..<middleCount {
+                  let idx = j + k * innerCount + outerOffset
+                  let item = arr[idx]
+                  gradSum += arrGrad[idx]
+                  if k == 0 || item > max {
+                    max = item
+                  }
+                }
+                var expSum: Float = 0
+                for k in 0..<middleCount {
+                  let item = arr[j + k * innerCount + outerOffset]
+                  expSum += exp(item - max)
+                }
+                let logSum = log(expSum) + max
+                for k in 0..<middleCount {
+                  let idx = j + k * innerCount + outerOffset
+                  let item = arr[idx]
+                  let itemGrad = arrGrad[idx]
+                  arrOut[idx] = itemGrad - gradSum * exp(item - logSum)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return Tensor.Data(backend: self, buffer: buffer)
   }
 
   override public func repeated(

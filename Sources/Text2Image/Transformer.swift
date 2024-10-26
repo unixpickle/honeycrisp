@@ -82,10 +82,10 @@ class Attention: Trainable {
     rope = RoPE(dim: config.HeadDim, maxTokens: config.TokenCount)
     causalMask = Tensor(constant: 1e8, shape: [config.TokenCount, config.TokenCount]).tril() - 1e8
     super.init()
-    self.qProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim)
-    self.kProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim)
-    self.vProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim)
-    self.outProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim)
+    self.qProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim, bias: false)
+    self.kProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim, bias: false)
+    self.vProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim, bias: false)
+    self.outProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim, bias: false)
   }
 
   func callAsFunction(_ x: Tensor, kvCache: KVCache.Layer? = nil) -> Tensor {
@@ -143,8 +143,8 @@ class Block: Trainable {
     self.attn = Attention(config: config)
     self.norm1 = LayerNorm(shape: [config.ModelDim])
     self.norm2 = LayerNorm(shape: [config.ModelDim])
-    self.lin1 = Linear(inCount: config.ModelDim, outCount: config.ModelDim * 2)
-    self.lin2 = Linear(inCount: config.ModelDim * 2, outCount: config.ModelDim)
+    self.lin1 = Linear(inCount: config.ModelDim, outCount: config.ModelDim * 2, bias: false)
+    self.lin2 = Linear(inCount: config.ModelDim * 2, outCount: config.ModelDim, bias: false)
   }
 
   func callAsFunction(_ x: Tensor, kvCache: KVCache.Layer? = nil) -> Tensor {
@@ -170,7 +170,7 @@ class Transformer: Trainable {
     layers = TrainableArray((0..<config.LayerCount).map { _ in Block(config: config) })
     normOut = LayerNorm(shape: [config.ModelDim])
 
-    unembed = Linear(inCount: config.ModelDim, outCount: config.VocabSize)
+    unembed = Linear(inCount: config.ModelDim, outCount: config.VocabSize, bias: false)
 
     // Uniform initial probability
     unembed.weight = unembed.weight.noGrad() * 0
