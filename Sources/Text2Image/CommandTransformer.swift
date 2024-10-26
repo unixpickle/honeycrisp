@@ -1,12 +1,23 @@
 import Foundation
 import Honeycrisp
 
+struct TrainAndEval<T> {
+  let train: T
+  let eval: T
+}
+
+extension TrainAndEval: Codable where T: Codable {}
+
 class CommandTransformer: Command {
+
+  typealias DataStream = AsyncThrowingStream<
+    TrainAndEval<(Tensor, CaptionedSequenceDataLoader.State)>, Error
+  >
 
   public struct State: Codable {
     let step: Int
     let model: Trainable.State
-    let dataset: DataLoader.State?
+    let dataset: TrainAndEval<CaptionedSequenceDataLoader.State>?
     let opt: Adam.State?
   }
 
@@ -20,27 +31,28 @@ class CommandTransformer: Command {
   let lr: Float = 0.0001
   let bs = 8
   let captionBytes: Int = 128
-  let saveInterval: Int = 2
+  let saveInterval: Int = 100
   let cfgProb: Float = 0.1
   let cfgScale: Float = 1.1
 
   let savePath: String
   let vqPath: String
-  let imageDir: String
+  let dataDir: String
   let vqvae: VQVAE
   let model: Transformer
   let opt: Adam
   var step: Int = 0
-  let dataLoader: CaptionedDataLoader
-  var dataStream: AsyncStream<(Tensor, [String], DataLoader.State)>?
-  var lastDataState: CaptionedDataLoader.State?
+
+  let dataLoader: TrainAndEval<CaptionedSequenceDataLoader>
+  var dataStream: DataStream?
+  var lastDataState: TrainAndEval<CaptionedSequenceDataLoader.State>?
 
   init(_ args: [String]) throws {
     if args.count != 3 {
-      print("Usage: Text2Image transformer <image_dir> <vq_path> <save_path>")
+      print("Usage: Text2Image transformer <data_dir> <vq_path> <save_path>")
       throw ArgumentError.invalidArgs
     }
-    imageDir = args[0]
+    dataDir = args[0]
     vqPath = args[1]
     savePath = args[2]
 
@@ -49,8 +61,14 @@ class CommandTransformer: Command {
       config: TransformerConfig(
         VocabSize: vqvae.bottleneck.vocab + 256, TokenCount: captionBytes + 16 * 16))
     opt = Adam(model.parameters, lr: lr)
-    dataLoader = CaptionedDataLoader(
-      batchSize: bs, images: try ImageIterator(imageDir: imageDir, imageSize: 256))
+    dataLoader = TrainAndEval(
+      train: try CaptionedSequenceDataLoader(
+        batchSize: bs, dropProb: cfgProb, captionLength: captionBytes,
+        captionTokenOffset: vqvae.bottleneck.vocab, shardDir: dataDir),
+      eval: try CaptionedSequenceDataLoader(
+        batchSize: bs, dropProb: cfgProb, captionLength: captionBytes,
+        captionTokenOffset: vqvae.bottleneck.vocab, shardDir: dataDir, isEval: true)
+    )
   }
 
   override public func run() async throws {
@@ -79,58 +97,64 @@ class CommandTransformer: Command {
         try opt.loadState(optState)
       }
       if let dataState = state.dataset {
-        dataLoader.state = dataState
+        dataLoader.train.state = dataState.train
+        dataLoader.eval.state = dataState.eval
       }
       step = state.step
     }
 
-    dataStream = loadDataInBackground(dataLoader)
-  }
-
-  private func captionTensor(_ captions: [String]) -> Tensor {
-    var textTokens = [Int](repeating: 0, count: captions.count * captionBytes)
-    for (i, caption) in captions.enumerated() {
-      for (j, char) in caption.utf8.enumerated() {
-        if j < captionBytes {
-          textTokens[i * captionBytes + j] = Int(char) + vqvae.bottleneck.vocab
+    let it = zip(dataLoader.train, dataLoader.eval).lazy.map {
+      x, y -> Result<TrainAndEval<(Tensor, CaptionedSequenceDataLoader.State)>, Error> in
+      switch x {
+      case .failure(let e):
+        return .failure(e)
+      case .success(let x):
+        switch y {
+        case .failure(let e):
+          return .failure(e)
+        case .success(let y):
+          return .success(TrainAndEval(train: x, eval: y))
         }
       }
     }
-    return Tensor(data: textTokens, shape: [captions.count, captionBytes])
+    dataStream = loadDataInBackground(it)
   }
 
-  private func takeDataset(_ n: Int) -> AsyncMapSequence<
-    AsyncPrefixSequence<AsyncStream<(Tensor, [String], DataLoader.State)>>,
-    (Tensor, DataLoader.State)
-  > {
-    return dataStream!.prefix(n).map { [self] (images, captions, state) in
-      let tokens = vqvae.bottleneck(vqvae.encoder(images)).codes.flatten(startAxis: 1)
-      let textTensor = captionTensor(captions)
-      let mask = (Tensor(rand: [textTensor.shape[0]]) > cfgProb).unsqueeze(axis: -1).expand(
-        as: textTensor)
-      let maskedText = mask.when(isTrue: textTensor, isFalse: Tensor(zerosLike: textTensor))
-      let zeros = Tensor(zeros: [textTensor.shape[0], 1], dtype: textTensor.dtype)
-      return (Tensor(concat: [zeros, maskedText, tokens], axis: 1), state)
-    }
+  private func captionTensor(_ captions: [String]) -> Tensor {
+    Tensor(stack: captions.map { dataLoader.train.captionTensor($0) })
+  }
+
+  private func takeDataset(_ n: Int) -> AsyncPrefixSequence<DataStream> {
+    dataStream!.prefix(n)
   }
 
   private func trainInnerLoop() async throws {
-    print("training...")
-    for await (batch, state) in takeDataset(saveInterval) {
-      lastDataState = state
-      step += 1
-
+    func loss(_ batch: Tensor) -> Tensor {
       // We do not model the caption prefix, only the VQ tokens.
       let outputs = model(batch[..., ..<(-1)])[..., captionBytes...]
       let targets = batch[..., (captionBytes + 1)...]
 
       let logProbs = outputs.logSoftmax(axis: -1)
       let losses = -logProbs.gather(axis: -1, indices: targets.unsqueeze(axis: -1))
-      let loss = losses.mean()
-      loss.backward()
+      return losses.mean()
+    }
+
+    print("training...")
+    for try await batch in takeDataset(saveInterval) {
+      lastDataState = TrainAndEval(train: batch.train.1, eval: batch.eval.1)
+      step += 1
+
+      let trainLoss = loss(batch.train.0)
+      let evalLoss = Tensor.withGrad(enabled: false) { loss(batch.train.0) }
+
+      trainLoss.backward()
       opt.step()
       opt.clearGrads()
-      print("step \(step):" + " loss=\(try await loss.item()) gflops=\(gflops)")
+      print(
+        "step \(step):"
+          + " loss=\(try await trainLoss.item())"
+          + " valid_loss=\(try await evalLoss.item())"
+          + " gflops=\(gflops)")
     }
   }
 

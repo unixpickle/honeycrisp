@@ -6,7 +6,7 @@ class CommandVQVAE: Command {
   public struct State: Codable {
     let step: Int
     let model: Trainable.State
-    let dataset: DataLoader.State?
+    let dataset: ImageDataLoader.State?
     let opt: Adam.State?
   }
 
@@ -23,8 +23,8 @@ class CommandVQVAE: Command {
   let opt: Adam
   let ssim: SSIM
   var step: Int = 0
-  let dataLoader: DataLoader
-  var dataStream: AsyncStream<(Tensor, DataLoader.State)>?
+  let dataLoader: ImageDataLoader
+  var dataStream: AsyncThrowingStream<(Tensor, ImageDataLoader.State), Error>?
 
   init(_ args: [String]) throws {
     if args.count != 2 {
@@ -37,7 +37,7 @@ class CommandVQVAE: Command {
     model = VQVAE(channels: 4, vocab: 16384, latentChannels: 4, downsamples: 4)
     opt = Adam(model.parameters, lr: lr)
     ssim = SSIM()
-    dataLoader = DataLoader(
+    dataLoader = ImageDataLoader(
       batchSize: bs, images: try ImageIterator(imageDir: imageDir, imageSize: 256))
   }
 
@@ -70,8 +70,9 @@ class CommandVQVAE: Command {
     dataStream = loadDataInBackground(dataLoader)
   }
 
-  private func takeDataset(_ n: Int) -> AsyncPrefixSequence<AsyncStream<(Tensor, DataLoader.State)>>
-  {
+  private func takeDataset(_ n: Int) -> AsyncPrefixSequence<
+    AsyncThrowingStream<(Tensor, ImageDataLoader.State), Error>
+  > {
     return dataStream!.prefix(n)
   }
 
@@ -79,7 +80,7 @@ class CommandVQVAE: Command {
     print("reviving unused dictionary entries...")
     print(" => collecting features...")
     var reviveBatch = [Tensor]()
-    for await (x, _) in takeDataset(reviveBatches) {
+    for try await (x, _) in takeDataset(reviveBatches) {
       reviveBatch.append(x)
     }
     let revivedCount = Tensor.withGrad(enabled: false) {
@@ -94,7 +95,7 @@ class CommandVQVAE: Command {
 
   private func trainInnerLoop() async throws {
     print("training...")
-    for await (batch, _) in takeDataset(reviveInterval) {
+    for try await (batch, _) in takeDataset(reviveInterval) {
       step += 1
       let (output, vqLosses) = model(batch)
       let loss = (output - batch).pow(2).mean()
@@ -116,7 +117,7 @@ class CommandVQVAE: Command {
   private func sampleAndSave() async throws {
     print("dumping samples to: samples.png ...")
     var it = dataStream!.makeAsyncIterator()
-    let (input, dataState) = await it.next()!
+    let (input, dataState) = try await it.next()!
     let (output, _) = Tensor.withGrad(enabled: false) {
       model.withMode(.inference) {
         model(input)

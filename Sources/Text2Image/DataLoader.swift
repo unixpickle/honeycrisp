@@ -1,6 +1,10 @@
 import Foundation
 import Honeycrisp
 
+enum DataError: Error {
+  case datasetIsEmpty
+}
+
 class ImageIterator: Sequence, IteratorProtocol {
   struct State: Codable {
     let imageSize: Int
@@ -38,7 +42,7 @@ class ImageIterator: Sequence, IteratorProtocol {
   }
 }
 
-class DataLoader: Sequence, IteratorProtocol {
+class ImageDataLoader: Sequence, IteratorProtocol {
   typealias State = ImageIterator.State
 
   let batchSize: Int
@@ -54,7 +58,7 @@ class DataLoader: Sequence, IteratorProtocol {
     self.images = images
   }
 
-  func next() -> (Tensor, State)? {
+  func next() -> Result<(Tensor, State), Error>? {
     var batch = [Tensor]()
     var state: State?
     for (_, x, s) in images {
@@ -65,61 +69,120 @@ class DataLoader: Sequence, IteratorProtocol {
       }
     }
     if batch.count == 0 {
-      fatalError("failed to load data")
+      return .failure(DataError.datasetIsEmpty)
     }
-    return (Tensor(stack: batch).move(axis: -1, to: 1), state!)
+    return .success((Tensor(stack: batch).move(axis: -1, to: 1), state!))
   }
 }
 
-class CaptionedDataLoader: Sequence, IteratorProtocol {
-  typealias State = ImageIterator.State
+class CaptionedSequenceDataLoader: Sequence, IteratorProtocol {
 
-  struct Metadata: Codable {
-    let url: String
-    let width: Int
-    let height: Int
-    let caption: String
+  typealias Shard = CommandTokenize.Shard
+
+  struct State: Codable {
+    var shardPaths: [String]
+    var currentShard: Int
+    var offsetInShard: Int
   }
 
   let batchSize: Int
-  var images: ImageIterator
+  let dropProb: Float
+  let isEval: Bool
+  let captionLength: Int
+  let captionTokenOffset: Int
+  private var _state: State
+  private var shardData: Shard?
 
   var state: State {
-    get { images.state }
-    set { images.state = newValue }
-  }
-
-  init(batchSize: Int, images: ImageIterator) {
-    self.batchSize = batchSize
-    self.images = images
-  }
-
-  func next() -> (Tensor, [String], State)? {
-    var batch = [Tensor]()
-    var captions = [String]()
-    var state: State?
-    for (imagePath, x, s) in images {
-      state = s
-      batch.append(x)
-      let metaPath = URL(filePath: imagePath).deletingLastPathComponent()
-        .deletingLastPathComponent().appending(component: "success").appending(
-          component: URL(filePath: imagePath).lastPathComponent + ".json")
-      let metadata: Metadata
-      do {
-        let data = try Data(contentsOf: metaPath)
-        let decoder = JSONDecoder()
-        metadata = try decoder.decode(Metadata.self, from: data)
-      } catch {
-        fatalError("failed to read metadata at \(metaPath): \(error)")
+    get {
+      _state
+    }
+    set {
+      if newValue.currentShard != _state.currentShard {
+        shardData = nil
       }
-      captions.append(metadata.caption)
-      if batch.count == batchSize {
+      _state = newValue
+    }
+  }
+
+  init(
+    batchSize: Int, dropProb: Float, captionLength: Int, captionTokenOffset: Int, shardDir: String,
+    isEval: Bool = false
+  ) throws {
+    self.batchSize = batchSize
+    self.dropProb = dropProb
+    self.isEval = isEval
+    self.captionLength = captionLength
+    self.captionTokenOffset = captionTokenOffset
+    var paths = [String]()
+    let fileManager = FileManager.default
+    let directoryURL = URL(fileURLWithPath: shardDir, isDirectory: true)
+    let contents = try fileManager.contentsOfDirectory(
+      at: directoryURL, includingPropertiesForKeys: nil, options: [])
+    for fileURL in contents {
+      if fileURL.pathExtension != "plist" {
+        continue
+      }
+      paths.append(fileURL.path())
+    }
+    paths.sort()
+    if isEval {
+      paths = [paths[0]]
+    } else {
+      paths.remove(at: 0)
+    }
+    _state = State(shardPaths: paths, currentShard: 0, offsetInShard: 0)
+  }
+
+  func captionTensor(_ caption: String) -> Tensor {
+    var textTokens = [Int](repeating: 0, count: captionLength)
+    for (j, char) in caption.utf8.enumerated() {
+      if j >= captionLength {
         break
       }
+      textTokens[j] = Int(char) + captionTokenOffset
     }
-    if batch.count == 0 {
-      fatalError("failed to load data")
-    }
-    return (Tensor(stack: batch).move(axis: -1, to: 1), captions, state!)
+    return Tensor(data: textTokens, shape: [captionLength])
   }
+
+  func next() -> Result<(Tensor, State), Error>? {
+    do {
+      let tensors = try (0..<batchSize).map { _ in
+        let result = try self.nextSingle()
+        return result
+      }
+      return .success((Tensor(stack: tensors), state))
+    } catch {
+      return .failure(error)
+    }
+  }
+
+  func nextSingle() throws -> Tensor {
+    for _ in 0..<(state.shardPaths.count + 1) {
+      if self.shardData == nil {
+        let data = try Data(
+          contentsOf: URL(fileURLWithPath: state.shardPaths[state.currentShard]))
+        let decoder = PropertyListDecoder()
+        self.shardData = try decoder.decode(CommandTokenize.Shard.self, from: data)
+      }
+      if state.offsetInShard >= shardData!.records.count {
+        state.currentShard = (state.currentShard + 1) % state.shardPaths.count
+        state.offsetInShard = 0
+        shardData = nil
+        continue
+      }
+      let record = shardData!.records[state.offsetInShard]
+      state.offsetInShard += 1
+      let vqTokens = Tensor(data: record.tokens.map { Int64($0) }, shape: [record.tokens.count])
+      let textTokens = captionTensor(record.metadata.caption)
+
+      let mask = (Tensor(rand: [1]) > dropProb).expand(as: textTokens)
+      let maskedText = mask.when(isTrue: textTokens, isFalse: Tensor(zerosLike: textTokens))
+      let zeros = Tensor(zeros: [1], dtype: .int64)
+
+      return Tensor(concat: [zeros, maskedText, vqTokens])
+    }
+    throw DataError.datasetIsEmpty
+  }
+
 }

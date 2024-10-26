@@ -53,7 +53,7 @@ class CommandTokenize: Command {
     try loadVQ()
     let shards = try listShards()
     startFLOPCounter()
-    for (shard, pathsAndMeta) in shards {
+    for (shard, pathsAndMeta) in shards.sorted(by: { x, y in x.key < y.key }) {
       try await tokenizeShard(shard: shard, pathsAndMeta: pathsAndMeta)
     }
   }

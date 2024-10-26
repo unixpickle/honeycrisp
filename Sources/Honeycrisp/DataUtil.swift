@@ -1,20 +1,27 @@
 import Foundation
 
-public func loadDataInBackground<T, S: Sequence<T>>(_ it: S, bufferSize: Int = 2) -> AsyncStream<T>
+public func loadDataInBackground<T, S: Sequence<Result<T, Error>>>(_ it: S, bufferSize: Int = 2)
+  -> AsyncThrowingStream<T, Error>
 where T: Sendable, S: Sendable {
-  AsyncStream(bufferingPolicy: .bufferingOldest(bufferSize)) { continuation in
+  AsyncThrowingStream(bufferingPolicy: .bufferingOldest(bufferSize)) { continuation in
     let thread = Thread {
       for x in it {
         if Thread.current.isCancelled {
           return
         }
-        var sent = false
-        while !sent {
-          switch continuation.yield(x) {
-          case .dropped(_):
-            Thread.sleep(forTimeInterval: 0.05)
-          default:
-            sent = true
+        switch x {
+        case .failure(let e):
+          continuation.finish(throwing: e)
+          return
+        case .success(let x):
+          var sent = false
+          while !sent {
+            switch continuation.yield(x) {
+            case .dropped(_):
+              Thread.sleep(forTimeInterval: 0.05)
+            default:
+              sent = true
+            }
           }
         }
       }
