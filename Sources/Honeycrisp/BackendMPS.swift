@@ -151,7 +151,9 @@ open class MPSBackend: CPUBackend {
   private var defaultRNG: MPSRandomGenerator? = nil
   private var functions: [String: MTLComputePipelineState] = [:]
 
-  public init(device: MTLDevice? = nil, commandQueue: MTLCommandQueue? = nil) throws {
+  public init(
+    device: MTLDevice? = nil, commandQueue: MTLCommandQueue? = nil, allocator: Allocator = .device
+  ) throws {
     super.init()
     if let device = device {
       self._device = device
@@ -174,6 +176,8 @@ open class MPSBackend: CPUBackend {
       }
       self.commandQueue = q
     }
+    try self.initAllocator(allocator)
+
     let library = try (self._device!).makeLibrary(
       source: MPSBackend.KernelCode, options: MTLCompileOptions())
 

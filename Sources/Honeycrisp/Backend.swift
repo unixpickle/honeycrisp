@@ -415,6 +415,11 @@ open class Backend {
 
 open class CPUBackend: Backend {
 
+  public enum Allocator {
+    case device
+    case bucket
+  }
+
   public class NativeRandomGenerator: RandomGenerator {
     public let cpuBackend: CPUBackend
 
@@ -495,7 +500,28 @@ open class CPUBackend: Backend {
     }
   }
 
+  // Allocator state.
+  internal var allocBucketsLock = NSLock()
+  internal var allocBuckets: [Int: [MTLBuffer]]? = nil
+
   internal var worker = Backend.WorkerThread()
+
+  override public init() {
+  }
+
+  public init(allocator: Allocator) throws {
+    super.init()
+    try initAllocator(allocator)
+  }
+
+  internal func initAllocator(_ allocator: Allocator) throws {
+    switch allocator {
+    case .device:
+      ()
+    case .bucket:
+      allocBuckets = [:]
+    }
+  }
 
   internal func serialize<T>(_ work: @escaping () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { continuation in
@@ -521,12 +547,56 @@ open class CPUBackend: Backend {
   }
 
   override public func allocate(length: Int) async throws -> MTLBuffer {
+    if allocBuckets != nil {
+      let bucket = nextAllocatorBucket(length: length)
+      let rawResult =
+        if let item = allocBucketsLock.withLock({ allocBuckets![bucket]?.popLast() }) {
+          item
+        } else {
+          try await {
+            return try await allocRaw(length: bucket)
+          }()
+        }
+      return try await serialize { [self] in
+        let maybeResult = (try device).makeBuffer(
+          bytesNoCopy: rawResult.contents(), length: max(length, 1), options: [.storageModeShared],
+          deallocator: { [weak self] _, _ in
+            if let self = self {
+              self.allocBucketsLock.withLock {
+                if self.allocBuckets![bucket] == nil {
+                  self.allocBuckets![bucket] = [rawResult]
+                } else {
+                  self.allocBuckets![bucket]!.append(rawResult)
+                }
+              }
+            }
+          })
+        guard let result = maybeResult else {
+          throw BackendError.allocationFailed(length)
+        }
+        return result
+      }
+    }
+
+    return try await allocRaw(length: length)
+  }
+
+  internal func allocRaw(length: Int) async throws -> MTLBuffer {
     return try await serialize { [self] in
-      guard
-        let result = (try device).makeBuffer(length: max(1, length), options: [.storageModeShared])
-      else {
+      let maybeBuffer = (try device).makeBuffer(
+        length: max(1, length), options: [.storageModeShared])
+      guard let result = maybeBuffer else {
         throw BackendError.allocationFailed(length)
       }
+      #if DEBUG
+        // Fill the data with garbage to catch methods that assume
+        // zero initialization.
+        let bound = result.contents().bindMemory(to: UInt8.self, capacity: length)
+        let noise = (0..<3).map({ _ in UInt8.random(in: 0...255) })
+        for i in 0..<length {
+          bound[i] = noise[i % 3]
+        }
+      #endif
       return result
     }
   }
@@ -1161,24 +1231,22 @@ open class CPUBackend: Backend {
   {
     try await waitForData(a, s.indices)
 
-    let flatIndices = try await serialize {
-      var flatIndices = [Int64](repeating: 0, count: s.indicesCount)
-      try pointerToArray(s.indices.buffer.contents(), output: &flatIndices, dtype: .int64)
-      return flatIndices
-    }
+    let outBuffer = try await allocate(length: s.gatherOutCount * dtype.byteSize)
 
     if s.broadcasted {
       let innerSize = s.innerCount * dtype.byteSize
-      let outBuffer = try await allocate(length: s.outerCount * flatIndices.count * innerSize)
       try await serialize {
-        let inData = a.buffer.contents()
-        let outData = outBuffer.contents()
-        for i in 0..<s.outerCount {
-          for (j, idx) in flatIndices.enumerated() {
-            let source = inData.advanced(by: i * s.middleCount * innerSize + Int(idx) * innerSize)
-            let dst = outData.advanced(
-              by: i * flatIndices.count * innerSize + j * innerSize)
-            dst.copyMemory(from: source, byteCount: innerSize)
+        try readBuffer(Int64.self, s.indices.buffer, count: s.indicesCount, dtype: .int64) {
+          flatIndices in
+          let inData = a.buffer.contents()
+          let outData = outBuffer.contents()
+          for i in 0..<s.outerCount {
+            for (j, idx) in flatIndices.enumerated() {
+              let source = inData.advanced(by: i * s.middleCount * innerSize + Int(idx) * innerSize)
+              let dst = outData.advanced(
+                by: i * flatIndices.count * innerSize + j * innerSize)
+              dst.copyMemory(from: source, byteCount: innerSize)
+            }
           }
         }
       }
@@ -1186,24 +1254,26 @@ open class CPUBackend: Backend {
     }
 
     func apply<T: TensorElement>(_ zero: T) async throws -> Tensor.Data {
-      let buffer = try await allocate(length: s.gatherOutCount * dtype.byteSize)
       try await serialize {
-        var inArr = [T](repeating: zero, count: s.gatherInCount)
-        try pointerToArray(a.buffer.contents(), output: &inArr, dtype: dtype)
-        var outArr = [T](repeating: zero, count: s.gatherOutCount)
-        for i in 0..<s.outerCount {
-          for j in 0..<s.outCount {
-            for k in 0..<s.innerCount {
-              let outIdx = i * s.outCount * s.innerCount + j * s.innerCount + k
-              let inIdx = Int(flatIndices[outIdx])
-              let source = inArr[i * s.middleCount * s.innerCount + inIdx * s.innerCount + k]
-              outArr[outIdx] = source
+        try readBuffer(Int64.self, s.indices.buffer, count: s.indicesCount, dtype: .int64) {
+          flatIndices in
+          try readBuffer(T.self, a.buffer, count: s.gatherInCount, dtype: dtype) { inArr in
+            try writeBuffer(T.self, outBuffer, count: s.gatherOutCount, dtype: dtype) { outArr in
+              for i in 0..<s.outerCount {
+                for j in 0..<s.outCount {
+                  for k in 0..<s.innerCount {
+                    let outIdx = i * s.outCount * s.innerCount + j * s.innerCount + k
+                    let inIdx = Int(flatIndices[outIdx])
+                    let source = inArr[i * s.middleCount * s.innerCount + inIdx * s.innerCount + k]
+                    outArr[outIdx] = source
+                  }
+                }
+              }
             }
           }
         }
-        try arrayToPointer(outArr, output: buffer.contents(), dtype: dtype)
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return Tensor.Data(backend: self, buffer: outBuffer)
     }
     if dtype == .int64 {
       return try await apply(Int64(0))
@@ -1219,29 +1289,27 @@ open class CPUBackend: Backend {
     -> Tensor.Data
   {
     try await waitForData(a, s.indices)
-    let flatIndices = try await serialize {
-      var flatIndices = [Int64](repeating: 0, count: s.indicesCount)
-      try pointerToArray(s.indices.buffer.contents(), output: &flatIndices, dtype: .int64)
-      return flatIndices
-    }
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
       let buffer = try await allocate(length: s.gatherInCount * dtype.byteSize)
       try await serialize {
-        var inArr = [T](repeating: zero, count: s.gatherOutCount)
-        try pointerToArray(a.buffer.contents(), output: &inArr, dtype: dtype)
-        var outArr = [T](repeating: zero, count: s.gatherInCount)
-        for i in 0..<s.outerCount {
-          for j in 0..<s.outCount {
-            for k in 0..<s.innerCount {
-              let inIdx = i * s.outCount * s.innerCount + j * s.innerCount + k
-              let indexIdx = s.broadcasted ? j : inIdx
-              let jOut = Int(flatIndices[indexIdx])
-              let outIdx = i * s.middleCount * s.innerCount + jOut * s.innerCount + k
-              outArr[outIdx] = outArr[outIdx] + inArr[inIdx]
+        try readBuffer(Int64.self, s.indices.buffer, count: s.indicesCount, dtype: .int64) {
+          flatIndices in
+          try readBuffer(T.self, a.buffer, count: s.gatherOutCount, dtype: dtype) { inArr in
+            var outArr = [T](repeating: zero, count: s.gatherInCount)
+            for i in 0..<s.outerCount {
+              for j in 0..<s.outCount {
+                for k in 0..<s.innerCount {
+                  let inIdx = i * s.outCount * s.innerCount + j * s.innerCount + k
+                  let indexIdx = s.broadcasted ? j : inIdx
+                  let jOut = Int(flatIndices[indexIdx])
+                  let outIdx = i * s.middleCount * s.innerCount + jOut * s.innerCount + k
+                  outArr[outIdx] = outArr[outIdx] + inArr[inIdx]
+                }
+              }
             }
+            try arrayToPointer(outArr, output: buffer.contents(), dtype: dtype)
           }
         }
-        try arrayToPointer(outArr, output: buffer.contents(), dtype: dtype)
       }
       return Tensor.Data(backend: self, buffer: buffer)
     }
@@ -1399,16 +1467,22 @@ open class CPUBackend: Backend {
   {
     try await waitForData(a)
 
-    let outBuf = try await allocate(length: batch * rows * cols * dtype.byteSize)
+    let rowSize = cols * dtype.byteSize
+    let outBuf = try await allocate(length: batch * rows * rowSize)
     try await serialize {
       let inPtr = a.buffer.contents()
       let outPtr = outBuf.contents()
       for i in 0..<batch {
         for j in 0..<rows {
-          let copyBytes = min(j + 1, cols) * dtype.byteSize
+          let copyBytes = min(rowSize, (j + 1) * dtype.byteSize)
           let offset = (j + i * rows) * cols * dtype.byteSize
           outPtr.advanced(by: offset).copyMemory(
             from: inPtr.advanced(by: offset), byteCount: copyBytes)
+          if copyBytes < rowSize {
+            let zeroCount = rowSize - copyBytes
+            let zeroStart = outPtr.advanced(by: offset + (cols * dtype.byteSize - zeroCount))
+            zeroStart.initializeMemory(as: UInt8.self, repeating: 0, count: zeroCount)
+          }
         }
       }
     }
@@ -1669,6 +1743,19 @@ open class CPUBackend: Backend {
     NativeRandomGenerator(cpuBackend: self)
   }
 
+}
+
+func nextAllocatorBucket(length: Int) -> Int {
+  if length < 4096 {
+    return 4096
+  } else {
+    var i = 4096
+    while i < length && i >= 4096 {
+      i *= 2
+    }
+    alwaysAssert(i >= 4096, "allocation size overflow: \(length)")
+    return i
+  }
 }
 
 func stridesForShape(_ shape: [Int]) -> [Int] {

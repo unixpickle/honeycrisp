@@ -240,7 +240,7 @@ struct DataIterator: Sequence, IteratorProtocol {
 struct Main {
   static func main() async {
     do {
-      Backend.defaultBackend = try MPSBackend()
+      Backend.defaultBackend = try MPSBackend(allocator: .bucket)
     } catch {
       print("failed to init MPS backend: \(error)")
     }

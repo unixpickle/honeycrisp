@@ -33,7 +33,7 @@ struct Main {
     print("Subcommands:")
     print("    vqvae <image_dir> <state_path>")
     print("    tokenize <image_dir> <vqvae_path> <output_dir>")
-    print("    transformer <image_dir> <vqvae_path> <state_path>")
+    print("    transformer <data_dir> <vqvae_path> <state_path>")
   }
 }
 
