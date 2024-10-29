@@ -54,12 +54,14 @@ open class BackendWrapper: Backend {
   }
 
   override public func binaryOp(
-    _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+    a: Tensor.Data, aCount: Int, b: Tensor.Data, bCount: Int, op: NumericBinaryOp, count: Int,
+    dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.binaryOp(a, b, op: op, count: count, dtype: dtype)
+    try await wrapped.binaryOp(
+      a: a, aCount: aCount, b: b, bCount: bCount, op: op, count: count, dtype: dtype)
   }
 
   override public func binaryOp<T: NumericTensorElement>(
@@ -81,21 +83,27 @@ open class BackendWrapper: Backend {
   }
 
   override public func mulAdd(
-    _ input: Tensor.Data, coeff: Tensor.Data, bias: Tensor.Data, count: Int, dtype: Tensor.DType
+    input: Tensor.Data, inputCount: Int, coeff: Tensor.Data, coeffCount: Int, bias: Tensor.Data,
+    biasCount: Int, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.mulAdd(input, coeff: coeff, bias: bias, count: count, dtype: dtype)
+    try await wrapped.mulAdd(
+      input: input, inputCount: inputCount, coeff: coeff, coeffCount: coeffCount, bias: bias,
+      biasCount: biasCount, count: count, dtype: dtype)
   }
 
   override public func addMul(
-    _ input: Tensor.Data, bias: Tensor.Data, coeff: Tensor.Data, count: Int, dtype: Tensor.DType
+    input: Tensor.Data, inputCount: Int, bias: Tensor.Data, biasCount: Int, coeff: Tensor.Data,
+    coeffCount: Int, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.addMul(input, bias: bias, coeff: coeff, count: count, dtype: dtype)
+    try await wrapped.addMul(
+      input: input, inputCount: inputCount, bias: bias, biasCount: biasCount, coeff: coeff,
+      coeffCount: coeffCount, count: count, dtype: dtype)
   }
 
   override public func compare(

@@ -139,7 +139,8 @@ open class Backend {
   }
 
   public func binaryOp(
-    _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+    a: Tensor.Data, aCount: Int, b: Tensor.Data, bCount: Int, op: NumericBinaryOp, count: Int,
+    dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -166,7 +167,8 @@ open class Backend {
   }
 
   public func mulAdd(
-    _ input: Tensor.Data, coeff: Tensor.Data, bias: Tensor.Data, count: Int, dtype: Tensor.DType
+    input: Tensor.Data, inputCount: Int, coeff: Tensor.Data, coeffCount: Int, bias: Tensor.Data,
+    biasCount: Int, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -175,7 +177,8 @@ open class Backend {
   }
 
   public func addMul(
-    _ input: Tensor.Data, bias: Tensor.Data, coeff: Tensor.Data, count: Int, dtype: Tensor.DType
+    input: Tensor.Data, inputCount: Int, bias: Tensor.Data, biasCount: Int, coeff: Tensor.Data,
+    coeffCount: Int, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -557,25 +560,24 @@ open class CPUBackend: Backend {
             return try await allocRaw(length: bucket)
           }()
         }
-      return try await serialize { [self] in
-        let maybeResult = (try device).makeBuffer(
-          bytesNoCopy: rawResult.contents(), length: max(length, 1), options: [.storageModeShared],
-          deallocator: { [weak self] _, _ in
-            if let self = self {
-              self.allocBucketsLock.withLock {
-                if self.allocBuckets![bucket] == nil {
-                  self.allocBuckets![bucket] = [rawResult]
-                } else {
-                  self.allocBuckets![bucket]!.append(rawResult)
-                }
+      let maybeResult = (try device).makeBuffer(
+        bytesNoCopy: rawResult.contents(), length: max(length, 1), options: [.storageModeShared],
+        deallocator: { [weak self] _, _ in
+          if let self = self {
+            self.allocBucketsLock.withLock {
+              if self.allocBuckets![bucket] == nil {
+                self.allocBuckets![bucket] = [rawResult]
+              } else {
+                self.allocBuckets![bucket]!.append(rawResult)
               }
             }
-          })
-        guard let result = maybeResult else {
-          throw BackendError.allocationFailed(length)
+          }
         }
-        return result
+      )
+      guard let result = maybeResult else {
+        throw BackendError.allocationFailed(length)
       }
+      return result
     }
 
     return try await allocRaw(length: length)
@@ -602,7 +604,8 @@ open class CPUBackend: Backend {
   }
 
   override public func binaryOp(
-    _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+    a: Tensor.Data, aCount: Int, b: Tensor.Data, bCount: Int, op: NumericBinaryOp, count: Int,
+    dtype: Tensor.DType
   ) async throws
     -> Tensor.Data
   {
@@ -611,11 +614,11 @@ open class CPUBackend: Backend {
     func apply<T: NumericTensorElement>(_: T.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        if dtype == .float32 && (op != .mod) {
+        if dtype == .float32 && (op != .mod) && aCount == count && bCount == count {
           let x = UnsafePointer<Float>(
-            a.buffer.contents().bindMemory(to: Float.self, capacity: count))
+            a.buffer.contents().bindMemory(to: Float.self, capacity: aCount))
           let y = UnsafePointer<Float>(
-            b.buffer.contents().bindMemory(to: Float.self, capacity: count))
+            b.buffer.contents().bindMemory(to: Float.self, capacity: bCount))
           let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
           switch op {
           case .add:
@@ -630,11 +633,11 @@ open class CPUBackend: Backend {
             fatalError()
           }
         } else {
-          try readBuffer(T.self, a.buffer, count: count, dtype: dtype) { aData in
-            try readBuffer(T.self, b.buffer, count: count, dtype: dtype) { bData in
+          try readBuffer(T.self, a.buffer, count: aCount, dtype: dtype) { aData in
+            try readBuffer(T.self, b.buffer, count: bCount, dtype: dtype) { bData in
               try writeBuffer(T.self, buffer, count: count, dtype: dtype) { cData in
-                for (i, (x, y)) in zip(aData, bData).enumerated() {
-                  cData[i] = op.apply(x, y)
+                for i in 0..<count {
+                  cData[i] = op.apply(aData[i % aCount], bData[i % bCount])
                 }
               }
             }
@@ -747,7 +750,8 @@ open class CPUBackend: Backend {
   }
 
   override public func mulAdd(
-    _ input: Tensor.Data, coeff: Tensor.Data, bias: Tensor.Data, count: Int, dtype: Tensor.DType
+    input: Tensor.Data, inputCount: Int, coeff: Tensor.Data, coeffCount: Int, bias: Tensor.Data,
+    biasCount: Int, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -756,7 +760,7 @@ open class CPUBackend: Backend {
     func apply<T1: NumericTensorElement>(_: T1.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        if dtype == .float32 {
+        if dtype == .float32 && biasCount == count && coeffCount == count && inputCount == count {
           let x = UnsafePointer<Float>(
             input.buffer.contents().bindMemory(to: Float.self, capacity: count))
           let coeff = UnsafePointer<Float>(
@@ -766,12 +770,13 @@ open class CPUBackend: Backend {
           let output = buffer.contents().bindMemory(to: Float.self, capacity: count)
           vDSP_vma(x, 1, coeff, 1, bias, 1, output, 1, vDSP_Length(count))
         } else {
-          try readBuffer(T1.self, input.buffer, count: count, dtype: dtype) { inData in
-            try readBuffer(T1.self, coeff.buffer, count: count, dtype: dtype) { coeff in
-              try readBuffer(T1.self, bias.buffer, count: count, dtype: dtype) { bias in
+          try readBuffer(T1.self, input.buffer, count: inputCount, dtype: dtype) { inData in
+            try readBuffer(T1.self, coeff.buffer, count: coeffCount, dtype: dtype) { coeff in
+              try readBuffer(T1.self, bias.buffer, count: biasCount, dtype: dtype) { bias in
                 try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { outData in
-                  for (i, x) in inData.enumerated() {
-                    outData[i] = x * coeff[i] + bias[i]
+                  for i in 0..<count {
+                    outData[i] =
+                      inData[i % inputCount] * coeff[i % coeffCount] + bias[i % biasCount]
                   }
                 }
               }
@@ -789,7 +794,8 @@ open class CPUBackend: Backend {
   }
 
   override public func addMul(
-    _ input: Tensor.Data, bias: Tensor.Data, coeff: Tensor.Data, count: Int, dtype: Tensor.DType
+    input: Tensor.Data, inputCount: Int, bias: Tensor.Data, biasCount: Int, coeff: Tensor.Data,
+    coeffCount: Int, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -798,7 +804,7 @@ open class CPUBackend: Backend {
     func apply<T1: NumericTensorElement>(_: T1.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        if dtype == .float32 {
+        if dtype == .float32 && biasCount == count && coeffCount == count && inputCount == count {
           let x = UnsafePointer<Float>(
             input.buffer.contents().bindMemory(to: Float.self, capacity: count))
           let coeff = UnsafePointer<Float>(
@@ -808,12 +814,13 @@ open class CPUBackend: Backend {
           let output = buffer.contents().bindMemory(to: Float.self, capacity: count)
           vDSP_vam(x, 1, bias, 1, coeff, 1, output, 1, vDSP_Length(count))
         } else {
-          try readBuffer(T1.self, input.buffer, count: count, dtype: dtype) { inData in
-            try readBuffer(T1.self, coeff.buffer, count: count, dtype: dtype) { coeff in
-              try readBuffer(T1.self, bias.buffer, count: count, dtype: dtype) { bias in
+          try readBuffer(T1.self, input.buffer, count: inputCount, dtype: dtype) { inData in
+            try readBuffer(T1.self, coeff.buffer, count: coeffCount, dtype: dtype) { coeff in
+              try readBuffer(T1.self, bias.buffer, count: biasCount, dtype: dtype) { bias in
                 try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { outData in
-                  for (i, x) in inData.enumerated() {
-                    outData[i] = (x + bias[i]) * coeff[i]
+                  for i in 0..<count {
+                    outData[i] =
+                      (inData[i % inputCount] + bias[i % biasCount]) * coeff[i % coeffCount]
                   }
                 }
               }

@@ -328,7 +328,7 @@ public class Linear: Trainable {
     }
     var h = x &* weight.cast(castParams ?? weight.dtype)
     if let bias = bias {
-      h = h + bias.cast(castParams ?? bias.dtype).expand(as: h)
+      h = h + bias.cast(castParams ?? bias.dtype)
     }
     return h
   }
@@ -441,9 +441,9 @@ public class Conv2D: Trainable {
     var h = Tensor.conv2D(convDesc, image: x, kernel: weight)
     if let bias = bias {
       if channelsLast {
-        h = h + bias.expand(as: h)
+        h = h + bias
       } else {
-        h = h + bias[..., NewAxis(), NewAxis()].expand(as: h)
+        h = h + bias[..., NewAxis(), NewAxis()]
       }
     }
     return h
@@ -499,9 +499,9 @@ public class LayerNorm: Trainable {
     let (rawMean, rawVariance) = x.reshape(tmpShape).meanAndVariance(axis: 1)
     let mean = rawMean.reshape(normedShape)
     let variance = rawVariance.reshape(normedShape)
-    let normalized = x.add((-mean).expand(as: x), thenMul: (variance.expand(as: x) + eps).rsqrt())
+    let normalized = (x - mean) * (variance + eps).rsqrt()
     if let gain = gain, let bias = bias {
-      return normalized.mul(gain.expand(as: x) + 1, thenAdd: bias.expand(as: x))
+      return (normalized * (gain + 1)) + bias
     } else {
       return normalized
     }
@@ -558,9 +558,7 @@ public class GroupNorm: Trainable {
       [cFirst.shape[0], groupCount, cFirst.shape[1] / groupCount, cFirst.shape[2...].product()])
     let mean = grouped.mean(axis: -1, keepdims: true)
     let variance = grouped.variance(axis: -1, keepdims: true)
-    let cFirstNormed =
-      ((grouped - mean.expand(as: grouped)) * (variance + eps).rsqrt().expand(as: grouped))
-      .reshape(as: cFirst)
+    let cFirstNormed = ((grouped - mean) * (variance + eps).rsqrt()).reshape(as: cFirst)
 
     let normalized =
       if channelsLast {
@@ -572,7 +570,7 @@ public class GroupNorm: Trainable {
     let result =
       if let gain = gain, let bias = bias {
         if channelsLast {
-          normalized.mul(1 + gain.expand(as: normalized), thenAdd: bias.expand(as: normalized))
+          normalized.mul(1 + gain, thenAdd: bias)
         } else {
           normalized.mul(
             1 + expandVector(gain, axis: 1, shape: x.shape),
@@ -588,5 +586,5 @@ public class GroupNorm: Trainable {
 private func expandVector(_ vec: Tensor, axis: Int, shape: [Int]) -> Tensor {
   var preShape = [Int](repeating: 1, count: shape.count)
   preShape[axis] = vec.shape[0]
-  return vec.reshape(preShape).expand(shape: shape)
+  return vec.reshape(preShape)
 }

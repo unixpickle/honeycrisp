@@ -362,7 +362,10 @@ public final class Tensor {
 
   public func flatten(startAxis: Int = 0, endAxis: Int = -1) -> Tensor {
     let startAxis = positiveAxis(startAxis)
-    let endAxis = positiveAxis(endAxis)
+    let endAxis = shape.count == 0 && endAxis == -1 ? 0 : positiveAxis(endAxis)
+    if startAxis == 0 && endAxis == 0 && shape.count == 0 {
+      return reshape([1])
+    }
     alwaysAssert(endAxis >= startAxis, "invalid axes for flatten(): [\(startAxis), \(endAxis)]")
     return reshape(
       shape[..<startAxis] + [shape[startAxis...endAxis].product()] + shape[(endAxis + 1)...])
@@ -432,27 +435,28 @@ public final class Tensor {
   }
 
   public static func + (lhs: Tensor, rhs: Tensor) -> Tensor {
-    alwaysAssert(
-      lhs.shape == rhs.shape,
-      "shape mismatch for + operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
-    )
     alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for + operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+
+    let broadcasted = Tensor.lazyBroadcast([lhs, rhs])
+    let outputShape = broadcasted.shape
+    let (lhs, rhs) = (broadcasted.tails[0], broadcasted.tails[1])
+
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
-        try await lhs.data, try await rhs.data, op: .add, count: lhs.shape.product(),
-        dtype: lhs.dtype)
+        a: try await lhs.data, aCount: lhs.shape.product(), b: try await rhs.data,
+        bCount: rhs.shape.product(), op: .add, count: outputShape.product(), dtype: lhs.dtype)
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
-      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+      return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
-      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(backend) { grad }
-        rhsHandle.backward(backend) { grad }
+      return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype) { grad in
+        lhsHandle.backward(backend) { grad.reduceOuter(as: lhs) }
+        rhsHandle.backward(backend) { grad.reduceOuter(as: rhs) }
       }
     }
   }
@@ -481,27 +485,28 @@ public final class Tensor {
   }
 
   public static func * (lhs: Tensor, rhs: Tensor) -> Tensor {
-    alwaysAssert(
-      lhs.shape == rhs.shape,
-      "shape mismatch for * operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
-    )
     alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with * operator")
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for * operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+
+    let broadcasted = Tensor.lazyBroadcast([lhs, rhs])
+    let outputShape = broadcasted.shape
+    let (lhs, rhs) = (broadcasted.tails[0], broadcasted.tails[1])
+
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
-        try await lhs.data, try await rhs.data, op: .mul, count: lhs.shape.product(),
-        dtype: lhs.dtype)
+        a: try await lhs.data, aCount: lhs.shape.product(), b: try await rhs.data,
+        bCount: rhs.shape.product(), op: .mul, count: outputShape.product(), dtype: lhs.dtype)
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
-      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+      return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
-      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(backend) { grad * rhs.noGrad() }
-        rhsHandle.backward(backend) { grad * lhs.noGrad() }
+      return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype) { grad in
+        lhsHandle.backward(backend) { (grad * rhs.noGrad()).reduceOuter(as: lhs) }
+        rhsHandle.backward(backend) { (grad * lhs.noGrad()).reduceOuter(as: rhs) }
       }
     }
   }
@@ -548,27 +553,28 @@ public final class Tensor {
   }
 
   public static func - (lhs: Tensor, rhs: Tensor) -> Tensor {
-    alwaysAssert(
-      lhs.shape == rhs.shape,
-      "shape mismatch for - operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
-    )
     alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+
+    let broadcasted = Tensor.lazyBroadcast([lhs, rhs])
+    let outputShape = broadcasted.shape
+    let (lhs, rhs) = (broadcasted.tails[0], broadcasted.tails[1])
+
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
-        try await lhs.data, try await rhs.data, op: .sub, count: lhs.shape.product(),
-        dtype: lhs.dtype)
+        a: try await lhs.data, aCount: lhs.shape.product(), b: try await rhs.data,
+        bCount: rhs.shape.product(), op: .sub, count: outputShape.product(), dtype: lhs.dtype)
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
-      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+      return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
-      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(backend) { grad }
-        rhsHandle.backward(backend) { -grad }
+      return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype) { grad in
+        lhsHandle.backward(backend) { grad.reduceOuter(as: lhs) }
+        rhsHandle.backward(backend) { -grad.reduceOuter(as: rhs) }
       }
     }
   }
@@ -619,27 +625,30 @@ public final class Tensor {
   }
 
   public static func / (lhs: Tensor, rhs: Tensor) -> Tensor {
-    alwaysAssert(
-      lhs.shape == rhs.shape,
-      "shape mismatch for / operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
-    )
     alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+
+    let broadcasted = Tensor.lazyBroadcast([lhs, rhs])
+    let outputShape = broadcasted.shape
+    let (lhs, rhs) = (broadcasted.tails[0], broadcasted.tails[1])
+
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
-        try await lhs.data, try await rhs.data, op: .div, count: lhs.shape.product(),
-        dtype: lhs.dtype)
+        a: try await lhs.data, aCount: lhs.shape.product(), b: try await rhs.data,
+        bCount: rhs.shape.product(), op: .div, count: outputShape.product(), dtype: lhs.dtype)
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
-      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+      return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
-      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(backend) { grad / rhs.noGrad() }
-        rhsHandle.backward(backend) { -lhs.noGrad() * rhs.noGrad().pow(-2) * grad }
+      return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype) { grad in
+        lhsHandle.backward(backend) { (grad / rhs.noGrad()).reduceOuter(as: lhs) }
+        rhsHandle.backward(backend) {
+          (-lhs.noGrad() * rhs.noGrad().pow(-2) * grad).reduceOuter(as: rhs)
+        }
       }
     }
   }
@@ -686,27 +695,30 @@ public final class Tensor {
   }
 
   public static func % (lhs: Tensor, rhs: Tensor) -> Tensor {
-    alwaysAssert(
-      lhs.shape == rhs.shape,
-      "shape mismatch for - operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
-    )
     alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+
+    let broadcasted = Tensor.lazyBroadcast([lhs, rhs])
+    let outputShape = broadcasted.shape
+    let (lhs, rhs) = (broadcasted.tails[0], broadcasted.tails[1])
+
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
-        try await lhs.data, try await rhs.data, op: .mod, count: lhs.shape.product(),
-        dtype: lhs.dtype)
+        a: try await lhs.data, aCount: lhs.shape.product(), b: try await rhs.data,
+        bCount: rhs.shape.product(), op: .mod, count: outputShape.product(), dtype: lhs.dtype)
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
-      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype)
+      return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
-      return Tensor(dataTask: newData, shape: lhs.shape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(backend) { grad }
-        rhsHandle.backward(backend) { -grad * (lhs.noGrad() % rhs.noGrad() == 0).cast(as: grad) }
+      return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype) { grad in
+        lhsHandle.backward(backend) { grad.reduceOuter(as: lhs) }
+        rhsHandle.backward(backend) {
+          (-grad * (lhs.noGrad() % rhs.noGrad() == 0).cast(as: grad)).reduceOuter(as: rhs)
+        }
       }
     }
   }

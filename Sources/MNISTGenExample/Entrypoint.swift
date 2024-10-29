@@ -22,6 +22,34 @@ let LearningRate: Float = 0.0001
 let SampleCount = 10
 let SampleInterval = 1000
 
+/// Implementation based on
+/// https://pytorch.org/torchtune/stable/_modules/torchtune/modules/position_embeddings.html#RotaryPositionalEmbeddings
+class RoPE {
+  let cache: Tensor
+
+  init(dim: Int, maxTokens: Int, base: Int = 10000) {
+    let theta = (-log(Float(base)) * Tensor(range: 0..<(dim / 2)).cast(.float32) / dim).exp()
+    let indices = Tensor(range: 0..<maxTokens).cast(.float32).unsqueeze(axis: -1).repeating(
+      axis: 1, count: dim / 2)
+    let args = indices * theta.expand(as: indices)
+    cache = Tensor(stack: [args.cos(), args.sin()], axis: -1)
+  }
+
+  func callAsFunction(_ x: Tensor, offset: Int = 0) -> Tensor {
+    assert(x.shape.count == 4, "expected [B x H x T x C]")
+
+    let cache = self.cache[offset..<(x.shape[2] + offset)]
+
+    let x2D = x.reshape(Array(x.shape[..<3]) + [x.shape[3] / 2, 2])  // [B x H x T x C/2 x 2]
+    let expandedCache = cache.reshape([1, 1, x2D.shape[2], x2D.shape[3], 2]).expand(as: x2D)
+    let x0 = x2D[..., ..., ..., 0]
+    let x1 = x2D[..., ..., ..., 1]
+    let r0 = expandedCache[..., ..., ..., 0]
+    let r1 = expandedCache[..., ..., ..., 1]
+    return Tensor(stack: [x0 * r0 - x1 * r1, x0 * r1 + x1 * r0], axis: -1).flatten(startAxis: 3)
+  }
+}
+
 class KVCache {
   class Layer {
     var k: Tensor
@@ -53,6 +81,7 @@ class KVCache {
 
 class Attention: Trainable {
   let causalMask: Tensor
+  var rope: RoPE
 
   @Child var qProj: Linear
   @Child var kProj: Linear
@@ -61,6 +90,7 @@ class Attention: Trainable {
 
   override init() {
     causalMask = Tensor(constant: 1e8, shape: [TokenCount, TokenCount]).tril() - 1e8
+    rope = RoPE(dim: HeadDim, maxTokens: TokenCount)
     assert(!causalMask.needsGrad)
     super.init()
     self.qProj = Linear(inCount: ModelDim, outCount: ModelDim)
@@ -99,7 +129,8 @@ class Attention: Trainable {
       }
     let q = moveHeadsToOuter(qProj(x)) / sqrt(sqrt(Float(HeadDim)))
 
-    let energy = Tensor.batchedMatmul(a: q, transA: false, b: k, transB: true, transOut: false)
+    let energy = Tensor.batchedMatmul(
+      a: rope(q, offset: tokenOffset), transA: false, b: rope(k), transB: true, transOut: false)
     let probs = (energy + causalMask[tokenOffset..<k.shape[2], 0..<k.shape[2]].expand(as: energy))
       .softmax()
     let reducedValues = Tensor.batchedMatmul(
@@ -134,7 +165,6 @@ class Block: Trainable {
 
 class Transformer: Trainable {
   @Param var embed: Tensor
-  @Param var posEmbed: Tensor
   @Child var layers: TrainableArray<Block>
   @Child var normOut: LayerNorm
   @Child var unembed: Linear
@@ -142,7 +172,6 @@ class Transformer: Trainable {
   override init() {
     super.init()
     embed = Tensor(randn: [VocabSize, ModelDim])
-    posEmbed = Tensor(randn: [TokenCount, ModelDim])
     layers = TrainableArray((0..<LayerCount).map { _ in Block() })
     normOut = LayerNorm(shape: [ModelDim])
 
@@ -157,9 +186,6 @@ class Transformer: Trainable {
     var h = embed.gather(axis: 0, indices: x.flatten()).reshape([
       x.shape[0], x.shape[1], -1,
     ])
-
-    let posOffset = kvCache?.tokenCount ?? 0
-    h = h + posEmbed[posOffset..<(posOffset + x.shape[1])].expand(as: h)
 
     for (i, layer) in layers.children.enumerated() {
       let cacheLayer: KVCache.Layer? =

@@ -31,7 +31,7 @@ class CommandTransformer: Command {
   let lr: Float = 0.0001
   let bs = 8
   let captionBytes: Int = 128
-  let saveInterval: Int = 100
+  let saveInterval: Int = 500
   let cfgProb: Float = 0.1
   let cfgScale: Float = 1.1
 
@@ -131,8 +131,8 @@ class CommandTransformer: Command {
   private func trainInnerLoop() async throws {
     func loss(_ batch: Tensor) -> Tensor {
       // We do not model the caption prefix, only the VQ tokens.
-      let outputs = model(batch[..., ..<(-1)])[..., captionBytes...]
-      let targets = batch[..., (captionBytes + 1)...]
+      let outputs = model(batch[..., ..<(-1)])[..., (captionBytes-1)...]
+      let targets = batch[..., captionBytes...]
 
       let logProbs = outputs.logSoftmax(axis: -1)
       let losses = -logProbs.gather(axis: -1, indices: targets.unsqueeze(axis: -1))

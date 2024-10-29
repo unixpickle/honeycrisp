@@ -324,13 +324,15 @@ open class MPSBackend: CPUBackend {
   }
 
   override public func binaryOp(
-    _ a: Tensor.Data, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+    a: Tensor.Data, aCount: Int, b: Tensor.Data, bCount: Int, op: NumericBinaryOp, count: Int,
+    dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     if dtype != .float16 && dtype != .float32 {
-      return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
+      return try await super.binaryOp(
+        a: a, aCount: aCount, b: b, bCount: bCount, op: op, count: count, dtype: dtype)
     }
 
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
@@ -356,8 +358,8 @@ open class MPSBackend: CPUBackend {
       let completion = try completionBufferAndEncoder { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
-          enc, .buffer(a.buffer), .buffer(b.buffer), .buffer(output),
-          .uint(UInt32(count)))
+          enc, .buffer(a.buffer), .buffer(b.buffer), .buffer(output), .uint(UInt32(aCount)),
+          .uint(UInt32(bCount)), .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
@@ -445,29 +447,32 @@ open class MPSBackend: CPUBackend {
   }
 
   override public func mulAdd(
-    _ input: Tensor.Data, coeff: Tensor.Data, bias: Tensor.Data, count: Int, dtype: Tensor.DType
+    input: Tensor.Data, inputCount: Int, coeff: Tensor.Data, coeffCount: Int, bias: Tensor.Data,
+    biasCount: Int, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     try await addMulOrMulAdd(
-      input, a: coeff, b: bias, method: "mul_add", count: count, dtype: dtype)
-
+      input: input, inputCount: inputCount, a: coeff, aCount: coeffCount, b: bias,
+      bCount: biasCount, method: "mul_add", count: count, dtype: dtype)
   }
 
   override public func addMul(
-    _ input: Tensor.Data, bias: Tensor.Data, coeff: Tensor.Data, count: Int, dtype: Tensor.DType
+    input: Tensor.Data, inputCount: Int, bias: Tensor.Data, biasCount: Int, coeff: Tensor.Data,
+    coeffCount: Int, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     try await addMulOrMulAdd(
-      input, a: bias, b: coeff, method: "add_mul", count: count, dtype: dtype)
+      input: input, inputCount: inputCount, a: bias, aCount: biasCount, b: coeff,
+      bCount: coeffCount, method: "add_mul", count: count, dtype: dtype)
   }
 
   private func addMulOrMulAdd(
-    _ input: Tensor.Data, a: Tensor.Data, b: Tensor.Data, method: String, count: Int,
-    dtype: Tensor.DType
+    input: Tensor.Data, inputCount: Int, a: Tensor.Data, aCount: Int, b: Tensor.Data, bCount: Int,
+    method: String, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -475,9 +480,13 @@ open class MPSBackend: CPUBackend {
     alwaysAssert(count <= UInt32.max, "\(method) cannot operate on as many as \(count) values")
     guard let typeName = MPSBackend.CastTypes[dtype] else {
       if method == "mul_add" {
-        return try await super.mulAdd(input, coeff: a, bias: b, count: count, dtype: dtype)
+        return try await super.mulAdd(
+          input: input, inputCount: inputCount, coeff: a, coeffCount: aCount, bias: b,
+          biasCount: bCount, count: count, dtype: dtype)
       } else {
-        return try await super.addMul(input, bias: a, coeff: b, count: count, dtype: dtype)
+        return try await super.addMul(
+          input: input, inputCount: inputCount, bias: a, biasCount: aCount, coeff: b,
+          coeffCount: bCount, count: count, dtype: dtype)
       }
     }
     let functionName = "\(method)_\(typeName)"
@@ -489,6 +498,7 @@ open class MPSBackend: CPUBackend {
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .buffer(input.buffer), .buffer(a.buffer), .buffer(b.buffer), .buffer(output),
+          .uint(UInt32(inputCount)), .uint(UInt32(aCount)), .uint(UInt32(bCount)),
           .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
       }
@@ -1518,22 +1528,26 @@ open class MPSBackend: CPUBackend {
           kernel void name##vv_fp16(device const half* a [[buffer(0)]], \
                                     device const half* b [[buffer(1)]], \
                                     device half* c [[buffer(2)]], \
-                                    constant uint &N [[buffer(3)]], \
+                                    constant uint &aCount [[buffer(3)]], \
+                                    constant uint &bCount [[buffer(4)]], \
+                                    constant uint &N [[buffer(5)]], \
                                     uint id [[thread_position_in_grid]]) { \
             if (id < N) { \
-              half x = a[id]; \
-              half y = b[id]; \
+              half x = a[id % aCount]; \
+              half y = b[id % bCount]; \
               c[id] = expr; \
             } \
           } \
           kernel void name##vv_fp32(device const float* a [[buffer(0)]], \
                                     device const float* b [[buffer(1)]], \
                                     device float* c [[buffer(2)]], \
-                                    constant uint &N [[buffer(3)]], \
+                                    constant uint &aCount [[buffer(3)]], \
+                                    constant uint &bCount [[buffer(4)]], \
+                                    constant uint &N [[buffer(5)]], \
                                     uint id [[thread_position_in_grid]]) { \
             if (id < N) { \
-              float x = a[id]; \
-              float y = b[id]; \
+              float x = a[id % aCount]; \
+              float y = b[id % bCount]; \
               c[id] = expr; \
             } \
           } \
@@ -1593,20 +1607,26 @@ open class MPSBackend: CPUBackend {
                                      device const type* b [[buffer(1)]], \
                                      device const type* c [[buffer(2)]], \
                                      device type* output [[buffer(3)]], \
-                                     constant uint &N [[buffer(4)]], \
+                                     constant uint &aCount [[buffer(4)]], \
+                                     constant uint &bCount [[buffer(5)]], \
+                                     constant uint &cCount [[buffer(6)]], \
+                                     constant uint &N [[buffer(7)]], \
                                      uint id [[thread_position_in_grid]]) { \
               if (id < N) { \
-                  output[id] = (a[id] + b[id]) * c[id]; \
+                  output[id] = (a[id % aCount] + b[id % bCount]) * c[id % cCount]; \
               } \
           } \
           kernel void mul_add_##type(device const type* a [[buffer(0)]], \
                                      device const type* b [[buffer(1)]], \
                                      device const type* c [[buffer(2)]], \
                                      device type* output [[buffer(3)]], \
-                                     constant uint &N [[buffer(4)]], \
+                                     constant uint &aCount [[buffer(4)]], \
+                                     constant uint &bCount [[buffer(5)]], \
+                                     constant uint &cCount [[buffer(6)]], \
+                                     constant uint &N [[buffer(7)]], \
                                      uint id [[thread_position_in_grid]]) { \
               if (id < N) { \
-                  output[id] = (a[id] * b[id]) + c[id]; \
+                  output[id] = (a[id % aCount] * b[id % bCount]) + c[id % cCount]; \
               } \
           }
 

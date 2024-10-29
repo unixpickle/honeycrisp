@@ -875,6 +875,39 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testBinaryBroadcast() async throws {
+    try await runInBackends {
+      for op: (Tensor, Tensor) -> Tensor in [
+        { $0 + $1 }, { $0 * $1 }, { $0 - $1 }, { $0 / $1 }, { $0 % $1 },
+        { $0.mul($1, thenAdd: $1) }, { $0.add($1, thenMul: $1) },
+      ] {
+        for (leftShape, rightShape) in [
+          ([6], [3, 6]), ([3, 6], [6]), ([3, 1, 6], [1, 2, 6]), ([1, 1, 3], [3, 4, 3]),
+        ] {
+          let left = Tensor(rand: leftShape)
+          let right = Tensor(rand: rightShape) + 1
+          let (bcastLeft, bcastRight) = Tensor.broadcast(left, right)
+          let outputBcast = op(bcastLeft, bcastRight)
+          let outputImplicit = op(left, right)
+          XCTAssertEqual(outputBcast.shape, outputImplicit.shape)
+          try await assertClose(outputBcast, outputImplicit)
+
+          var leftGrad: Tensor?
+          var rightGrad: Tensor?
+          var bcastLeftGrad: Tensor?
+          var bcastRightGrad: Tensor?
+          let outGrad = Tensor(rand: outputBcast.shape)
+          let (bcastLeft1, bcastRight1) = Tensor.broadcast(
+            left.onGrad { bcastLeftGrad = $0 }, right.onGrad { bcastRightGrad = $0 })
+          op(bcastLeft1, bcastRight1).backward(outGrad)
+          op(left.onGrad { leftGrad = $0 }, right.onGrad { rightGrad = $0 }).backward(outGrad)
+          try await assertClose(leftGrad!, bcastLeftGrad!)
+          try await assertClose(rightGrad!, bcastRightGrad!)
+        }
+      }
+    }
+  }
+
   func testSoftmax() async throws {
     try await runInBackends {
       let x = Tensor(
