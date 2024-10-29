@@ -880,9 +880,11 @@ final class HoneycrispTests: XCTestCase {
       for op: (Tensor, Tensor) -> Tensor in [
         { $0 + $1 }, { $0 * $1 }, { $0 - $1 }, { $0 / $1 }, { $0 % $1 },
         { $0.mul($1, thenAdd: $1) }, { $0.add($1, thenMul: $1) },
+        { $0.mul($1, thenAdd: $0) }, { $0.add($1, thenMul: $0) },
       ] {
         for (leftShape, rightShape) in [
           ([6], [3, 6]), ([3, 6], [6]), ([3, 1, 6], [1, 2, 6]), ([1, 1, 3], [3, 4, 3]),
+          ([1, 3, 1, 3, 1], [3, 1, 3, 1, 3]), ([3, 1, 3, 1, 3, 1], [1, 3, 1, 3, 1, 3]),
         ] {
           let left = Tensor(rand: leftShape)
           let right = Tensor(rand: rightShape) + 1
@@ -903,6 +905,53 @@ final class HoneycrispTests: XCTestCase {
           op(left.onGrad { leftGrad = $0 }, right.onGrad { rightGrad = $0 }).backward(outGrad)
           try await assertClose(leftGrad!, bcastLeftGrad!)
           try await assertClose(rightGrad!, bcastRightGrad!)
+        }
+      }
+    }
+  }
+
+  func testFusedBroadcast() async throws {
+    try await runInBackends {
+      for op: (Tensor, Tensor, Tensor) -> Tensor in [
+        { $0.mul($1, thenAdd: $2) },
+        { $0.add($1, thenMul: $2) },
+      ] {
+        for (aShape, bShape, cShape) in [
+          ([6], [3, 6], [6]),
+          ([6], [3, 6], [3, 3, 6]),
+          ([1, 3, 1, 3, 1], [3, 1, 3, 1, 3], [1, 1]),
+          ([1, 3, 1, 3, 1], [3, 1, 3, 1, 3], []),
+          ([1, 1, 3, 3, 1, 1], [3, 3, 1, 1, 3, 3], [1, 3]),
+          ([1, 1, 3, 3, 1, 1], [3, 3, 1, 1, 3, 3], [3, 1]),
+          ([3, 1], [1, 1, 3, 3, 1, 1], [3, 3, 1, 1, 3, 3]),
+        ] {
+          let a = Tensor(rand: aShape)
+          let b = Tensor(rand: bShape)
+          let c = Tensor(rand: cShape)
+          let bcasts = Tensor.broadcast([a, b, c])
+          let outputBcast = op(bcasts[0], bcasts[1], bcasts[2])
+          let outputImplicit = op(a, b, c)
+          XCTAssertEqual(outputBcast.shape, outputImplicit.shape)
+          try await assertClose(outputBcast, outputImplicit)
+
+          var aGrad: Tensor?
+          var bGrad: Tensor?
+          var cGrad: Tensor?
+          var bcastAGrad: Tensor?
+          var bcastBGrad: Tensor?
+          var bcastCGrad: Tensor?
+          let outGrad = Tensor(rand: outputBcast.shape)
+          let bcasts1 = Tensor.broadcast([
+            a.onGrad { bcastAGrad = $0 },
+            b.onGrad { bcastBGrad = $0 },
+            c.onGrad { bcastCGrad = $0 },
+          ])
+          op(bcasts1[0], bcasts1[1], bcasts1[2]).backward(outGrad)
+          op(a.onGrad { aGrad = $0 }, b.onGrad { bGrad = $0 }, c.onGrad { cGrad = $0 }).backward(
+            outGrad)
+          try await assertClose(aGrad!, bcastAGrad!)
+          try await assertClose(bGrad!, bcastBGrad!)
+          try await assertClose(cGrad!, bcastCGrad!)
         }
       }
     }

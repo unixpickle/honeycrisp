@@ -19,7 +19,7 @@ class RoPE {
     let theta = (-log(Float(base)) * Tensor(range: 0..<(dim / 2)).cast(.float32) / dim).exp()
     let indices = Tensor(range: 0..<maxTokens).cast(.float32).unsqueeze(axis: -1).repeating(
       axis: 1, count: dim / 2)
-    let args = indices * theta.expand(as: indices)
+    let args = indices * theta
     cache = Tensor(stack: [args.cos(), args.sin()], axis: -1)
   }
 
@@ -29,11 +29,11 @@ class RoPE {
     let cache = self.cache[offset..<(x.shape[2] + offset)]
 
     let x2D = x.reshape(Array(x.shape[..<3]) + [x.shape[3] / 2, 2])  // [B x H x T x C/2 x 2]
-    let expandedCache = cache.reshape([1, 1, x2D.shape[2], x2D.shape[3], 2]).expand(as: x2D)
-    let x0 = x2D[..., ..., ..., 0]
-    let x1 = x2D[..., ..., ..., 1]
-    let r0 = expandedCache[..., ..., ..., 0]
-    let r1 = expandedCache[..., ..., ..., 1]
+    let shapedCache = cache.reshape([x2D.shape[2], x2D.shape[3], 2])
+    let x0 = x2D[..., ..., ..., ..., 0]
+    let x1 = x2D[..., ..., ..., ..., 1]
+    let r0 = shapedCache[..., ..., 0]
+    let r1 = shapedCache[..., ..., 1]
     return Tensor(stack: [x0 * r0 - x1 * r1, x0 * r1 + x1 * r0], axis: -1).flatten(startAxis: 3)
   }
 }
@@ -120,7 +120,7 @@ class Attention: Trainable {
 
     let energy = Tensor.batchedMatmul(
       a: rope(q, offset: tokenOffset), transA: false, b: rope(k), transB: true, transOut: false)
-    let probs = (energy + causalMask[tokenOffset..<k.shape[2], 0..<k.shape[2]].expand(as: energy))
+    let probs = (energy + causalMask[tokenOffset..<k.shape[2], 0..<k.shape[2]])
       .softmax()
     let reducedValues = Tensor.batchedMatmul(
       a: probs, transA: false, b: v, transB: false, transOut: false)

@@ -439,15 +439,14 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for + operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
-    let broadcasted = Tensor.lazyBroadcast([lhs, rhs])
-    let outputShape = broadcasted.shape
-    let (lhs, rhs) = (broadcasted.tails[0], broadcasted.tails[1])
+    let (outputShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
 
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
-        a: try await lhs.data, aCount: lhs.shape.product(), b: try await rhs.data,
-        bCount: rhs.shape.product(), op: .add, count: outputShape.product(), dtype: lhs.dtype)
+        a: BroadcastData(strides: lhsStrides, data: try await lhs.data),
+        b: BroadcastData(strides: rhsStrides, data: try await rhs.data),
+        op: .add, count: outputShape.product(), dtype: lhs.dtype)
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
@@ -455,8 +454,8 @@ public final class Tensor {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(backend) { grad.reduceOuter(as: lhs) }
-        rhsHandle.backward(backend) { grad.reduceOuter(as: rhs) }
+        lhsHandle.backward(backend) { grad.reduceBroadcast(lhsStrides, as: lhs) }
+        rhsHandle.backward(backend) { grad.reduceBroadcast(rhsStrides, as: rhs) }
       }
     }
   }
@@ -489,15 +488,14 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for * operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
-    let broadcasted = Tensor.lazyBroadcast([lhs, rhs])
-    let outputShape = broadcasted.shape
-    let (lhs, rhs) = (broadcasted.tails[0], broadcasted.tails[1])
+    let (outputShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
 
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
-        a: try await lhs.data, aCount: lhs.shape.product(), b: try await rhs.data,
-        bCount: rhs.shape.product(), op: .mul, count: outputShape.product(), dtype: lhs.dtype)
+        a: BroadcastData(strides: lhsStrides, data: try await lhs.data),
+        b: BroadcastData(strides: rhsStrides, data: try await rhs.data),
+        op: .mul, count: outputShape.product(), dtype: lhs.dtype)
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
@@ -505,8 +503,8 @@ public final class Tensor {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(backend) { (grad * rhs.noGrad()).reduceOuter(as: lhs) }
-        rhsHandle.backward(backend) { (grad * lhs.noGrad()).reduceOuter(as: rhs) }
+        lhsHandle.backward(backend) { (grad * rhs.noGrad()).reduceBroadcast(lhsStrides, as: lhs) }
+        rhsHandle.backward(backend) { (grad * lhs.noGrad()).reduceBroadcast(rhsStrides, as: rhs) }
       }
     }
   }
@@ -557,15 +555,14 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
-    let broadcasted = Tensor.lazyBroadcast([lhs, rhs])
-    let outputShape = broadcasted.shape
-    let (lhs, rhs) = (broadcasted.tails[0], broadcasted.tails[1])
+    let (outputShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
 
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
-        a: try await lhs.data, aCount: lhs.shape.product(), b: try await rhs.data,
-        bCount: rhs.shape.product(), op: .sub, count: outputShape.product(), dtype: lhs.dtype)
+        a: BroadcastData(strides: lhsStrides, data: try await lhs.data),
+        b: BroadcastData(strides: rhsStrides, data: try await rhs.data),
+        op: .sub, count: outputShape.product(), dtype: lhs.dtype)
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
@@ -573,8 +570,8 @@ public final class Tensor {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(backend) { grad.reduceOuter(as: lhs) }
-        rhsHandle.backward(backend) { -grad.reduceOuter(as: rhs) }
+        lhsHandle.backward(backend) { grad.reduceBroadcast(lhsStrides, as: lhs) }
+        rhsHandle.backward(backend) { -grad.reduceBroadcast(rhsStrides, as: rhs) }
       }
     }
   }
@@ -629,15 +626,14 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
-    let broadcasted = Tensor.lazyBroadcast([lhs, rhs])
-    let outputShape = broadcasted.shape
-    let (lhs, rhs) = (broadcasted.tails[0], broadcasted.tails[1])
+    let (outputShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
 
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
-        a: try await lhs.data, aCount: lhs.shape.product(), b: try await rhs.data,
-        bCount: rhs.shape.product(), op: .div, count: outputShape.product(), dtype: lhs.dtype)
+        a: BroadcastData(strides: lhsStrides, data: try await lhs.data),
+        b: BroadcastData(strides: rhsStrides, data: try await rhs.data),
+        op: .div, count: outputShape.product(), dtype: lhs.dtype)
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
@@ -645,9 +641,9 @@ public final class Tensor {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(backend) { (grad / rhs.noGrad()).reduceOuter(as: lhs) }
+        lhsHandle.backward(backend) { (grad / rhs.noGrad()).reduceBroadcast(lhsStrides, as: lhs) }
         rhsHandle.backward(backend) {
-          (-lhs.noGrad() * rhs.noGrad().pow(-2) * grad).reduceOuter(as: rhs)
+          (-lhs.noGrad() * (rhs.noGrad().pow(-2) * grad)).reduceBroadcast(rhsStrides, as: rhs)
         }
       }
     }
@@ -699,25 +695,25 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
-    let broadcasted = Tensor.lazyBroadcast([lhs, rhs])
-    let outputShape = broadcasted.shape
-    let (lhs, rhs) = (broadcasted.tails[0], broadcasted.tails[1])
+    let (outputShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
 
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
       try await backend.binaryOp(
-        a: try await lhs.data, aCount: lhs.shape.product(), b: try await rhs.data,
-        bCount: rhs.shape.product(), op: .mod, count: outputShape.product(), dtype: lhs.dtype)
+        a: BroadcastData(strides: lhsStrides, data: try await lhs.data),
+        b: BroadcastData(strides: rhsStrides, data: try await rhs.data),
+        op: .mod, count: outputShape.product(), dtype: lhs.dtype)
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
     } else {
       let lhsHandle = lhs.saveForBackward()
       let rhsHandle = rhs.saveForBackward()
-      return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype) { grad in
-        lhsHandle.backward(backend) { grad.reduceOuter(as: lhs) }
+      let output = Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
+      return output.onGrad { grad in
+        lhsHandle.backward(backend) { grad.reduceBroadcast(lhsStrides, as: lhs) }
         rhsHandle.backward(backend) {
-          (-grad * (lhs.noGrad() % rhs.noGrad() == 0).cast(as: grad)).reduceOuter(as: rhs)
+          (-grad * (output == 0).cast(as: grad)).reduceBroadcast(rhsStrides, as: rhs)
         }
       }
     }

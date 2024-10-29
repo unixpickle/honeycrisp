@@ -16,6 +16,28 @@ public struct ReduceDims: Hashable {
   var shape: [Int] {
     [outerCount, reduceCount, innerCount]
   }
+
+  public func inverse() -> RepeatDims {
+    RepeatDims(outerCount: outerCount, repeatCount: reduceCount, innerCount: innerCount)
+  }
+}
+
+public struct RepeatDims: Hashable {
+  public let outerCount: Int
+  public let repeatCount: Int
+  public let innerCount: Int
+
+  var inCount: Int {
+    return outerCount * innerCount
+  }
+
+  var outCount: Int {
+    return outerCount * repeatCount * innerCount
+  }
+
+  public func inverse() -> ReduceDims {
+    ReduceDims(outerCount: outerCount, reduceCount: repeatCount, innerCount: innerCount)
+  }
 }
 
 public enum ReduceOp {
@@ -128,29 +150,15 @@ extension Tensor {
     alwaysAssert(axis >= 0 && axis <= shape.count, "axis \(axis) out of bounds for shape \(shape)")
     let outerCount = shape[..<axis].product()
     let innerCount = shape[axis...].product()
-    let backend = Backend.current
-    let newData = createDataTask { t in
-      try await backend.repeated(
-        try await t.data, outerCount: outerCount, innerCount: innerCount, repeats: count,
-        dtype: t.dtype)
-    }
     let newShape =
       if axis == shape.count {
         shape + [count]
       } else {
         Array(shape[..<axis]) + [shape[axis] * count] + Array(shape[(axis + 1)...])
       }
-    if !needsGrad || !Tensor.isGradEnabled {
-      return Tensor(
-        dataTask: newData, shape: newShape, dtype: dtype)
-    } else {
-      let handle = self.saveForBackward()
-      return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { grad in
-        handle.backward(backend) {
-          grad.reshape([outerCount, count, innerCount]).sum(axis: 1).reshape(self.shape)
-        }
-      }
-    }
+    return flatApplyRepeats([
+      RepeatDims(outerCount: outerCount, repeatCount: count, innerCount: innerCount)
+    ]).reshape(newShape)
   }
 
   internal func reduceDims(_ axis: Int? = nil) -> ReduceDims {
@@ -164,6 +172,54 @@ extension Tensor {
       )
     } else {
       return ReduceDims(outerCount: 1, reduceCount: shape.product(), innerCount: 1)
+    }
+  }
+
+  internal func flatApplySums(_ allDims: [ReduceDims]) -> Tensor {
+    let backend = Backend.current
+    let newData = createDataTask { t in
+      var count = t.shape.product()
+      var result = try await t.data
+      for dims in allDims {
+        assert(dims.inCount == count)
+        result = try await backend.reduce(result, op: .sum, dims: dims, dtype: t.dtype)
+        count = dims.outCount
+      }
+      return result
+    }
+    let newShape = [allDims.last?.outCount ?? shape.product()]
+    if !Tensor.isGradEnabled || !needsGrad {
+      return Tensor(dataTask: newData, shape: newShape, dtype: dtype)
+    } else {
+      let repeats = allDims.reversed().map { $0.inverse() }
+      let handle = self.saveForBackward()
+      return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { grad in
+        handle.backward(backend) { grad.flatApplyRepeats(repeats).reshape(self.shape) }
+      }
+    }
+  }
+
+  internal func flatApplyRepeats(_ allDims: [RepeatDims]) -> Tensor {
+    let backend = Backend.current
+    let newData = createDataTask { t in
+      var count = t.shape.product()
+      var result = try await t.data
+      for dims in allDims {
+        assert(dims.inCount == count)
+        result = try await backend.repeated(result, dims: dims, dtype: t.dtype)
+        count = dims.outCount
+      }
+      return result
+    }
+    let newShape = [allDims.last?.outCount ?? shape.product()]
+    if !Tensor.isGradEnabled || !needsGrad {
+      return Tensor(dataTask: newData, shape: newShape, dtype: dtype)
+    } else {
+      let sums = allDims.reversed().map { $0.inverse() }
+      let handle = self.saveForBackward()
+      return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { grad in
+        handle.backward(backend) { grad.flatApplySums(sums).reshape(self.shape) }
+      }
     }
   }
 }

@@ -54,14 +54,13 @@ open class BackendWrapper: Backend {
   }
 
   override public func binaryOp(
-    a: Tensor.Data, aCount: Int, b: Tensor.Data, bCount: Int, op: NumericBinaryOp, count: Int,
+    a: BroadcastData, b: BroadcastData, op: NumericBinaryOp, count: Int,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.binaryOp(
-      a: a, aCount: aCount, b: b, bCount: bCount, op: op, count: count, dtype: dtype)
+    try await wrapped.binaryOp(a: a, b: b, op: op, count: count, dtype: dtype)
   }
 
   override public func binaryOp<T: NumericTensorElement>(
@@ -83,27 +82,21 @@ open class BackendWrapper: Backend {
   }
 
   override public func mulAdd(
-    input: Tensor.Data, inputCount: Int, coeff: Tensor.Data, coeffCount: Int, bias: Tensor.Data,
-    biasCount: Int, count: Int, dtype: Tensor.DType
+    input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.mulAdd(
-      input: input, inputCount: inputCount, coeff: coeff, coeffCount: coeffCount, bias: bias,
-      biasCount: biasCount, count: count, dtype: dtype)
+    try await wrapped.mulAdd(input: input, coeff: coeff, bias: bias, count: count, dtype: dtype)
   }
 
   override public func addMul(
-    input: Tensor.Data, inputCount: Int, bias: Tensor.Data, biasCount: Int, coeff: Tensor.Data,
-    coeffCount: Int, count: Int, dtype: Tensor.DType
+    input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.addMul(
-      input: input, inputCount: inputCount, bias: bias, biasCount: biasCount, coeff: coeff,
-      coeffCount: coeffCount, count: count, dtype: dtype)
+    try await wrapped.addMul(input: input, bias: bias, coeff: coeff, count: count, dtype: dtype)
   }
 
   override public func compare(
@@ -193,13 +186,12 @@ open class BackendWrapper: Backend {
   }
 
   override public func repeated(
-    _ a: Tensor.Data, outerCount: Int, innerCount: Int, repeats: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, dims: RepeatDims, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.repeated(
-      a, outerCount: outerCount, innerCount: innerCount, repeats: repeats, dtype: dtype)
+    try await wrapped.repeated(a, dims: dims, dtype: dtype)
   }
 
   override public func gather(
