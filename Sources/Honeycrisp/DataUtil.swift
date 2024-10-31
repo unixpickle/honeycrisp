@@ -5,7 +5,13 @@ public func loadDataInBackground<T, S: Sequence<Result<T, Error>>>(_ it: S, buff
 where T: Sendable, S: Sendable {
   AsyncThrowingStream(bufferingPolicy: .bufferingOldest(bufferSize)) { continuation in
     let thread = Thread {
-      for x in it {
+      var it = it.makeIterator()
+      while true {
+        var maybeX: Result<T, Error>?
+        autoreleasepool {
+          maybeX = it.next()
+        }
+        guard let x = maybeX else { break }
         if Thread.current.isCancelled {
           return
         }

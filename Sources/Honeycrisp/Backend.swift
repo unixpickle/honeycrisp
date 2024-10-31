@@ -550,51 +550,70 @@ open class CPUBackend: Backend {
         if let item = allocBucketsLock.withLock({ allocBuckets![bucket]?.popLast() }) {
           item
         } else {
-          try await {
-            return try await allocRaw(length: bucket)
-          }()
+          try await allocRaw(length: bucket)
         }
-      let maybeResult = (try device).makeBuffer(
-        bytesNoCopy: rawResult.contents(), length: max(length, 1), options: [.storageModeShared],
-        deallocator: { [weak self] _, _ in
-          if let self = self {
-            self.allocBucketsLock.withLock {
-              if self.allocBuckets![bucket] == nil {
-                self.allocBuckets![bucket] = [rawResult]
-              } else {
-                self.allocBuckets![bucket]!.append(rawResult)
-              }
-            }
-          }
-        }
-      )
-      guard let result = maybeResult else {
-        throw BackendError.allocationFailed(length)
-      }
-      return result
+      return try bucketBuffer(rawResult, bucket: bucket, length: length)
     }
-
     return try await allocRaw(length: length)
   }
 
-  internal func allocRaw(length: Int) async throws -> MTLBuffer {
-    return try await serialize { [self] in
-      let maybeBuffer = (try device).makeBuffer(
-        length: max(1, length), options: [.storageModeShared])
-      guard let result = maybeBuffer else {
-        throw BackendError.allocationFailed(length)
-      }
-      #if DEBUG
-        // Fill the data with garbage to catch methods that assume
-        // zero initialization.
-        let bound = result.contents().bindMemory(to: UInt8.self, capacity: length)
-        let noise = (0..<3).map({ _ in UInt8.random(in: 0...255) })
-        for i in 0..<length {
-          bound[i] = noise[i % 3]
+  internal func allocateSync(length: Int) throws -> MTLBuffer {
+    if allocBuckets != nil {
+      let bucket = nextAllocatorBucket(length: length)
+      let rawResult =
+        if let item = allocBucketsLock.withLock({ allocBuckets![bucket]?.popLast() }) {
+          item
+        } else {
+          try allocRawSync(length: bucket)
         }
-      #endif
-      return result
+      return try bucketBuffer(rawResult, bucket: bucket, length: length)
     }
+    return try allocRawSync(length: length)
+  }
+
+  private func allocRaw(length: Int) async throws -> MTLBuffer {
+    return try await serialize { [self] in
+      try allocRawSync(length: length)
+    }
+  }
+
+  private func allocRawSync(length: Int) throws -> MTLBuffer {
+    let maybeBuffer = (try device).makeBuffer(
+      length: max(1, length), options: [.storageModeShared])
+    guard let result = maybeBuffer else {
+      throw BackendError.allocationFailed(length)
+    }
+    #if DEBUG
+      // Fill the data with garbage to catch methods that assume
+      // zero initialization.
+      let bound = result.contents().bindMemory(to: UInt8.self, capacity: length)
+      let noise = (0..<3).map({ _ in UInt8.random(in: 0...255) })
+      for i in 0..<length {
+        bound[i] = noise[i % 3]
+      }
+    #endif
+    return result
+  }
+
+  internal func bucketBuffer(_ rawBuffer: MTLBuffer, bucket: Int, length: Int) throws -> MTLBuffer {
+    let maybeResult = (try device).makeBuffer(
+      bytesNoCopy: rawBuffer.contents(), length: max(length, 1), options: [.storageModeShared],
+      deallocator: { [weak self] _, _ in
+        if let self = self {
+          self.allocBucketsLock.withLock {
+            if self.allocBuckets![bucket] == nil {
+              self.allocBuckets![bucket] = [rawBuffer]
+            } else {
+              self.allocBuckets![bucket]!.append(rawBuffer)
+            }
+          }
+        }
+      }
+    )
+    guard let result = maybeResult else {
+      throw BackendError.allocationFailed(length)
+    }
+    return result
   }
 
   override public func binaryOp(

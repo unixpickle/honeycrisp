@@ -1414,21 +1414,16 @@ open class MPSBackend: CPUBackend {
 
   internal func makeUIntBuffer(_ x: [UInt32]) throws -> MTLBuffer {
     return try x.withUnsafeBytes { bytes in
-      guard
-        let result = (try device).makeBuffer(
-          bytes: bytes.baseAddress!, length: 4 * x.count, options: [])
-      else {
-        throw BackendError.allocationFailed(4)
-      }
+      let result = try allocateSync(length: 4 * x.count)
+      result.contents().copyMemory(from: bytes.baseAddress!, byteCount: 4 * x.count)
       return result
     }
   }
 
   internal func makeFloatBuffer(_ x: Float) throws -> MTLBuffer {
     var x = x
-    guard let result = (try device).makeBuffer(bytes: &x, length: 4, options: []) else {
-      throw BackendError.allocationFailed(4)
-    }
+    let result = try allocateSync(length: 4)
+    result.contents().copyMemory(from: &x, byteCount: 4)
     return result
   }
 

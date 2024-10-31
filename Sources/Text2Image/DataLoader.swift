@@ -178,9 +178,8 @@ class CaptionedSequenceDataLoader: Sequence, IteratorProtocol {
 
       let mask = (Tensor(rand: [1]) > dropProb).expand(as: textTokens)
       let maskedText = mask.when(isTrue: textTokens, isFalse: Tensor(zerosLike: textTokens))
-      let zeros = Tensor(zeros: [1], dtype: .int64)
 
-      return Tensor(concat: [zeros, maskedText, vqTokens])
+      return Tensor(concat: [maskedText, vqTokens])
     }
     throw DataError.datasetIsEmpty
   }

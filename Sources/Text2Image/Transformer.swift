@@ -5,7 +5,7 @@ import Honeycrisp
 struct TransformerConfig {
   var VocabSize: Int
   let TokenCount: Int
-  var LayerCount: Int = 4
+  var LayerCount: Int = 12
   var ModelDim: Int = 1024
   var HeadDim: Int = 64
 }
@@ -205,7 +205,7 @@ class Transformer: Trainable {
     var outputs: [Tensor] = []
     var prevToken = prefixes
     for _ in 0..<(config.TokenCount - prefixes.shape[1]) {
-      let logits = self(prevToken, kvCache: kvCache)[..., -1]
+      let logits = Tensor.withGrad(enabled: false) { self(prevToken, kvCache: kvCache)[..., -1] }
       let guidedLogits =
         if let cfgScale = cfgScale {
           {
@@ -226,7 +226,12 @@ class Transformer: Trainable {
       }
       outputs.append(prevToken)
     }
-    return Tensor(concat: outputs, axis: 1)
+    let seqs = Tensor(concat: outputs, axis: 1)
+    if cfgScale == nil {
+      return seqs
+    } else {
+      return seqs[..<(prefixes.shape[0] / 2)]
+    }
   }
 
   func paramNorm() async throws -> Float {

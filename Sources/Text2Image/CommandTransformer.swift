@@ -131,7 +131,10 @@ class CommandTransformer: Command {
   private func trainInnerLoop() async throws {
     func loss(_ batch: Tensor) -> Tensor {
       // We do not model the caption prefix, only the VQ tokens.
-      let outputs = model(batch[..., ..<(-1)])[..., (captionBytes-1)...]
+      // If we truncate the input, the dimensions aren't aligned well and slow
+      // down training significantly.
+      //     let outputs = model(batch[..., ..<(-1)])[..., (captionBytes - 1)...]
+      let outputs = model(batch)[..., (captionBytes - 1)..<(batch.shape[1] - 1)]
       let targets = batch[..., captionBytes...]
 
       let logProbs = outputs.logSoftmax(axis: -1)
@@ -145,7 +148,7 @@ class CommandTransformer: Command {
       step += 1
 
       let trainLoss = loss(batch.train.0)
-      let evalLoss = Tensor.withGrad(enabled: false) { loss(batch.train.0) }
+      let evalLoss = Tensor.withGrad(enabled: false) { loss(batch.eval.0) }
 
       trainLoss.backward()
       opt.step()

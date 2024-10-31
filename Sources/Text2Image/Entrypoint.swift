@@ -20,7 +20,7 @@ struct Main {
       return
     }
     do {
-      Backend.defaultBackend = try MPSBackend(allocator: .bucket)
+      Backend.defaultBackend = try MPSBackend()
       let runner = try command(Array(CommandLine.arguments[2...]))
       try await runner.run()
     } catch {

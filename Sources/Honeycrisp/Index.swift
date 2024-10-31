@@ -38,7 +38,7 @@ extension Int: TensorIndex {
     alwaysAssert(idx >= 0 && idx < inShape[0], "index \(self) out of range for size \(inShape[0])")
     return TensorIndexResult(
       reshape: inShape,
-      indices: Tensor(data: [self], shape: [1], dtype: .int64),
+      indices: Tensor(data: [idx], shape: [1], dtype: .int64),
       gatherAxis: 0,
       gatherReshape: []
     )
