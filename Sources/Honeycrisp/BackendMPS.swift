@@ -117,11 +117,11 @@ open class MPSBackend: CPUBackend {
       alwaysAssert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
 
       let functionName =
-        "\(dist == .normal ? "randn" : "rand")_\(dtype == .float16 ? "fp16" : "fp32")"
+        "\(dist == .normal ? "randn" : "rand")_\(MPSBackend.CastTypes[dtype]!)"
       let output = try await mpsBackend.allocate(length: count * dtype.byteSize)
 
       return try await mpsBackend.serialize { [self] in
-        let completion = try mpsBackend.completionBufferAndEncoder { buf, enc in
+        let completion = try mpsBackend.completionBufferAndEncoder(label: "sample") { buf, enc in
           let state = try mpsBackend.getFunction(name: functionName)
           try mpsBackend.setArguments(
             enc, .buffer(output), .uint(UInt32(seed)), .uint(UInt32(seed >> 32)),
@@ -183,10 +183,11 @@ open class MPSBackend: CPUBackend {
 
     // Lookup all functions in the library.
     var names = ["axis_permutation"]
-    for type in ["fp32", "fp16"] {
+    for type in ["half", "float"] {
       for op in [
         "vector_pow", "log", "recip", "exp", "sigmoid", "sigmoid_grad", "gelu", "gelu_grad", "sin",
-        "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "rand", "randn",
+        "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "rand", "randn", "normalize",
+        "normalize_var_grad", "normalize_x_grad",
       ] {
         names.append("\(op)_\(type)")
       }
@@ -201,7 +202,7 @@ open class MPSBackend: CPUBackend {
       }
     }
     for op in ["add", "sub", "mul", "div", "mod"] {
-      for type in ["fp16", "fp32"] {
+      for type in ["half", "float"] {
         for args in ["vv", "sv", "vs"] {
           names.append("\(op)\(args)_\(type)")
         }
@@ -210,6 +211,7 @@ open class MPSBackend: CPUBackend {
     for t1 in ["half", "float", "long"] {
       names.append("add_mul_\(t1)")
       names.append("mul_add_\(t1)")
+      names.append("clamp_\(t1)")
       for t2 in ["half", "float", "long"] {
         if t1 == t2 {
           continue
@@ -242,13 +244,13 @@ open class MPSBackend: CPUBackend {
   }
 
   override public func pow<T: NumericTensorElement>(
-    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, _ b: T, outScale: T, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     if dtype != .float16 && dtype != .float32 {
-      return try await super.pow(a, b, count: count, dtype: dtype)
+      return try await super.pow(a, b, outScale: outScale, count: count, dtype: dtype)
     }
 
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
@@ -256,11 +258,11 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder { buf, enc in
-        let funcName = "vector_pow_\(dtype == .float16 ? "fp16" : "fp32")"
+      let completion = try completionBufferAndEncoder(label: "pow") { buf, enc in
+        let funcName = "vector_pow_\(MPSBackend.CastTypes[dtype]!)"
         let state = try getFunction(name: funcName)
         try setArguments(
-          enc, .buffer(a.buffer), .buffer(output), .float(b.toFloat()),
+          enc, .buffer(a.buffer), .buffer(output), .float(b.toFloat()), .float(outScale.toFloat()),
           .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
       }
@@ -309,12 +311,12 @@ open class MPSBackend: CPUBackend {
       case .sigmoidGrad:
         "sigmoid_grad"
       }
-    let functionName = "\(namePrefix)_\(dtype == .float16 ? "fp16" : "fp32")"
+    let functionName = "\(namePrefix)_\(MPSBackend.CastTypes[dtype]!)"
     let output = try await allocate(length: count * dtype.byteSize)
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder { buf, enc in
+      let completion = try completionBufferAndEncoder(label: "elemwise") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(enc, .buffer(a.buffer), .buffer(output), .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
@@ -348,18 +350,23 @@ open class MPSBackend: CPUBackend {
       case .mod:
         "mod"
       }
-    let functionName = "\(opName)vv_\(dtype == .float16 ? "fp16" : "fp32")"
+    let functionName = "\(opName)vv_\(MPSBackend.CastTypes[dtype]!)"
     let output = try await allocate(length: count * dtype.byteSize)
 
     try await waitForGPUData(a.data, b.data)
     return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder { buf, enc in
+      let completion = try completionBufferAndEncoder(label: "binaryOp") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .buffer(a.data.buffer), .buffer(b.data.buffer), .buffer(output),
-          .uint(UInt32(a.strides.dataCount)), .uint(UInt32(a.strides.innerRepeats)),
-          .uint(UInt32(b.strides.dataCount)), .uint(UInt32(b.strides.innerRepeats)),
-          .uint(UInt32(count)))
+          .opaque(
+            (
+              UInt32(a.strides.dataCount),
+              UInt32(a.strides.innerRepeats),
+              UInt32(b.strides.dataCount),
+              UInt32(b.strides.innerRepeats),
+              UInt32(count)
+            )))
         dispatch1D(enc, state: state, threadCount: count)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
@@ -391,12 +398,12 @@ open class MPSBackend: CPUBackend {
       case .mod:
         "mod"
       }
-    let functionName = "\(opName)vs_\(dtype == .float16 ? "fp16" : "fp32")"
+    let functionName = "\(opName)vs_\(MPSBackend.CastTypes[dtype]!)"
     let output = try await allocate(length: count * dtype.byteSize)
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder { buf, enc in
+      let completion = try completionBufferAndEncoder(label: "binaryOp") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .buffer(a.buffer), .float(b.toFloat()), .buffer(output), .uint(UInt32(count)))
@@ -431,12 +438,12 @@ open class MPSBackend: CPUBackend {
       case .mod:
         "mod"
       }
-    let functionName = "\(opName)sv_\(dtype == .float16 ? "fp16" : "fp32")"
+    let functionName = "\(opName)sv_\(MPSBackend.CastTypes[dtype]!)"
     let output = try await allocate(length: count * dtype.byteSize)
 
     try await waitForGPUData(b)
     return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder { buf, enc in
+      let completion = try completionBufferAndEncoder(label: "binaryOp") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .float(a.toFloat()), .buffer(b.buffer), .buffer(output), .uint(UInt32(count)))
@@ -486,7 +493,7 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(input.data, a.data, b.data)
     return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder { buf, enc in
+      let completion = try completionBufferAndEncoder(label: "addMulOrMulAdd") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .buffer(input.data.buffer), .buffer(a.data.buffer), .buffer(b.data.buffer),
@@ -495,6 +502,129 @@ open class MPSBackend: CPUBackend {
           .uint(UInt32(a.strides.dataCount)), .uint(UInt32(a.strides.innerRepeats)),
           .uint(UInt32(b.strides.dataCount)), .uint(UInt32(b.strides.innerRepeats)),
           .uint(UInt32(count)))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  override public func normalize<T: TensorElement>(
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    alwaysAssert(count <= UInt32.max, "normalize cannot operate on as many as \(count) values")
+    guard let typeName = MPSBackend.CastTypes[dtype] else {
+      return try await super.normalize(
+        input: input, mean: mean, variance: variance, epsilon: epsilon, count: count, dtype: dtype)
+    }
+    let functionName = "normalize_\(typeName)"
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    try await waitForGPUData(input.data, mean.data, variance.data)
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(label: "normalize") { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc, .buffer(input.data.buffer), .buffer(mean.data.buffer), .buffer(variance.data.buffer),
+          .buffer(output),
+          .opaque(
+            (
+              epsilon.toFloat(),
+              UInt32(input.strides.dataCount),
+              UInt32(input.strides.innerRepeats),
+              UInt32(mean.strides.dataCount),
+              UInt32(mean.strides.innerRepeats),
+              UInt32(variance.strides.dataCount),
+              UInt32(variance.strides.innerRepeats),
+              UInt32(count)
+            ))
+        )
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  override public func normalizeXGrad<T: TensorElement>(
+    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    alwaysAssert(
+      count <= UInt32.max, "normalizeXGrad cannot operate on as many as \(count) values")
+    guard let typeName = MPSBackend.CastTypes[dtype] else {
+      return try await super.normalizeXGrad(
+        variance: variance, outGrad: outGrad, epsilon: epsilon, sign: sign, count: count,
+        dtype: dtype)
+    }
+    let functionName = "normalize_x_grad_\(typeName)"
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    try await waitForGPUData(variance.data, outGrad.data)
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(label: "normalizeXGrad") { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc, .buffer(variance.data.buffer), .buffer(outGrad.data.buffer),
+          .buffer(output),
+          .opaque(
+            (
+              epsilon.toFloat(),
+              sign.toFloat(),
+              UInt32(variance.strides.dataCount),
+              UInt32(variance.strides.innerRepeats),
+              UInt32(outGrad.strides.dataCount),
+              UInt32(outGrad.strides.innerRepeats),
+              UInt32(count)
+            )))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  override public func normalizeVarianceGrad<T: TensorElement>(
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
+    epsilon: T, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    alwaysAssert(
+      count <= UInt32.max, "normalizeVarianceGrad cannot operate on as many as \(count) values")
+    guard let typeName = MPSBackend.CastTypes[dtype] else {
+      return try await super.normalize(
+        input: input, mean: mean, variance: variance, epsilon: epsilon, count: count, dtype: dtype)
+    }
+    let functionName = "normalize_var_grad_\(typeName)"
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    try await waitForGPUData(input.data, mean.data, variance.data, outGrad.data)
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(label: "normalizeVarianceGrad") { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc, .buffer(input.data.buffer), .buffer(mean.data.buffer), .buffer(variance.data.buffer),
+          .buffer(outGrad.data.buffer),
+          .buffer(output),
+          .opaque(
+            (
+              epsilon.toFloat(),
+              UInt32(input.strides.dataCount),
+              UInt32(input.strides.innerRepeats),
+              UInt32(mean.strides.dataCount),
+              UInt32(mean.strides.innerRepeats),
+              UInt32(variance.strides.dataCount),
+              UInt32(variance.strides.innerRepeats),
+              UInt32(outGrad.strides.dataCount),
+              UInt32(outGrad.strides.innerRepeats),
+              UInt32(count)
+            )))
         dispatch1D(enc, state: state, threadCount: count)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
@@ -518,9 +648,46 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder { buf, enc in
+      let completion = try completionBufferAndEncoder(label: "cast") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(enc, .buffer(a.buffer), .buffer(output), .uint(UInt32(count)))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+    }
+  }
+
+  override public func clamp<T: NumericTensorElement>(
+    _ a: Tensor.Data, min: T?, max: T?, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    guard let typeName = MPSBackend.CastTypes[dtype] else {
+      return try await super.clamp(a, min: min, max: max, count: count, dtype: dtype)
+    }
+    alwaysAssert(count <= UInt32.max, "cannot apply clamp() to \(count) values")
+
+    let functionName = "clamp_\(typeName)"
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    try await waitForGPUData(a)
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(label: "clamp") { buf, enc in
+        let state = try getFunction(name: functionName)
+        if dtype == .int64 {
+          try setArguments(
+            enc, .buffer(a.buffer), .buffer(output), .int64(min?.toInt64() ?? 0),
+            .int64(max?.toInt64() ?? 0), .uint(UInt32(min != nil ? 1 : 0)),
+            .uint(UInt32(max != nil ? 1 : 1)),
+            .uint(UInt32(count)))
+        } else {
+          try setArguments(
+            enc, .buffer(a.buffer), .buffer(output), .float(min?.toFloat() ?? 0),
+            .float(max?.toFloat() ?? 0), .uint(UInt32(min != nil ? 1 : 0)),
+            .uint(UInt32(max != nil ? 1 : 0)),
+            .uint(UInt32(count)))
+        }
         dispatch1D(enc, state: state, threadCount: count)
       }
       return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
@@ -544,15 +711,13 @@ open class MPSBackend: CPUBackend {
 
     try await waitForGPUData(a)
     return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder { buf, enc in
+      let completion = try completionBufferAndEncoder(label: "repeated") { buf, enc in
         let state = try getFunction(name: "repeat_\(typeName)")
         try setArguments(
           enc,
           .buffer(a.buffer),
           .buffer(output),
-          .uint(UInt32(dims.innerCount)),
-          .uint(UInt32(dims.outerCount)),
-          .uint(UInt32(dims.repeatCount))
+          .opaque((UInt32(dims.innerCount), UInt32(dims.outerCount), UInt32(dims.repeatCount)))
         )
         dispatch1D(enc, state: state, threadCount: outCount)
       }
@@ -576,7 +741,7 @@ open class MPSBackend: CPUBackend {
     let typeName = dtype.metalSizeType
 
     return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder { buf, enc in
+      let completion = try completionBufferAndEncoder(label: "concat") { buf, enc in
         for (i, innerCount) in innerCounts.enumerated() {
           let offset = innerCounts[..<i].sum()
           let state = try getFunction(name: "strided_copy_\(typeName)")
@@ -584,10 +749,7 @@ open class MPSBackend: CPUBackend {
             enc,
             .buffer(inputs[i].buffer),
             .buffer(buffer),
-            .uint(UInt32(innerCount)),
-            .uint(UInt32(totalInner)),
-            .uint(UInt32(outerCount)),
-            .uint(UInt32(offset))
+            .opaque((UInt32(innerCount), UInt32(totalInner), UInt32(outerCount), UInt32(offset)))
           )
           dispatch1D(enc, state: state, threadCount: innerCount * outerCount)
         }
@@ -605,7 +767,7 @@ open class MPSBackend: CPUBackend {
     try await waitForGPUData(a, s.indices)
     let output = try await allocate(length: s.gatherOutCount * dtype.byteSize)
     return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder { buf, enc in
+      let completion = try completionBufferAndEncoder(label: "gather") { buf, enc in
         let typeName = dtype.metalSizeType
         let functionName = "gather\(s.broadcasted ? "_bcast" : "")_\(typeName)"
         let state = try getFunction(name: functionName)
@@ -638,7 +800,7 @@ open class MPSBackend: CPUBackend {
     if let mpsDType = dtype.mpsDType {
       return try await serialize { [self] in
         let scatter = self.createScatter(scatter: s, dtype: mpsDType)
-        let completion = completionBuffer { buf in
+        let completion = completionBuffer(label: "scatter") { buf in
           scatter.graph.encode(
             to: buf as! MPSCommandBuffer,
             feeds: [
@@ -669,7 +831,7 @@ open class MPSBackend: CPUBackend {
     let needsAddition = try await allocate(length: 4)
 
     let result = try await serialize { [self] in
-      let completion = try completionBufferAndEncoder { buf, enc in
+      let completion = try completionBufferAndEncoder(label: "scatter") { buf, enc in
         let typeName = dtype.metalSizeType
         let functionName = "scatter\(s.broadcasted ? "_bcast" : "")_\(typeName)"
         let state = try getFunction(name: functionName)
@@ -742,7 +904,7 @@ open class MPSBackend: CPUBackend {
       let newShape = permutation.map { shape[$0] }
       let newStrides = stridesForShape(newShape)
 
-      let completion = try completionBufferAndEncoder { buf, enc in
+      let completion = try completionBufferAndEncoder(label: "axisPermutation") { buf, enc in
         let functionName = "axis_permutation"
         let state = try getFunction(name: functionName)
         try setArguments(
@@ -775,7 +937,7 @@ open class MPSBackend: CPUBackend {
     try await waitForGPUData(a)
     return try await serialize { [self] in
       let red = self.createReduction(op: op, dims: dims, dtype: mpsDType)
-      let completion = completionBuffer { buf in
+      let completion = completionBuffer(label: "reduce") { buf in
         red.graph.encode(
           to: buf as! MPSCommandBuffer,
           feeds: [
@@ -846,7 +1008,7 @@ open class MPSBackend: CPUBackend {
     return try await serialize { [self] in
       let op = self.createLogSoftmax(
         outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: mpsDType)
-      let completion = completionBuffer { buf in
+      let completion = completionBuffer(label: "logSoftmax") { buf in
         op.graph.encode(
           to: buf as! MPSCommandBuffer,
           feeds: [
@@ -918,7 +1080,7 @@ open class MPSBackend: CPUBackend {
     return try await serialize { [self] in
       let op = self.createLogSoftmaxGrad(
         outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: mpsDType)
-      let completion = completionBuffer { buf in
+      let completion = completionBuffer(label: "logSoftmaxGrad") { buf in
         op.graph.encode(
           to: buf as! MPSCommandBuffer,
           feeds: [
@@ -1018,7 +1180,7 @@ open class MPSBackend: CPUBackend {
       let mm = self.createMatmul(
         transA: transA, transB: transB, batch: matrixCount, rows: rows, inner: inner, cols: cols,
         dtype: mpsDType)
-      let completion = completionBuffer { buf in
+      let completion = completionBuffer(label: "batchedMatmul") { buf in
         alwaysAssert(
           a.buffer.allocatedSize >= matrixCount * aShape.0 * aShape.1 * dtype.byteSize,
           "matrix A buffer underflow")
@@ -1128,7 +1290,7 @@ open class MPSBackend: CPUBackend {
     return try await serialize { [self] in
       let op = try self.createConv2D(
         config, batch: batch, kind: transpose ? .transpose : .forward, dtype: mpsDType)
-      let completion = completionBuffer { buf in
+      let completion = completionBuffer(label: "conv2D") { buf in
         alwaysAssert(
           image.buffer.allocatedSize >= imageShape.product() * dtype.byteSize,
           "input image buffer underflow")
@@ -1240,7 +1402,7 @@ open class MPSBackend: CPUBackend {
     try await waitForGPUData(image, outGrad)
     return try await serialize { [self] in
       let op = try self.createConv2D(config, batch: batch, kind: .kernelGrad, dtype: mpsDType)
-      let completion = completionBuffer { buf in
+      let completion = completionBuffer(label: "conv2DKernelGrad") { buf in
         alwaysAssert(
           image.buffer.allocatedSize >= imageShape.product() * dtype.byteSize,
           "input image buffer underflow")
@@ -1360,7 +1522,9 @@ open class MPSBackend: CPUBackend {
     case uint(UInt32)
     case uints([UInt32])
     case float(Float)
+    case int64(Int64)
     case buffer(any MTLBuffer)
+    case data(Data)
 
     internal func intoBuffer(_ b: MPSBackend) throws -> MTLBuffer {
       switch self {
@@ -1370,9 +1534,18 @@ open class MPSBackend: CPUBackend {
         try b.makeUIntBuffer(x)
       case .float(let x):
         try b.makeFloatBuffer(x)
+      case .int64(let x):
+        try b.makeInt64Buffer(x)
       case .buffer(let x):
         x
+      case .data(let x):
+        try b.makeDataBuffer(x)
       }
+    }
+
+    static func opaque<T>(_ x: T) -> KernelArgument {
+      var x = x
+      return .data(withUnsafeBytes(of: &x) { Data($0) })
     }
   }
 
@@ -1427,6 +1600,21 @@ open class MPSBackend: CPUBackend {
     return result
   }
 
+  internal func makeInt64Buffer(_ x: Int64) throws -> MTLBuffer {
+    var x = x
+    let result = try allocateSync(length: 8)
+    result.contents().copyMemory(from: &x, byteCount: 8)
+    return result
+  }
+
+  internal func makeDataBuffer(_ x: Data) throws -> MTLBuffer {
+    let result = try allocateSync(length: x.count)
+    x.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+      result.contents().copyMemory(from: bytes.baseAddress!, byteCount: x.count)
+    }
+    return result
+  }
+
   class CompletionCallback {
     private var lock: NSLock = NSLock()
     private var _result: Result<(), Error>? = nil
@@ -1458,10 +1646,14 @@ open class MPSBackend: CPUBackend {
     }
   }
 
-  internal func completionBuffer(_ action: (MTLCommandBuffer) throws -> Void) rethrows -> Task<
-    (), Error
-  > {
-    let buf = MPSCommandBuffer(commandBuffer: commandQueue!.makeCommandBuffer()!)
+  internal func completionBuffer(label: String, _ action: (MTLCommandBuffer) throws -> Void)
+    rethrows -> Task<
+      (), Error
+    >
+  {
+    let rawBuf = commandQueue!.makeCommandBuffer()!
+    rawBuf.label = label
+    let buf = MPSCommandBuffer(commandBuffer: rawBuf)
     try action(buf)
     let cb = CompletionCallback()
     buf.addCompletedHandler { _ in
@@ -1482,16 +1674,21 @@ open class MPSBackend: CPUBackend {
   }
 
   internal func completionBufferAndEncoder(
-    _ action: (MTLCommandBuffer, MTLComputeCommandEncoder) throws -> Void
+    label: String, _ action: (MTLCommandBuffer, MTLComputeCommandEncoder) throws -> Void
   ) throws -> Task<
     (), Error
   > {
-    try completionBuffer { buf in
+    try completionBuffer(label: label) { buf in
       guard let computeEncoder = buf.makeComputeCommandEncoder() else {
         throw BackendError.kernelFailed("could not create compute encoder")
       }
-      try action(buf, computeEncoder)
-      computeEncoder.endEncoding()
+      do {
+        try action(buf, computeEncoder)
+        computeEncoder.endEncoding()
+      } catch {
+        computeEncoder.endEncoding()
+        throw error
+      }
     }
   }
 
@@ -1514,147 +1711,220 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      #define BINARY_KERNELS(name, expr) \
-          kernel void name##vv_fp16(device const half* a [[buffer(0)]], \
-                                    device const half* b [[buffer(1)]], \
-                                    device half* c [[buffer(2)]], \
-                                    constant uint &aCount [[buffer(3)]], \
-                                    constant uint &aDiv [[buffer(4)]], \
-                                    constant uint &bCount [[buffer(5)]], \
-                                    constant uint &bDiv [[buffer(6)]], \
-                                    constant uint &N [[buffer(7)]], \
-                                    uint id [[thread_position_in_grid]]) { \
-            if (id < N) { \
-              half x = a[(id / aDiv) % aCount]; \
-              half y = b[(id / bDiv) % bCount]; \
-              c[id] = expr; \
-            } \
-          } \
-          kernel void name##vv_fp32(device const float* a [[buffer(0)]], \
-                                    device const float* b [[buffer(1)]], \
-                                    device float* c [[buffer(2)]], \
-                                    constant uint &aCount [[buffer(3)]], \
-                                    constant uint &aDiv [[buffer(4)]], \
-                                    constant uint &bCount [[buffer(5)]], \
-                                    constant uint &bDiv [[buffer(6)]], \
-                                    constant uint &N [[buffer(7)]], \
-                                    uint id [[thread_position_in_grid]]) { \
-            if (id < N) { \
-              float x = a[(id / aDiv) % aCount]; \
-              float y = b[(id / bDiv) % bCount]; \
-              c[id] = expr; \
-            } \
-          } \
-          kernel void name##vs_fp16(device const half* a [[buffer(0)]], \
-                                    device const float& b [[buffer(1)]], \
-                                    device half* c [[buffer(2)]], \
-                                    constant uint &N [[buffer(3)]], \
-                                    uint id [[thread_position_in_grid]]) { \
-            if (id < N) { \
-              half x = a[id]; \
-              half y = (half)b; \
-              c[id] = expr; \
-            } \
-          } \
-          kernel void name##vs_fp32(device const float* a [[buffer(0)]], \
-                                    device const float& b [[buffer(1)]], \
-                                    device float* c [[buffer(2)]], \
-                                    constant uint &N [[buffer(3)]], \
-                                    uint id [[thread_position_in_grid]]) { \
-            if (id < N) { \
-              float x = a[id]; \
-              float y = b; \
-              c[id] = expr; \
-            } \
-          } \
-          kernel void name##sv_fp16(device const float& a [[buffer(0)]], \
-                                    device const half* b [[buffer(1)]], \
-                                    device half* c [[buffer(2)]], \
-                                    constant uint &N [[buffer(3)]], \
-                                    uint id [[thread_position_in_grid]]) { \
-            if (id < N) { \
-              half x = (half)a; \
-              half y = b[id]; \
-              c[id] = expr; \
-            } \
-          } \
-          kernel void name##sv_fp32(device const float& a [[buffer(0)]], \
-                                    device const float* b [[buffer(1)]], \
-                                    device float* c [[buffer(2)]], \
-                                    constant uint &N [[buffer(3)]], \
-                                    uint id [[thread_position_in_grid]]) { \
-            if (id < N) { \
-              float x = a; \
-              float y = b[id]; \
-              c[id] = expr; \
-            } \
-          } \
+      #define BINARY_KERNELS(name, expr, type) \\
+          struct name##vv_args_##type { \\
+              uint aCount; \\
+              uint aDiv; \\
+              uint bCount; \\
+              uint bDiv; \\
+              uint N; \\
+          }; \\
+          kernel void name##vv_##type(device const type* a [[buffer(0)]], \\
+                                      device const type* b [[buffer(1)]], \\
+                                      device type* c [[buffer(2)]], \\
+                                      constant struct name##vv_args_##type &args [[buffer(3)]], \\
+                                      uint id [[thread_position_in_grid]]) { \\
+            if (id < args.N) { \\
+              type x = a[(id / args.aDiv) % args.aCount]; \\
+              type y = b[(id / args.bDiv) % args.bCount]; \\
+              c[id] = expr; \\
+            } \\
+          } \\
+          kernel void name##vs_##type(device const type* a [[buffer(0)]], \\
+                                    device const float& b [[buffer(1)]], \\
+                                    device type* c [[buffer(2)]], \\
+                                    constant uint &N [[buffer(3)]], \\
+                                    uint id [[thread_position_in_grid]]) { \\
+            if (id < N) { \\
+              type x = a[id]; \\
+              type y = (type)b; \\
+              c[id] = expr; \\
+            } \\
+          } \\
+          kernel void name##sv_##type(device const float& a [[buffer(0)]], \\
+                                      device const type* b [[buffer(1)]], \\
+                                      device type* c [[buffer(2)]], \\
+                                      constant uint &N [[buffer(3)]], \\
+                                      uint id [[thread_position_in_grid]]) { \\
+            if (id < N) { \\
+              type x = (type)a; \\
+              type y = b[id]; \\
+              c[id] = expr; \\
+            } \\
+          }
 
-      BINARY_KERNELS(add, x+y)
-      BINARY_KERNELS(sub, x-y)
-      BINARY_KERNELS(mul, x*y)
-      BINARY_KERNELS(div, x/y)
-      BINARY_KERNELS(mod, (pythonFmod(x,y)))
+      BINARY_KERNELS(add, x+y, float)
+      BINARY_KERNELS(sub, x-y, float)
+      BINARY_KERNELS(mul, x*y, float)
+      BINARY_KERNELS(div, x/y, float)
+      BINARY_KERNELS(mod, (pythonFmod(x,y)), float)
+      BINARY_KERNELS(add, x+y, half)
+      BINARY_KERNELS(sub, x-y, half)
+      BINARY_KERNELS(mul, x*y, half)
+      BINARY_KERNELS(div, x/y, half)
+      BINARY_KERNELS(mod, (pythonFmod(x,y)), half)
 
-      #define DEFINE_FUSED_ADD_MUL(type) \
-          kernel void add_mul_##type(device const type* a [[buffer(0)]], \
-                                     device const type* b [[buffer(1)]], \
-                                     device const type* c [[buffer(2)]], \
-                                     device type* output [[buffer(3)]], \
-                                     constant uint &aCount [[buffer(4)]], \
-                                     constant uint &aDiv [[buffer(5)]], \
-                                     constant uint &bCount [[buffer(6)]], \
-                                     constant uint &bDiv [[buffer(7)]], \
-                                     constant uint &cCount [[buffer(8)]], \
-                                     constant uint &cDiv [[buffer(9)]], \
-                                     constant uint &N [[buffer(10)]], \
-                                     uint id [[thread_position_in_grid]]) { \
-              if (id < N) { \
-                  output[id] = (a[(id / aDiv) % aCount] + b[(id / bDiv) % bCount]) * c[(id / cDiv) % cCount]; \
-              } \
-          } \
-          kernel void mul_add_##type(device const type* a [[buffer(0)]], \
-                                     device const type* b [[buffer(1)]], \
-                                     device const type* c [[buffer(2)]], \
-                                     device type* output [[buffer(3)]], \
-                                     constant uint &aCount [[buffer(4)]], \
-                                     constant uint &aDiv [[buffer(5)]], \
-                                     constant uint &bCount [[buffer(6)]], \
-                                     constant uint &bDiv [[buffer(7)]], \
-                                     constant uint &cCount [[buffer(8)]], \
-                                     constant uint &cDiv [[buffer(9)]], \
-                                     constant uint &N [[buffer(10)]], \
-                                     uint id [[thread_position_in_grid]]) { \
-              if (id < N) { \
-                  output[id] = (a[(id / aDiv) % aCount] * b[(id / bDiv) % bCount]) + c[(id / cDiv) % cCount]; \
-              } \
+      #define DEFINE_FUSED_ADD_MUL(type) \\
+          kernel void add_mul_##type(device const type* a [[buffer(0)]], \\
+                                     device const type* b [[buffer(1)]], \\
+                                     device const type* c [[buffer(2)]], \\
+                                     device type* output [[buffer(3)]], \\
+                                     constant uint &aCount [[buffer(4)]], \\
+                                     constant uint &aDiv [[buffer(5)]], \\
+                                     constant uint &bCount [[buffer(6)]], \\
+                                     constant uint &bDiv [[buffer(7)]], \\
+                                     constant uint &cCount [[buffer(8)]], \\
+                                     constant uint &cDiv [[buffer(9)]], \\
+                                     constant uint &N [[buffer(10)]], \\
+                                     uint id [[thread_position_in_grid]]) { \\
+              if (id < N) { \\
+                  output[id] = (a[(id / aDiv) % aCount] + b[(id / bDiv) % bCount]) * c[(id / cDiv) % cCount]; \\
+              } \\
+          } \\
+          kernel void mul_add_##type(device const type* a [[buffer(0)]], \\
+                                     device const type* b [[buffer(1)]], \\
+                                     device const type* c [[buffer(2)]], \\
+                                     device type* output [[buffer(3)]], \\
+                                     constant uint &aCount [[buffer(4)]], \\
+                                     constant uint &aDiv [[buffer(5)]], \\
+                                     constant uint &bCount [[buffer(6)]], \\
+                                     constant uint &bDiv [[buffer(7)]], \\
+                                     constant uint &cCount [[buffer(8)]], \\
+                                     constant uint &cDiv [[buffer(9)]], \\
+                                     constant uint &N [[buffer(10)]], \\
+                                     uint id [[thread_position_in_grid]]) { \\
+              if (id < N) { \\
+                  output[id] = (a[(id / aDiv) % aCount] * b[(id / bDiv) % bCount]) + c[(id / cDiv) % cCount]; \\
+              } \\
           }
 
       DEFINE_FUSED_ADD_MUL(long)
       DEFINE_FUSED_ADD_MUL(float)
       DEFINE_FUSED_ADD_MUL(half)
 
-      kernel void vector_pow_fp16(device const half* input [[buffer(0)]],
+      #define DEFINE_NORMALIZE(type) \\
+          struct normalize_args_##type { \\
+            float epsilon; \\
+            uint inputCount; \\
+            uint inputDiv; \\
+            uint meanCount; \\
+            uint meanDiv; \\
+            uint varianceCount; \\
+            uint varianceDiv; \\
+            uint N; \\
+          }; \\
+          struct normalize_x_grad_args_##type { \\
+            float epsilon; \\
+            float sign; \\
+            uint varianceCount; \\
+            uint varianceDiv; \\
+            uint outGradCount; \\
+            uint outGradDiv; \\
+            uint N; \\
+          }; \\
+          struct normalize_var_grad_args_##type { \\
+            float epsilon; \\
+            uint inputCount; \\
+            uint inputDiv; \\
+            uint meanCount; \\
+            uint meanDiv; \\
+            uint varianceCount; \\
+            uint varianceDiv; \\
+            uint outGradCount; \\
+            uint outGradDiv; \\
+            uint N; \\
+          }; \\
+          kernel void normalize_##type(device const type* input [[buffer(0)]], \\
+                                       device const type* mean [[buffer(1)]], \\
+                                       device const type* variance [[buffer(2)]], \\
+                                       device type* output [[buffer(3)]], \\
+                                       constant struct normalize_args_##type &args [[buffer(4)]], \\
+                                       uint id [[thread_position_in_grid]]) { \\
+                if (id < args.N) { \\
+                    type x = input[(id / args.inputDiv) % args.inputCount]; \\
+                    type mu = mean[(id / args.meanDiv) % args.meanCount]; \\
+                    type sig = variance[(id / args.varianceDiv) % args.varianceCount]; \\
+                    output[id] = (x - mu) / (type)sqrt((float)sig + args.epsilon); \\
+                } \\
+            } \\
+            kernel void normalize_x_grad_##type(device const type* variance [[buffer(0)]], \\
+                                                device const type* outGrad [[buffer(1)]], \\
+                                                device type* output [[buffer(2)]], \\
+                                                constant struct normalize_x_grad_args_##type &args [[buffer(3)]], \\
+                                                uint id [[thread_position_in_grid]]) { \\
+                if (id < args.N) { \\
+                    type sig = variance[(id / args.varianceDiv) % args.varianceCount]; \\
+                    type g = outGrad[(id / args.outGradDiv) % args.outGradCount]; \\
+                    output[id] = args.sign * g / (type)sqrt((float)sig + args.epsilon); \\
+                } \\
+            } \\
+            kernel void normalize_var_grad_##type(device const type* input [[buffer(0)]], \\
+                                                  device const type* mean [[buffer(1)]], \\
+                                                  device const type* variance [[buffer(2)]], \\
+                                                  device const type* outGrad [[buffer(3)]], \\
+                                                  device type* output [[buffer(4)]], \\
+                                                  constant struct normalize_var_grad_args_##type &args [[buffer(5)]], \\
+                                                  uint id [[thread_position_in_grid]]) { \\
+                if (id < args.N) { \\
+                    type x = input[(id / args.inputDiv) % args.inputCount]; \\
+                    type mu = mean[(id / args.meanDiv) % args.meanCount]; \\
+                    type sig = variance[(id / args.varianceDiv) % args.varianceCount]; \\
+                    type g = outGrad[(id / args.outGradDiv) % args.outGradCount]; \\
+                    output[id] = -g * 0.5 * (x - mu) * (type)pow((float)sig + args.epsilon, -1.5); \\
+                } \\
+            }
+
+      DEFINE_NORMALIZE(half)
+      DEFINE_NORMALIZE(float)
+
+      #define DEFINE_CLAMP(type, minMaxType) \\
+          kernel void clamp_##type(device const type* a [[buffer(0)]], \\
+                                   device type* output [[buffer(1)]], \\
+                                   device minMaxType& min [[buffer(2)]], \\
+                                   device minMaxType& max [[buffer(3)]], \\
+                                   device uint& hasMin [[buffer(4)]], \\
+                                   device uint& hasMax [[buffer(5)]], \\
+                                   constant uint &N [[buffer(6)]], \\
+                                   uint id [[thread_position_in_grid]]) { \\
+                  if (id < N) { \\
+                      float input = a[id]; \\
+                      if (hasMin && input < (type)min) { \\
+                          input = (type)min; \\
+                      } \\
+                      if (hasMax && input > (type)max) { \\
+                          input = (type)max; \\
+                      } \\
+                      output[id] = input; \\
+                  } \\
+              }
+
+      DEFINE_CLAMP(float, float)
+      DEFINE_CLAMP(long, long)
+      DEFINE_CLAMP(half, float)
+
+      kernel void vector_pow_half(device const half* input [[buffer(0)]],
                                   device half* output [[buffer(1)]],
                                   constant float &exponent [[buffer(2)]],
-                                  constant uint &N [[buffer(3)]],
+                                  constant float &outScale [[buffer(3)]],
+                                  constant uint &N [[buffer(4)]],
                                   uint id [[thread_position_in_grid]]) {
         if (id < N) {
-            output[id] = half(pow(float(input[id]), exponent));
+            output[id] = half(outScale * pow(float(input[id]), exponent));
         }
       }
 
-      kernel void vector_pow_fp32(device const float* input [[buffer(0)]],
+      kernel void vector_pow_float(device const float* input [[buffer(0)]],
                                   device float* output [[buffer(1)]],
                                   constant float &exponent [[buffer(2)]],
-                                  constant uint &N [[buffer(3)]],
+                                  constant float &outScale [[buffer(3)]],
+                                  constant uint &N [[buffer(4)]],
                            uint id [[thread_position_in_grid]]) {
         if (id < N) {
-            output[id] = pow(input[id], exponent);
+            output[id] = outScale * pow(input[id], exponent);
         }
       }
 
-      kernel void log_fp16(device const half* input [[buffer(0)]],
+      kernel void log_half(device const half* input [[buffer(0)]],
                            device half* output [[buffer(1)]],
                            constant uint &N [[buffer(2)]],
                            uint id [[thread_position_in_grid]]) {
@@ -1663,7 +1933,7 @@ open class MPSBackend: CPUBackend {
         }
       }
 
-      kernel void log_fp32(device const float* input [[buffer(0)]],
+      kernel void log_float(device const float* input [[buffer(0)]],
                            device float* output [[buffer(1)]],
                            constant uint &N [[buffer(2)]],
                            uint id [[thread_position_in_grid]]) {
@@ -1672,7 +1942,7 @@ open class MPSBackend: CPUBackend {
         }
       }
 
-      kernel void recip_fp16(device const half* input [[buffer(0)]],
+      kernel void recip_half(device const half* input [[buffer(0)]],
                              device half* output [[buffer(1)]],
                              constant uint &N [[buffer(2)]],
                              uint id [[thread_position_in_grid]]) {
@@ -1681,7 +1951,7 @@ open class MPSBackend: CPUBackend {
         }
       }
 
-      kernel void recip_fp32(device const float* input [[buffer(0)]],
+      kernel void recip_float(device const float* input [[buffer(0)]],
                              device float* output [[buffer(1)]],
                              constant uint &N [[buffer(2)]],
                              uint id [[thread_position_in_grid]]) {
@@ -1690,7 +1960,7 @@ open class MPSBackend: CPUBackend {
         }
       }
 
-      kernel void exp_fp16(device const half* input [[buffer(0)]],
+      kernel void exp_half(device const half* input [[buffer(0)]],
                            device half* output [[buffer(1)]],
                            constant uint &N [[buffer(2)]],
                            uint id [[thread_position_in_grid]]) {
@@ -1699,7 +1969,7 @@ open class MPSBackend: CPUBackend {
         }
       }
 
-      kernel void exp_fp32(device const float* input [[buffer(0)]],
+      kernel void exp_float(device const float* input [[buffer(0)]],
                            device float* output [[buffer(1)]],
                            constant uint &N [[buffer(2)]],
                            uint id [[thread_position_in_grid]]) {
@@ -1708,7 +1978,7 @@ open class MPSBackend: CPUBackend {
         }
       }
 
-      kernel void sigmoid_fp16(device const half* input [[buffer(0)]],
+      kernel void sigmoid_half(device const half* input [[buffer(0)]],
                                device half* output [[buffer(1)]],
                                constant uint &N [[buffer(2)]],
                                uint id [[thread_position_in_grid]]) {
@@ -1717,7 +1987,7 @@ open class MPSBackend: CPUBackend {
         }
       }
 
-      kernel void sigmoid_fp32(device const float* input [[buffer(0)]],
+      kernel void sigmoid_float(device const float* input [[buffer(0)]],
                                device float* output [[buffer(1)]],
                                constant uint &N [[buffer(2)]],
                                uint id [[thread_position_in_grid]]) {
@@ -1726,7 +1996,7 @@ open class MPSBackend: CPUBackend {
         }
       }
 
-      kernel void sigmoid_grad_fp16(device const half* input [[buffer(0)]],
+      kernel void sigmoid_grad_half(device const half* input [[buffer(0)]],
                                     device half* output [[buffer(1)]],
                                     constant uint &N [[buffer(2)]],
                                     uint id [[thread_position_in_grid]]) {
@@ -1736,7 +2006,7 @@ open class MPSBackend: CPUBackend {
         }
       }
 
-      kernel void sigmoid_grad_fp32(device const float* input [[buffer(0)]],
+      kernel void sigmoid_grad_float(device const float* input [[buffer(0)]],
                                     device float* output [[buffer(1)]],
                                     constant uint &N [[buffer(2)]],
                                     uint id [[thread_position_in_grid]]) {
@@ -1746,7 +2016,7 @@ open class MPSBackend: CPUBackend {
         }
       }
 
-      kernel void gelu_fp32(device const float* input [[buffer(0)]],
+      kernel void gelu_float(device const float* input [[buffer(0)]],
                             device float* output [[buffer(1)]],
                             constant uint &N [[buffer(2)]],
                             uint id [[thread_position_in_grid]]) {
@@ -1756,7 +2026,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void gelu_fp16(device const half* input [[buffer(0)]],
+      kernel void gelu_half(device const half* input [[buffer(0)]],
                             device half* output [[buffer(1)]],
                             constant uint &N [[buffer(2)]],
                             uint id [[thread_position_in_grid]]) {
@@ -1766,7 +2036,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void gelu_grad_fp32(device const float* input [[buffer(0)]],
+      kernel void gelu_grad_float(device const float* input [[buffer(0)]],
                                  device float* output [[buffer(1)]],
                                  constant uint &N [[buffer(2)]],
                                  uint id [[thread_position_in_grid]]) {
@@ -1778,7 +2048,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void gelu_grad_fp16(device const half* input [[buffer(0)]],
+      kernel void gelu_grad_half(device const half* input [[buffer(0)]],
                                  device half* output [[buffer(1)]],
                                  constant uint &N [[buffer(2)]],
                                  uint id [[thread_position_in_grid]]) {
@@ -1791,7 +2061,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void sin_fp32(device const float* input [[buffer(0)]],
+      kernel void sin_float(device const float* input [[buffer(0)]],
                            device float* output [[buffer(1)]],
                            constant uint &N [[buffer(2)]],
                            uint id [[thread_position_in_grid]]) {
@@ -1800,7 +2070,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void sin_fp16(device const half* input [[buffer(0)]],
+      kernel void sin_half(device const half* input [[buffer(0)]],
                            device half* output [[buffer(1)]],
                            constant uint &N [[buffer(2)]],
                            uint id [[thread_position_in_grid]]) {
@@ -1809,7 +2079,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void cos_fp32(device const float* input [[buffer(0)]],
+      kernel void cos_float(device const float* input [[buffer(0)]],
                            device float* output [[buffer(1)]],
                            constant uint &N [[buffer(2)]],
                            uint id [[thread_position_in_grid]]) {
@@ -1819,7 +2089,7 @@ open class MPSBackend: CPUBackend {
       }
 
 
-      kernel void cos_fp16(device const half* input [[buffer(0)]],
+      kernel void cos_half(device const half* input [[buffer(0)]],
                            device half* output [[buffer(1)]],
                            constant uint &N [[buffer(2)]],
                            uint id [[thread_position_in_grid]]) {
@@ -1828,7 +2098,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void minus_sin_fp32(device const float* input [[buffer(0)]],
+      kernel void minus_sin_float(device const float* input [[buffer(0)]],
                                  device float* output [[buffer(1)]],
                                  constant uint &N [[buffer(2)]],
                                  uint id [[thread_position_in_grid]]) {
@@ -1838,7 +2108,7 @@ open class MPSBackend: CPUBackend {
       }
 
 
-      kernel void minus_sin_fp16(device const half* input [[buffer(0)]],
+      kernel void minus_sin_half(device const half* input [[buffer(0)]],
                                  device half* output [[buffer(1)]],
                                  constant uint &N [[buffer(2)]],
                                  uint id [[thread_position_in_grid]]) {
@@ -1847,7 +2117,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void relu_fp32(device const float* input [[buffer(0)]],
+      kernel void relu_float(device const float* input [[buffer(0)]],
                             device float* output [[buffer(1)]],
                             constant uint &N [[buffer(2)]],
                             uint id [[thread_position_in_grid]]) {
@@ -1857,7 +2127,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void relu_fp16(device const half* input [[buffer(0)]],
+      kernel void relu_half(device const half* input [[buffer(0)]],
                             device half* output [[buffer(1)]],
                             constant uint &N [[buffer(2)]],
                             uint id [[thread_position_in_grid]]) {
@@ -1867,7 +2137,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void relu_grad_fp32(device const float* input [[buffer(0)]],
+      kernel void relu_grad_float(device const float* input [[buffer(0)]],
                                  device float* output [[buffer(1)]],
                                  constant uint &N [[buffer(2)]],
                                  uint id [[thread_position_in_grid]]) {
@@ -1878,7 +2148,7 @@ open class MPSBackend: CPUBackend {
       }
 
 
-      kernel void relu_grad_fp16(device const half* input [[buffer(0)]],
+      kernel void relu_grad_half(device const half* input [[buffer(0)]],
                                  device half* output [[buffer(1)]],
                                  constant uint &N [[buffer(2)]],
                                  uint id [[thread_position_in_grid]]) {
@@ -1888,7 +2158,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void abs_fp32(device const float* input [[buffer(0)]],
+      kernel void abs_float(device const float* input [[buffer(0)]],
                            device float* output [[buffer(1)]],
                            constant uint &N [[buffer(2)]],
                            uint id [[thread_position_in_grid]]) {
@@ -1898,7 +2168,7 @@ open class MPSBackend: CPUBackend {
       }
 
 
-      kernel void abs_fp16(device const half* input [[buffer(0)]],
+      kernel void abs_half(device const half* input [[buffer(0)]],
                            device half* output [[buffer(1)]],
                            constant uint &N [[buffer(2)]],
                            uint id [[thread_position_in_grid]]) {
@@ -1907,7 +2177,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void abs_grad_fp32(device const float* input [[buffer(0)]],
+      kernel void abs_grad_float(device const float* input [[buffer(0)]],
                                 device float* output [[buffer(1)]],
                                 constant uint &N [[buffer(2)]],
                                 uint id [[thread_position_in_grid]]) {
@@ -1917,7 +2187,7 @@ open class MPSBackend: CPUBackend {
       }
 
 
-      kernel void abs_grad_fp16(device const half* input [[buffer(0)]],
+      kernel void abs_grad_half(device const half* input [[buffer(0)]],
                                 device half* output [[buffer(1)]],
                                 constant uint &N [[buffer(2)]],
                                 uint id [[thread_position_in_grid]]) {
@@ -1926,38 +2196,44 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      #define DEFINE_REPEAT(type) \
-      kernel void repeat_##type(device const type* input [[buffer(0)]], \
-                               device type* output [[buffer(1)]], \
-                               constant uint &inner [[buffer(2)]], \
-                               constant uint &outer [[buffer(3)]], \
-                               constant uint &reps [[buffer(4)]], \
-                               uint id [[thread_position_in_grid]]) { \
-          if (id < inner * outer * reps) { \
-              uint sourceIdx = (id % inner) + (id / (inner * reps)) * inner; \
-              output[id] = input[sourceIdx]; \
-          } \
-      }
+      #define DEFINE_REPEAT(type) \\
+          struct repeat_args_##type { \\
+              uint inner; \\
+              uint outer; \\
+              uint reps; \\
+          }; \\
+          kernel void repeat_##type(device const type* input [[buffer(0)]], \\
+                                  device type* output [[buffer(1)]], \\
+                                  constant struct repeat_args_##type &args [[buffer(2)]], \\
+                                  uint id [[thread_position_in_grid]]) { \\
+              if (id < args.inner * args.outer * args.reps) { \\
+                  uint sourceIdx = (id % args.inner) + (id / (args.inner * args.reps)) * args.inner; \\
+                  output[id] = input[sourceIdx]; \\
+              } \\
+          }
 
       DEFINE_REPEAT(char)
       DEFINE_REPEAT(short)
       DEFINE_REPEAT(int)
       DEFINE_REPEAT(long)
 
-      #define DEFINE_STRIDED_COPY(type) \
-      kernel void strided_copy_##type(device const type* input [[buffer(0)]], \
-                                      device type* output [[buffer(1)]], \
-                                      constant uint &inner [[buffer(2)]], \
-                                      constant uint &fullInner [[buffer(3)]], \
-                                      constant uint &outer [[buffer(4)]], \
-                                      constant uint &offset [[buffer(5)]], \
-                                      uint id [[thread_position_in_grid]]) { \
-          if (id < inner * outer) { \
-              uint sourceCol = id % inner; \
-              uint sourceRow = id / inner; \
-              output[(sourceCol + offset) + sourceRow*fullInner] = input[id]; \
-          } \
-      }
+      #define DEFINE_STRIDED_COPY(type) \\
+          struct strided_copy_args_##type { \\
+              uint inner; \\
+              uint fullInner; \\
+              uint outer; \\
+              uint offset; \\
+          }; \\
+          kernel void strided_copy_##type(device const type* input [[buffer(0)]], \\
+                                          device type* output [[buffer(1)]], \\
+                                          constant struct strided_copy_args_##type &args [[buffer(2)]], \\
+                                          uint id [[thread_position_in_grid]]) { \\
+              if (id < args.inner * args.outer) { \\
+                  uint sourceCol = id % args.inner; \\
+                  uint sourceRow = id / args.inner; \\
+                  output[(sourceCol + args.offset) + sourceRow*args.fullInner] = input[id]; \\
+              } \\
+          }
 
       DEFINE_STRIDED_COPY(char)
       DEFINE_STRIDED_COPY(short)
@@ -2005,7 +2281,7 @@ open class MPSBackend: CPUBackend {
         }
       }
 
-      kernel void rand_fp32(device float* output [[buffer(0)]],
+      kernel void rand_float(device float* output [[buffer(0)]],
                             constant uint &seed0 [[buffer(1)]],
                             constant uint &seed1 [[buffer(2)]],
                             constant uint &offset [[buffer(3)]],
@@ -2021,7 +2297,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void rand_fp16(device half* output [[buffer(0)]],
+      kernel void rand_half(device half* output [[buffer(0)]],
                             constant uint &seed0 [[buffer(1)]],
                             constant uint &seed1 [[buffer(2)]],
                             constant uint &offset [[buffer(3)]],
@@ -2037,7 +2313,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void randn_fp32(device float* output [[buffer(0)]],
+      kernel void randn_float(device float* output [[buffer(0)]],
                              constant uint &seed0 [[buffer(1)]],
                              constant uint &seed1 [[buffer(2)]],
                              constant uint &offset [[buffer(3)]],
@@ -2064,7 +2340,7 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      kernel void randn_fp16(device half* output [[buffer(0)]],
+      kernel void randn_half(device half* output [[buffer(0)]],
                              constant uint &seed0 [[buffer(1)]],
                              constant uint &seed1 [[buffer(2)]],
                              constant uint &offset [[buffer(3)]],
@@ -2129,17 +2405,17 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      #define DEFINE_GATHER(gather, type) \
-      kernel void gather##_##type(device const type* input [[buffer(0)]], \
-                                  device const ulong* indices [[buffer(1)]], \
-                                  device type* output [[buffer(2)]], \
-                                  constant uint &outerCount [[buffer(3)]], \
-                                  constant uint &indexCount [[buffer(4)]], \
-                                  constant uint &middleCount [[buffer(5)]], \
-                                  constant uint &innerCount [[buffer(6)]], \
-                                  uint id [[thread_position_in_grid]]) { \
-          gather##_impl<type>(input, indices, output, outerCount, indexCount, middleCount, \
-                                innerCount, id); \
+      #define DEFINE_GATHER(gather, type) \\
+      kernel void gather##_##type(device const type* input [[buffer(0)]], \\
+                                  device const ulong* indices [[buffer(1)]], \\
+                                  device type* output [[buffer(2)]], \\
+                                  constant uint &outerCount [[buffer(3)]], \\
+                                  constant uint &indexCount [[buffer(4)]], \\
+                                  constant uint &middleCount [[buffer(5)]], \\
+                                  constant uint &innerCount [[buffer(6)]], \\
+                                  uint id [[thread_position_in_grid]]) { \\
+          gather##_impl<type>(input, indices, output, outerCount, indexCount, middleCount, \\
+                                innerCount, id); \\
       }
 
       DEFINE_GATHER(gather, char)
@@ -2199,19 +2475,19 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      #define DEFINE_SCATTER(scatter, type) \
-      kernel void scatter##_##type(device const type* input [[buffer(0)]], \
-                                   device const ulong* indices [[buffer(1)]], \
-                                   device type* output [[buffer(2)]], \
-                                   device atomic_int* counts [[buffer(3)]], \
-                                   device int* needsAddition [[buffer(4)]], \
-                                   constant uint &outerCount [[buffer(5)]], \
-                                   constant uint &indexCount [[buffer(6)]], \
-                                   constant uint &middleCount [[buffer(7)]], \
-                                   constant uint &innerCount [[buffer(8)]], \
-                                   uint id [[thread_position_in_grid]]) { \
-          scatter##_impl<type>(input, indices, output, counts, needsAddition, outerCount, \
-                               indexCount, middleCount, innerCount, id); \
+      #define DEFINE_SCATTER(scatter, type) \\
+      kernel void scatter##_##type(device const type* input [[buffer(0)]], \\
+                                   device const ulong* indices [[buffer(1)]], \\
+                                   device type* output [[buffer(2)]], \\
+                                   device atomic_int* counts [[buffer(3)]], \\
+                                   device int* needsAddition [[buffer(4)]], \\
+                                   constant uint &outerCount [[buffer(5)]], \\
+                                   constant uint &indexCount [[buffer(6)]], \\
+                                   constant uint &middleCount [[buffer(7)]], \\
+                                   constant uint &innerCount [[buffer(8)]], \\
+                                   uint id [[thread_position_in_grid]]) { \\
+          scatter##_impl<type>(input, indices, output, counts, needsAddition, outerCount, \\
+                               indexCount, middleCount, innerCount, id); \\
       }
 
       DEFINE_SCATTER(scatter, char)
@@ -2223,13 +2499,13 @@ open class MPSBackend: CPUBackend {
       DEFINE_SCATTER(scatter, long)
       DEFINE_SCATTER(scatter_bcast, long)
 
-      kernel void axis_permutation(device const uint* newStrides [[buffer(0)]], \
-                                   device const uint* newShape [[buffer(1)]], \
-                                   device const uint* permutedStrides [[buffer(2)]], \
-                                   device ulong* output [[buffer(3)]], \
-                                   constant uint &numAxes [[buffer(4)]], \
-                                   constant uint &outputCount [[buffer(5)]], \
-                                   uint id [[thread_position_in_grid]]) { \
+      kernel void axis_permutation(device const uint* newStrides [[buffer(0)]], \\
+                                   device const uint* newShape [[buffer(1)]], \\
+                                   device const uint* permutedStrides [[buffer(2)]], \\
+                                   device ulong* output [[buffer(3)]], \\
+                                   constant uint &numAxes [[buffer(4)]], \\
+                                   constant uint &outputCount [[buffer(5)]], \\
+                                   uint id [[thread_position_in_grid]]) { \\
           uint flatIndex = 0;
           for (uint i = 0; i < numAxes; i++) {
               uint oldIdx = (id / newStrides[i]) % newShape[i];
@@ -2240,14 +2516,14 @@ open class MPSBackend: CPUBackend {
           }
       }
 
-      #define DEFINE_CAST(inType, outType) \
-      kernel void cast_##inType##_##outType(device const inType* input [[buffer(0)]], \
-                                            device outType* output [[buffer(1)]], \
-                                            constant uint &count [[buffer(2)]], \
-                                            uint id [[thread_position_in_grid]]) { \
-          if (id < count) { \
-            output[id] = (outType)input[id]; \
-          } \
+      #define DEFINE_CAST(inType, outType) \\
+      kernel void cast_##inType##_##outType(device const inType* input [[buffer(0)]], \\
+                                            device outType* output [[buffer(1)]], \\
+                                            constant uint &count [[buffer(2)]], \\
+                                            uint id [[thread_position_in_grid]]) { \\
+          if (id < count) { \\
+            output[id] = (outType)input[id]; \\
+          } \\
       }
 
       DEFINE_CAST(float, half)

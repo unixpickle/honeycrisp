@@ -99,6 +99,41 @@ open class BackendWrapper: Backend {
     try await wrapped.addMul(input: input, bias: bias, coeff: coeff, count: count, dtype: dtype)
   }
 
+  override public func normalize<T: TensorElement>(
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.normalize(
+      input: input, mean: mean, variance: variance, epsilon: epsilon, count: count, dtype: dtype)
+  }
+
+  override public func normalizeXGrad<T: TensorElement>(
+    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.normalizeXGrad(
+      variance: variance, outGrad: outGrad, epsilon: epsilon, sign: sign, count: count, dtype: dtype
+    )
+  }
+
+  override public func normalizeVarianceGrad<T: TensorElement>(
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
+    epsilon: T, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.normalizeVarianceGrad(
+      input: input, mean: mean, variance: variance, outGrad: outGrad, epsilon: epsilon,
+      count: count, dtype: dtype)
+  }
+
   override public func compare(
     _ a: Tensor.Data, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
@@ -136,12 +171,12 @@ open class BackendWrapper: Backend {
   }
 
   override public func pow<T: NumericTensorElement>(
-    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, _ b: T, outScale: T, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.pow(a, b, count: count, dtype: dtype)
+    try await wrapped.pow(a, b, outScale: outScale, count: count, dtype: dtype)
   }
 
   override public func clamp<T: NumericTensorElement>(

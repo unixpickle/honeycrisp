@@ -9,11 +9,15 @@ public final class Tensor {
     case float32
 
     var supportsGrad: Bool {
-      self == .float16 || self == .float32
+      isFloat
     }
 
     var isNumeric: Bool {
       self != .bool
+    }
+
+    var isFloat: Bool {
+      self == .float16 || self == .float32
     }
 
     var byteSize: Int {
@@ -303,6 +307,19 @@ public final class Tensor {
     let safeRef3 = z.noGrad()
     return Task {
       try await fn(safeRef1, safeRef2, safeRef3)
+    }
+  }
+
+  static internal func createDataTask(
+    _ w: Tensor, _ x: Tensor, _ y: Tensor, _ z: Tensor,
+    _ fn: @escaping (Tensor, Tensor, Tensor, Tensor) async throws -> Data
+  ) -> Task<Data, Error> {
+    let safeRef1 = w.noGrad()
+    let safeRef2 = x.noGrad()
+    let safeRef3 = y.noGrad()
+    let safeRef4 = z.noGrad()
+    return Task {
+      try await fn(safeRef1, safeRef2, safeRef3, safeRef4)
     }
   }
 
@@ -719,18 +736,25 @@ public final class Tensor {
     }
   }
 
-  public func pow<T: NumericTensorElement>(_ exponent: T) -> Tensor {
+  public func pow<T: NumericTensorElement>(_ exponent: T, outScale: T = 1.0) -> Tensor {
     alwaysAssert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
     let backend = Backend.current
     let newData = createDataTask { t in
-      try await backend.pow(try await t.data, exponent, count: t.shape.product(), dtype: t.dtype)
+      try await backend.pow(
+        try await t.data, exponent, outScale: outScale, count: t.shape.product(), dtype: t.dtype)
     }
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: shape, dtype: dtype)
     } else {
       let lhsHandle = saveForBackward()
       return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
-        lhsHandle.backward(backend) { grad * exponent * self.noGrad().pow(exponent - T(1.0)) }
+        lhsHandle.backward(backend) {
+          if exponent == T(2.0) {
+            grad * self.noGrad() * 2
+          } else {
+            grad * self.noGrad().pow(exponent - T(1.0), outScale: exponent)
+          }
+        }
       }
     }
   }

@@ -180,6 +180,46 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testFusedNormalize() async throws {
+    try await runInBackends {
+      let epsilon = 0.3
+      for dtype: Tensor.DType in [.float32, .float16] {
+        let atol: Float = dtype == .float32 ? 1e-4 : 1e-2
+        let rtol: Float = dtype == .float32 ? 1e-4 : 1e-2
+        for xShape in [[6], [3, 6], [5, 3, 6]] {
+          for meanShape in [[6], [1, 6], [3, 6], [5, 1, 6], [5, 3, 6], [3, 1], [5, 1, 1]] {
+            for varianceShape in [
+              [6], [1, 6], [3, 6], [5, 1, 6], [5, 3, 6], [3, 1], [5, 1, 1],
+            ] {
+              let x = Tensor(randn: xShape, dtype: dtype)
+              let mean = Tensor(randn: meanShape, dtype: dtype)
+              let variance = Tensor(rand: varianceShape, dtype: dtype)
+              var actualXGrad: Tensor?
+              var actualMeanGrad: Tensor?
+              var actualVarGrad: Tensor?
+              var expectedXGrad: Tensor?
+              var expectedMeanGrad: Tensor?
+              var expectedVarGrad: Tensor?
+              let actualOutput = x.onGrad { actualXGrad = $0 }.normalize(
+                mean: mean.onGrad { actualMeanGrad = $0 },
+                variance: variance.onGrad { actualVarGrad = $0 }, epsilon: epsilon)
+              let expectedOutput =
+                (x.onGrad { expectedXGrad = $0 } - mean.onGrad { expectedMeanGrad = $0 })
+                * (variance.onGrad { expectedVarGrad = $0 } + epsilon).rsqrt()
+              try await assertClose(actualOutput, expectedOutput, atol: atol, rtol: rtol)
+              let outGrad = Tensor(randLike: actualOutput)
+              actualOutput.backward(outGrad)
+              expectedOutput.backward(outGrad)
+              try await assertClose(actualXGrad!, expectedXGrad!, atol: atol, rtol: rtol)
+              try await assertClose(actualMeanGrad!, expectedMeanGrad!, atol: atol, rtol: rtol)
+              try await assertClose(actualVarGrad!, expectedVarGrad!, atol: atol, rtol: rtol)
+            }
+          }
+        }
+      }
+    }
+  }
+
   func testMod() async throws {
     try await runInBackends {
       func testSimple(
@@ -803,6 +843,19 @@ final class HoneycrispTests: XCTestCase {
       output: [-1, -1.5, -1.5, 0.9, 1, 1, 1],
       grad: [1, 0, 0, 1, 0, 0, 0]
     ) { $0.clamp(min: -1.5, max: 1) }
+
+    // Integral dtypes for clamp
+    try await runInBackends {
+      try await assertDataEqual(
+        Tensor(data: [-1, -2, -3, -4, -5], shape: [5], dtype: .float32).clamp(min: -4, max: -2),
+        Tensor(data: [-1, -2, -3, -4, -5], shape: [5], dtype: .int64).clamp(min: -4, max: -2))
+      try await assertDataEqual(
+        Tensor(data: [-1, -2, -3, -4, -5], shape: [5], dtype: .float32).clamp(min: -4),
+        Tensor(data: [-1, -2, -3, -4, -5], shape: [5], dtype: .int64).clamp(min: -4))
+      try await assertDataEqual(
+        Tensor(data: [-1, -2, -3, -4, -5], shape: [5], dtype: .float32).clamp(max: -2),
+        Tensor(data: [-1, -2, -3, -4, -5], shape: [5], dtype: .int64).clamp(max: -2))
+    }
   }
 
   func testMinMax() async throws {

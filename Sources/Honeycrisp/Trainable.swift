@@ -499,9 +499,9 @@ public class LayerNorm: Trainable {
     let (rawMean, rawVariance) = x.reshape(tmpShape).meanAndVariance(axis: 1)
     let mean = rawMean.reshape(normedShape)
     let variance = rawVariance.reshape(normedShape)
-    let normalized = (x - mean) * (variance + eps).rsqrt()
+    let normalized = x.normalize(mean: mean, variance: variance, epsilon: eps)
     if let gain = gain, let bias = bias {
-      return (normalized * (gain + 1)) + bias
+      return normalized.mul((gain + 1), thenAdd: bias)
     } else {
       return normalized
     }
@@ -558,7 +558,8 @@ public class GroupNorm: Trainable {
       [cFirst.shape[0], groupCount, cFirst.shape[1] / groupCount, cFirst.shape[2...].product()])
     let mean = grouped.mean(axis: -1, keepdims: true)
     let variance = grouped.variance(axis: -1, keepdims: true)
-    let cFirstNormed = ((grouped - mean) * (variance + eps).rsqrt()).reshape(as: cFirst)
+    let cFirstNormed = grouped.normalize(mean: mean, variance: variance, epsilon: eps).reshape(
+      as: cFirst)
 
     let normalized =
       if channelsLast {

@@ -180,6 +180,36 @@ open class Backend {
     throw BackendError.notImplemented("addMul")
   }
 
+  public func normalize<T: TensorElement>(
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("normalize")
+  }
+
+  public func normalizeXGrad<T: TensorElement>(
+    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("normalizeXGrad")
+  }
+
+  public func normalizeVarianceGrad<T: TensorElement>(
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
+    epsilon: T, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("normalizeVarianceGrad")
+  }
+
   public func compare(
     _ a: Tensor.Data, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
@@ -215,7 +245,7 @@ open class Backend {
   }
 
   public func pow<T: NumericTensorElement>(
-    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, _ b: T, outScale: T, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -415,6 +445,7 @@ open class CPUBackend: Backend {
   public enum Allocator {
     case device
     case bucket
+    case heap(Int)
   }
 
   public class NativeRandomGenerator: RandomGenerator {
@@ -500,6 +531,7 @@ open class CPUBackend: Backend {
   // Allocator state.
   internal var allocBucketsLock = NSLock()
   internal var allocBuckets: [Int: [MTLBuffer]]? = nil
+  internal var heap: MTLHeap? = nil
 
   internal var worker = Backend.WorkerThread()
 
@@ -517,6 +549,15 @@ open class CPUBackend: Backend {
       ()
     case .bucket:
       allocBuckets = [:]
+    case .heap(let size):
+      let desc = MTLHeapDescriptor()
+      desc.size = size
+      desc.hazardTrackingMode = .tracked
+      desc.storageMode = .shared
+      guard let h = (try device).makeHeap(descriptor: desc) else {
+        throw BackendError.allocationFailed(size)
+      }
+      heap = h
     }
   }
 
@@ -578,8 +619,13 @@ open class CPUBackend: Backend {
   }
 
   private func allocRawSync(length: Int) throws -> MTLBuffer {
-    let maybeBuffer = (try device).makeBuffer(
-      length: max(1, length), options: [.storageModeShared])
+    let maybeBuffer =
+      if let heap = heap {
+        heap.makeBuffer(length: max(1, length), options: [.storageModeShared])
+      } else {
+        (try device).makeBuffer(length: max(1, length), options: [.storageModeShared])
+      }
+
     guard let result = maybeBuffer else {
       throw BackendError.allocationFailed(length)
     }
@@ -856,6 +902,101 @@ open class CPUBackend: Backend {
     }
   }
 
+  override public func normalize<T: TensorElement>(
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    assert(dtype.isFloat)
+    try await waitForData(input.data, mean.data, variance.data)
+    let buffer = try await allocate(length: count * dtype.byteSize)
+    try await serialize {
+      try readBuffer(Float.self, input.data.buffer, count: input.dataCount, dtype: dtype) {
+        inData in
+        try readBuffer(Float.self, mean.data.buffer, count: mean.dataCount, dtype: dtype) {
+          meanData in
+          try readBuffer(Float.self, variance.data.buffer, count: variance.dataCount, dtype: dtype)
+          {
+            varianceData in
+            try writeBuffer(Float.self, buffer, count: count, dtype: dtype) { outData in
+              for i in 0..<count {
+                outData[i] =
+                  (inData[input.strides(i)] - meanData[mean.strides(i)])
+                  / sqrt(varianceData[variance.strides(i)] + epsilon.toFloat())
+              }
+            }
+          }
+        }
+      }
+    }
+    return Tensor.Data(backend: self, buffer: buffer)
+  }
+
+  override public func normalizeXGrad<T: TensorElement>(
+    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(variance.data, outGrad.data)
+    let buffer = try await allocate(length: count * dtype.byteSize)
+    try await serialize {
+      try readBuffer(Float.self, variance.data.buffer, count: variance.dataCount, dtype: dtype) {
+        varianceData in
+        try readBuffer(Float.self, outGrad.data.buffer, count: outGrad.dataCount, dtype: dtype) {
+          outGradData in
+          try writeBuffer(Float.self, buffer, count: count, dtype: dtype) { outData in
+            for i in 0..<count {
+              outData[i] =
+                sign * outGradData[outGrad.strides(i)]
+                / sqrt(varianceData[variance.strides(i)] + epsilon.toFloat())
+            }
+          }
+        }
+      }
+    }
+    return Tensor.Data(backend: self, buffer: buffer)
+  }
+
+  override public func normalizeVarianceGrad<T: TensorElement>(
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
+    epsilon: T, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await waitForData(input.data, mean.data, variance.data, outGrad.data)
+    let buffer = try await allocate(length: count * dtype.byteSize)
+    try await serialize {
+      try readBuffer(Float.self, input.data.buffer, count: input.dataCount, dtype: dtype) {
+        inputData in
+        try readBuffer(Float.self, mean.data.buffer, count: mean.dataCount, dtype: dtype) {
+          meanData in
+          try readBuffer(Float.self, variance.data.buffer, count: variance.dataCount, dtype: dtype)
+          {
+            varianceData in
+            try readBuffer(Float.self, outGrad.data.buffer, count: outGrad.dataCount, dtype: dtype)
+            {
+              outGradData in
+              try writeBuffer(Float.self, buffer, count: count, dtype: dtype) { outData in
+                for i in 0..<count {
+                  outData[i] =
+                    -0.5 * outGradData[outGrad.strides(i)]
+                    * (inputData[input.strides(i)] - meanData[mean.strides(i)])
+                    * Darwin.pow(varianceData[variance.strides(i)] + epsilon.toFloat(), -1.5)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return Tensor.Data(backend: self, buffer: buffer)
+  }
+
   override public func compare(
     _ a: Tensor.Data, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
@@ -965,17 +1106,17 @@ open class CPUBackend: Backend {
   }
 
   override public func pow<T: NumericTensorElement>(
-    _ a: Tensor.Data, _ b: T, count: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, _ b: T, outScale: T, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     try await waitForData(a)
 
-    func apply<T1: NumericTensorElement>(_ b: T1) async throws -> Tensor.Data {
+    func apply<T1: NumericTensorElement>(_ b: T1, _ outScale: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        if dtype == .float32 && (b == T1(2.0) || b == T1(-1.0)) {
+        if dtype == .float32 && (b == T1(2.0) || b == T1(-1.0)) && outScale == T1(1.0) {
           let x = UnsafePointer<Float>(
             a.buffer.contents().bindMemory(to: Float.self, capacity: count))
           let z = UnsafeMutablePointer<Float>(
@@ -991,7 +1132,7 @@ open class CPUBackend: Backend {
           try readBuffer(T1.self, a.buffer, count: count, dtype: dtype) { arr in
             try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in
               for (i, x) in arr.enumerated() {
-                out[i] = x.pow(b)
+                out[i] = outScale * x.pow(b)
               }
             }
           }
@@ -1000,9 +1141,9 @@ open class CPUBackend: Backend {
       return Tensor.Data(backend: self, buffer: buffer)
     }
     if dtype == .int64 {
-      return try await apply(b.toInt64())
+      return try await apply(b.toInt64(), outScale.toInt64())
     } else {
-      return try await apply(b.toFloat())
+      return try await apply(b.toFloat(), outScale.toFloat())
     }
   }
 
