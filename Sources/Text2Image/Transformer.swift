@@ -5,6 +5,7 @@ import Honeycrisp
 struct TransformerConfig {
   var VocabSize: Int
   let TokenCount: Int
+  var WeightGradBackend: Backend
   var LayerCount: Int = 12
   var ModelDim: Int = 1024
   var HeadDim: Int = 64
@@ -15,9 +16,9 @@ struct TransformerConfig {
 class RoPE {
   let cache: Tensor
 
-  init(dim: Int, maxTokens: Int, base: Int = 10000) {
-    let theta = (-log(Float(base)) * Tensor(range: 0..<(dim / 2)).cast(.float32) / dim).exp()
-    let indices = Tensor(range: 0..<maxTokens).cast(.float32).unsqueeze(axis: -1).repeating(
+  init(dim: Int, maxTokens: Int, base: Int = 10000, dtype: Tensor.DType = .float32) {
+    let theta = (-log(Float(base)) * Tensor(range: 0..<(dim / 2)).cast(dtype) / dim).exp()
+    let indices = Tensor(range: 0..<maxTokens).cast(dtype).unsqueeze(axis: -1).repeating(
       axis: 1, count: dim / 2)
     let args = indices * theta
     cache = Tensor(stack: [args.cos(), args.sin()], axis: -1)
@@ -48,8 +49,8 @@ class KVCache {
     }
 
     init(batchSize: Int, config: TransformerConfig) {
-      k = Tensor(zeros: [batchSize, 0, config.ModelDim])
-      v = Tensor(zeros: [batchSize, 0, config.ModelDim])
+      k = Tensor(zeros: [batchSize, 0, config.ModelDim], dtype: .float16)
+      v = Tensor(zeros: [batchSize, 0, config.ModelDim], dtype: .float16)
     }
   }
 
@@ -82,10 +83,14 @@ class Attention: Trainable {
     rope = RoPE(dim: config.HeadDim, maxTokens: config.TokenCount)
     causalMask = Tensor(constant: 1e8, shape: [config.TokenCount, config.TokenCount]).tril() - 1e8
     super.init()
-    self.qProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim, bias: false)
-    self.kProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim, bias: false)
-    self.vProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim, bias: false)
-    self.outProj = Linear(inCount: config.ModelDim, outCount: config.ModelDim, bias: false)
+    self.qProj = Linear(
+      inCount: config.ModelDim, outCount: config.ModelDim, castParams: .float16, bias: false)
+    self.kProj = Linear(
+      inCount: config.ModelDim, outCount: config.ModelDim, castParams: .float16, bias: false)
+    self.vProj = Linear(
+      inCount: config.ModelDim, outCount: config.ModelDim, castParams: .float16, bias: false)
+    self.outProj = Linear(
+      inCount: config.ModelDim, outCount: config.ModelDim, castParams: .float16, bias: false)
   }
 
   func callAsFunction(_ x: Tensor, kvCache: KVCache.Layer? = nil) -> Tensor {
@@ -105,8 +110,10 @@ class Attention: Trainable {
     let (k, v) =
       if let kvCache = kvCache {
         {
-          let innerK = Tensor(concat: [kvCache.k, kProj(x)], axis: 1)
-          let innerV = Tensor(concat: [kvCache.v, vProj(x)], axis: 1)
+          let innerK = Tensor(
+            concat: [kvCache.k, kProj(x, weightGradBackend: config.WeightGradBackend)], axis: 1)
+          let innerV = Tensor(
+            concat: [kvCache.v, vProj(x, weightGradBackend: config.WeightGradBackend)], axis: 1)
           let k = moveHeadsToOuter(innerK) / sqrt(sqrt(Float(config.HeadDim)))
           let v = moveHeadsToOuter(innerV)
           kvCache.k = innerK
@@ -114,17 +121,24 @@ class Attention: Trainable {
           return (k, v)
         }()
       } else {
-        (moveHeadsToOuter(kProj(x)) / sqrt(sqrt(Float(config.HeadDim))), moveHeadsToOuter(vProj(x)))
+        (
+          moveHeadsToOuter(kProj(x, weightGradBackend: config.WeightGradBackend))
+            / sqrt(sqrt(Float(config.HeadDim))),
+          moveHeadsToOuter(vProj(x, weightGradBackend: config.WeightGradBackend))
+        )
       }
-    let q = moveHeadsToOuter(qProj(x)) / sqrt(sqrt(Float(config.HeadDim)))
+    let q =
+      moveHeadsToOuter(qProj(x, weightGradBackend: config.WeightGradBackend))
+      / sqrt(sqrt(Float(config.HeadDim)))
 
     let energy = Tensor.batchedMatmul(
-      a: rope(q, offset: tokenOffset), transA: false, b: rope(k), transB: true, transOut: false)
+      a: rope(q.cast(.float32), offset: tokenOffset), transA: false, b: rope(k.cast(.float32)),
+      transB: true, transOut: false)
     let probs = (energy + causalMask[tokenOffset..<k.shape[2], 0..<k.shape[2]])
-      .softmax()
+      .softmax().cast(.float16)
     let reducedValues = Tensor.batchedMatmul(
       a: probs, transA: false, b: v, transB: false, transOut: false)
-    return outProj(moveHeadsToInner(reducedValues))
+    return outProj(moveHeadsToInner(reducedValues), weightGradBackend: config.WeightGradBackend)
   }
 }
 
@@ -143,14 +157,20 @@ class Block: Trainable {
     self.attn = Attention(config: config)
     self.norm1 = LayerNorm(shape: [config.ModelDim])
     self.norm2 = LayerNorm(shape: [config.ModelDim])
-    self.lin1 = Linear(inCount: config.ModelDim, outCount: config.ModelDim * 2, bias: false)
-    self.lin2 = Linear(inCount: config.ModelDim * 2, outCount: config.ModelDim, bias: false)
+    self.lin1 = Linear(
+      inCount: config.ModelDim, outCount: config.ModelDim * 2, castParams: .float16, bias: false)
+    self.lin2 = Linear(
+      inCount: config.ModelDim * 2, outCount: config.ModelDim, castParams: .float16, bias: false)
   }
 
   func callAsFunction(_ x: Tensor, kvCache: KVCache.Layer? = nil) -> Tensor {
     var h = x
     h = h + attn(norm1(h), kvCache: kvCache)
-    h = h + lin2(lin1(norm2(h)).gelu())
+    h =
+      h
+      + lin2(
+        lin1(norm2(h), weightGradBackend: config.WeightGradBackend).gelu(),
+        weightGradBackend: config.WeightGradBackend)
     return h
   }
 }
@@ -170,7 +190,8 @@ class Transformer: Trainable {
     layers = TrainableArray((0..<config.LayerCount).map { _ in Block(config: config) })
     normOut = LayerNorm(shape: [config.ModelDim])
 
-    unembed = Linear(inCount: config.ModelDim, outCount: config.VocabSize, bias: false)
+    unembed = Linear(
+      inCount: config.ModelDim, outCount: config.VocabSize, castParams: .float16, bias: false)
 
     // Uniform initial probability
     unembed.weight = unembed.weight.noGrad() * 0
@@ -178,7 +199,7 @@ class Transformer: Trainable {
 
   func callAsFunction(_ x: Tensor, kvCache: KVCache? = nil) -> Tensor {
     // Input should be a [N x T] tensor of indices
-    var h = embed.gather(axis: 0, indices: x.flatten()).reshape([
+    var h = embed.gather(axis: 0, indices: x.flatten()).cast(.float16).reshape([
       x.shape[0], x.shape[1], config.ModelDim,
     ])
 
@@ -192,7 +213,7 @@ class Transformer: Trainable {
       h = layer(h, kvCache: cacheLayer)
     }
     h = normOut(h)
-    h = unembed(h)
+    h = unembed(h, weightGradBackend: config.WeightGradBackend)
     return h
   }
 
@@ -205,7 +226,7 @@ class Transformer: Trainable {
     var outputs: [Tensor] = []
     var prevToken = prefixes
     for _ in 0..<(config.TokenCount - prefixes.shape[1]) {
-      let logits = Tensor.withGrad(enabled: false) { self(prevToken, kvCache: kvCache)[..., -1] }
+      let logits = Tensor.withGrad(enabled: false) { self(prevToken, kvCache: kvCache)[..., -1].cast(.float32) }
       let guidedLogits =
         if let cfgScale = cfgScale {
           {
@@ -224,6 +245,10 @@ class Transformer: Trainable {
       } else {
         prevToken = samples.repeating(axis: 0, count: 2)
       }
+
+      // Don't let graph get too deep and consume memory.
+      let _ = try await samples.ints()
+
       outputs.append(prevToken)
     }
     let seqs = Tensor(concat: outputs, axis: 1)

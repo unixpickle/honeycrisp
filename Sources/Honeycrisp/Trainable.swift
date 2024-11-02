@@ -318,15 +318,17 @@ public class Linear: Trainable {
     }
   }
 
-  public func callAsFunction(_ x: Tensor) -> Tensor {
+  public func callAsFunction(_ x: Tensor, weightGradBackend: Backend? = nil) -> Tensor {
     if x.shape.count > 2 {
       let squashedBatch = x.reshape([
         x.shape[..<(x.shape.count - 1)].product(), x.shape[x.shape.count - 1],
       ])
-      let out = self(squashedBatch)
+      let out = self(squashedBatch, weightGradBackend: weightGradBackend)
       return out.reshape(x.shape[..<(x.shape.count - 1)] + [out.shape[out.shape.count - 1]])
     }
-    var h = x &* weight.cast(castParams ?? weight.dtype)
+    var h = Tensor.matmul(
+      a: x, transA: false, b: weight.cast(castParams ?? weight.dtype), transB: false,
+      transOut: false, bGradBackend: weightGradBackend)
     if let bias = bias {
       h = h + bias.cast(castParams ?? bias.dtype)
     }
@@ -467,6 +469,7 @@ public class Dropout: Trainable {
 }
 
 public class LayerNorm: Trainable {
+  public let dtype: Tensor.DType
   public let shape: [Int]
   public let eps: Float
 
@@ -475,6 +478,7 @@ public class LayerNorm: Trainable {
 
   public init(shape: [Int], dtype: Tensor.DType = .float32, eps: Float = 1e-5, affine: Bool = true)
   {
+    self.dtype = dtype
     self.shape = shape
     self.eps = eps
     super.init()
@@ -492,6 +496,9 @@ public class LayerNorm: Trainable {
       x.shape.count >= shape.count && Array(x.shape[(x.shape.count - shape.count)...]) == shape,
       "LayerNorm shape \(shape) is incompatible with input shape \(x.shape)")
 
+    let inType = x.dtype
+    let x = x.cast(dtype)
+
     let batchShape = x.shape[..<(x.shape.count - shape.count)]
     let innerCount = shape.product()
     let tmpShape = [batchShape.product(), innerCount]
@@ -501,9 +508,9 @@ public class LayerNorm: Trainable {
     let variance = rawVariance.reshape(normedShape)
     let normalized = x.normalize(mean: mean, variance: variance, epsilon: eps)
     if let gain = gain, let bias = bias {
-      return normalized.mul((gain + 1), thenAdd: bias)
+      return normalized.mul((gain + 1), thenAdd: bias).cast(inType)
     } else {
-      return normalized
+      return normalized.cast(inType)
     }
   }
 }

@@ -16,13 +16,17 @@ class Command {
     Backend.defaultBackend = flopCounter!
   }
 
-  internal var gflops: Double {
+  internal var flopCount: Int64 {
     if flopCounter == nil || startTime == nil {
       startFLOPCounter()
     }
+    return flopCounter!.flopCount
+  }
+
+  internal var gflops: Double {
+    let fc = flopCount
     let nanos = (DispatchTime.now().uptimeNanoseconds - startTime!.uptimeNanoseconds)
-    let flops = flopCounter!.flopCount
-    return Double(flops) / Double(nanos)
+    return Double(fc) / Double(nanos)
   }
 
   public func run() async throws {

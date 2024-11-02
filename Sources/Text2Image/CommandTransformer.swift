@@ -19,6 +19,7 @@ class CommandTransformer: Command {
     let model: Trainable.State
     let dataset: TrainAndEval<CaptionedSequenceDataLoader.State>?
     let opt: Adam.State?
+    let gradScale: Float?
   }
 
   let testCaptions = [
@@ -41,11 +42,17 @@ class CommandTransformer: Command {
   let vqvae: VQVAE
   let model: Transformer
   let opt: Adam
+  let weightGradBackend: BackendFLOPCounter
+  var gradScale: Float = 65536.0
   var step: Int = 0
 
   let dataLoader: TrainAndEval<CaptionedSequenceDataLoader>
   var dataStream: DataStream?
   var lastDataState: TrainAndEval<CaptionedSequenceDataLoader.State>?
+
+  override internal var flopCount: Int64 {
+    return super.flopCount + weightGradBackend.flopCount
+  }
 
   init(_ args: [String]) throws {
     if args.count != 3 {
@@ -56,10 +63,14 @@ class CommandTransformer: Command {
     vqPath = args[1]
     savePath = args[2]
 
+    weightGradBackend = BackendFLOPCounter(
+      wrapping: CoreMLBackend(wrapping: Backend.defaultBackend))
+
     vqvae = VQVAE(channels: 4, vocab: 16384, latentChannels: 4, downsamples: 4)
     model = Transformer(
       config: TransformerConfig(
-        VocabSize: vqvae.bottleneck.vocab + 256, TokenCount: captionBytes + 16 * 16))
+        VocabSize: vqvae.bottleneck.vocab + 256, TokenCount: captionBytes + 16 * 16,
+        WeightGradBackend: weightGradBackend))
     opt = Adam(model.parameters, lr: lr)
     dataLoader = TrainAndEval(
       train: try CaptionedSequenceDataLoader(
@@ -99,6 +110,9 @@ class CommandTransformer: Command {
       if let dataState = state.dataset {
         dataLoader.train.state = dataState.train
         dataLoader.eval.state = dataState.eval
+      }
+      if let gs = state.gradScale {
+        gradScale = gs
       }
       step = state.step
     }
@@ -147,16 +161,40 @@ class CommandTransformer: Command {
       lastDataState = TrainAndEval(train: batch.train.1, eval: batch.eval.1)
       step += 1
 
-      let trainLoss = loss(batch.train.0)
       let evalLoss = Tensor.withGrad(enabled: false) { loss(batch.eval.0) }
 
-      trainLoss.backward()
+      var trainLoss: Tensor?
+      var gradNorm: Float?
+      while true {
+        trainLoss = loss(batch.train.0)
+        (trainLoss! * gradScale).backward()
+        for (_, var p) in model.parameters {
+          if let g = p.grad {
+            p.grad = g / gradScale
+          }
+        }
+        gradNorm = try await model.gradNorm()
+        if gradNorm!.isFinite {
+          gradScale *= 1.01
+          break
+        }
+        gradScale *= 0.5
+        opt.clearGrads()
+        if !(try await trainLoss!.item()).isFinite {
+          print("got NaN in forward pass!")
+          return
+        }
+        trainLoss = nil
+        print("got NaN in backward pass, reducing gradScale to \(gradScale)")
+      }
       opt.step()
       opt.clearGrads()
       print(
         "step \(step):"
-          + " loss=\(try await trainLoss.item())"
+          + " loss=\(try await trainLoss!.item())"
           + " valid_loss=\(try await evalLoss.item())"
+          + " grad_norm=\(gradNorm!)"
+          + " grad_scale=\(gradScale)"
           + " gflops=\(gflops)")
     }
   }
@@ -176,7 +214,8 @@ class CommandTransformer: Command {
       step: step,
       model: try await model.state(),
       dataset: lastDataState!,
-      opt: try await opt.state()
+      opt: try await opt.state(),
+      gradScale: gradScale
     )
     let stateData = try PropertyListEncoder().encode(state)
     try stateData.write(to: URL(filePath: savePath), options: .atomic)

@@ -11,7 +11,8 @@ extension Tensor {
   }
 
   public static func matmul(
-    a: Tensor, transA: Bool, b: Tensor, transB: Bool, transOut: Bool
+    a: Tensor, transA: Bool, b: Tensor, transB: Bool, transOut: Bool, aGradBackend: Backend? = nil,
+    bGradBackend: Backend? = nil
   )
     -> Tensor
   {
@@ -37,10 +38,10 @@ extension Tensor {
       let handleA = a.saveForBackward()
       let handleB = b.saveForBackward()
       return Tensor(dataTask: newData, shape: outShape, dtype: a.dtype) { grad in
-        handleA.backward(backend) {
+        handleA.backward(aGradBackend ?? backend) {
           matmul(a: grad, transA: transOut, b: b.noGrad(), transB: !transB, transOut: transA)
         }
-        handleB.backward(backend) {
+        handleB.backward(bGradBackend ?? backend) {
           matmul(a: a.noGrad(), transA: !transA, b: grad, transB: transOut, transOut: transB)
         }
       }
