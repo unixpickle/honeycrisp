@@ -442,23 +442,30 @@ final class HoneycrispTests: XCTestCase {
         }
 
         // Unbroadcasted gather along inner axis
-        var out = useX().gather(
-          axis: 2, indices: Tensor(data: [2, 0, 1, 2], shape: [1, 2, 2, 1], dtype: .int64))
-        XCTAssertEqual(out.shape, [1, 2, 2, 1])
-        out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [1, 2, 2, 1], dtype: dtype))
-        try await assertDataEqual(out, [3.0, 1.0, 3.0, 7.0])
-        try await assertDataEqual(xGrad!, [2.0, 0.0, 1.0, 0.0, 3.0, 4.0])
+        for unique in [false, true] {
+          let out = useX().gather(
+            axis: 2, indices: Tensor(data: [2, 0, 1, 2], shape: [1, 2, 2, 1], dtype: .int64),
+            indicesAreUnique: unique)
+          XCTAssertEqual(out.shape, [1, 2, 2, 1])
+          out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [1, 2, 2, 1], dtype: dtype))
+          try await assertDataEqual(out, [3.0, 1.0, 3.0, 7.0])
+          try await assertDataEqual(xGrad!, [2.0, 0.0, 1.0, 0.0, 3.0, 4.0])
+        }
 
         // Broadcasted gather along inner axis
-        out = useX().gather(
-          axis: 2, indices: Tensor(data: [2, 0], shape: [2], dtype: .int64))
-        XCTAssertEqual(out.shape, [1, 2, 2, 1])
-        out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [1, 2, 2, 1], dtype: dtype))
-        try await assertDataEqual(out, [3.0, 1.0, 7.0, -2.0])
-        try await assertDataEqual(xGrad!, [2.0, 0.0, 1.0, 4.0, 0.0, 3.0])
+        for unique in [false, true] {
+          let out = useX().gather(
+            axis: 2,
+            indices: Tensor(data: [2, 0], shape: [2], dtype: .int64),
+            indicesAreUnique: unique)
+          XCTAssertEqual(out.shape, [1, 2, 2, 1])
+          out.backward(Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [1, 2, 2, 1], dtype: dtype))
+          try await assertDataEqual(out, [3.0, 1.0, 7.0, -2.0])
+          try await assertDataEqual(xGrad!, [2.0, 0.0, 1.0, 4.0, 0.0, 3.0])
+        }
 
         // Unbroadcasted gather along outer axis
-        out = useX().gather(
+        var out = useX().gather(
           axis: 1, indices: Tensor(data: [0, 1, 0, 1, 0, 0], shape: [1, 2, 3, 1], dtype: .int64))
         XCTAssertEqual(out.shape, [1, 2, 3, 1])
         out.backward(
@@ -468,10 +475,12 @@ final class HoneycrispTests: XCTestCase {
 
         // Broadcasted scatter along outer axis
         let permuteMe = Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape: [1, 2, 3, 1])
-        let permuted = try await permuteMe.scatter(
-          axis: 1, count: 2, indices: Tensor(data: [1, 0], shape: [2])
-        ).floats()
-        XCTAssertEqual(permuted, [4.0, 5.0, 6.0, 1.0, 2.0, 3.0])
+        for unique in [false, true] {
+          let permuted = try await permuteMe.scatter(
+            axis: 1, count: 2, indices: Tensor(data: [1, 0], shape: [2]), indicesAreUnique: unique
+          ).floats()
+          XCTAssertEqual(permuted, [4.0, 5.0, 6.0, 1.0, 2.0, 3.0])
+        }
 
         // Broadcasted gather along outer axis
         out = useX().gather(

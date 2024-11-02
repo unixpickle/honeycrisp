@@ -1,6 +1,7 @@
 public struct ScatterGatherIndices {
   public let broadcasted: Bool
   public let indices: Tensor.Data
+  public let indicesAreUnique: Bool
   public let outCount: Int
 
   public let outerCount: Int
@@ -25,7 +26,7 @@ public struct ScatterGatherIndices {
 }
 
 extension Tensor {
-  public func gather(axis: Int, indices: Tensor) -> Tensor {
+  public func gather(axis: Int, indices: Tensor, indicesAreUnique: Bool = false) -> Tensor {
     let axis = positiveAxis(axis)
     alwaysAssert(indices.dtype == .int64, "can only gather with indices of dtype \(indices.dtype)")
     alwaysAssert(
@@ -47,6 +48,7 @@ extension Tensor {
         ScatterGatherIndices(
           broadcasted: indices.shape.count != t.shape.count,
           indices: try await indices.data,
+          indicesAreUnique: indicesAreUnique,
           outCount: indices.shape.count == 1 ? indices.shape[0] : indices.shape[axis],
           outerCount: t.shape[..<axis].product(),
           middleCount: t.shape[axis],
@@ -60,13 +62,16 @@ extension Tensor {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { [self] grad in
         handle.backward(backend) {
-          grad.scatter(axis: axis, count: shape[axis], indices: indices)
+          grad.scatter(
+            axis: axis, count: shape[axis], indices: indices, indicesAreUnique: indicesAreUnique)
         }
       }
     }
   }
 
-  public func scatter(axis: Int, count: Int, indices: Tensor) -> Tensor {
+  public func scatter(axis: Int, count: Int, indices: Tensor, indicesAreUnique: Bool = false)
+    -> Tensor
+  {
     let axis = positiveAxis(axis)
     alwaysAssert(indices.dtype == .int64, "can only scatter with indices of dtype \(indices.dtype)")
     alwaysAssert(
@@ -83,6 +88,7 @@ extension Tensor {
         ScatterGatherIndices(
           broadcasted: indices.shape.count != t.shape.count,
           indices: try await indices.data,
+          indicesAreUnique: indicesAreUnique,
           outCount: indices.shape.count == 1 ? indices.shape[0] : indices.shape[axis],
           outerCount: t.shape[..<axis].product(),
           middleCount: count,
@@ -95,7 +101,7 @@ extension Tensor {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { grad in
         handle.backward(backend) {
-          grad.gather(axis: axis, indices: indices)
+          grad.gather(axis: axis, indices: indices, indicesAreUnique: indicesAreUnique)
         }
       }
     }

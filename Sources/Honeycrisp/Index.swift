@@ -1,5 +1,11 @@
 /// A description of how to gather a subset of a Tensor
 /// according to some indexing operation.
+///
+/// When multiple TensorIndex objects are combined in a subscript, we must
+/// chain multiple TensorIndexResults into a single larger result. To do this,
+/// each TensorIndexResult "consumes" axes through gatherAxis, and later
+/// TensorIndex's will only see a subset of axes (via the shape argument to
+/// tensorIndex()) after this index.
 public struct TensorIndexResult {
   /// The Tensor is reshaped to this before a gather() is called.
   public let reshape: [Int]
@@ -8,6 +14,9 @@ public struct TensorIndexResult {
   ///
   /// If nil, then no gather is performed and only a reshape is performed.
   public let indices: Tensor?
+
+  /// If this is true, then no values may be repeated inside `indices`.
+  public let indicesAreUnique: Bool
 
   /// The axis index (in the reshape) on which gather
   /// is called. The size on this axis must match the size of the
@@ -39,6 +48,7 @@ extension Int: TensorIndex {
     return TensorIndexResult(
       reshape: inShape,
       indices: Tensor(data: [idx], shape: [1], dtype: .int64),
+      indicesAreUnique: true,
       gatherAxis: 0,
       gatherReshape: []
     )
@@ -67,6 +77,7 @@ extension Range<Int>: TensorIndex {
     return TensorIndexResult(
       reshape: inShape,
       indices: Tensor(range: start..<end, dtype: .int64),
+      indicesAreUnique: true,
       gatherAxis: 0,
       gatherReshape: nil)
   }
@@ -84,6 +95,7 @@ extension StrideTo<Int>: TensorIndex {
     return TensorIndexResult(
       reshape: inShape,
       indices: Tensor(data: indices, shape: [indices.count], dtype: .int64),
+      indicesAreUnique: true,
       gatherAxis: 0,
       gatherReshape: nil)
   }
@@ -111,7 +123,11 @@ public struct FullRange: TensorIndex {
   public func tensorIndex(forShape inShape: [Int]) -> TensorIndexResult {
     alwaysAssert(inShape.count >= dims)
     return TensorIndexResult(
-      reshape: inShape, indices: nil, gatherAxis: dims - 1, gatherReshape: nil)
+      reshape: inShape,
+      indices: nil,
+      indicesAreUnique: true,
+      gatherAxis: dims - 1,
+      gatherReshape: nil)
   }
 }
 
@@ -126,7 +142,10 @@ public struct NewAxis: TensorIndex {
 
   public func tensorIndex(forShape inShape: [Int]) -> TensorIndexResult {
     return TensorIndexResult(
-      reshape: Array(repeating: 1, count: count) + inShape, indices: nil, gatherAxis: count - 1,
+      reshape: Array(repeating: 1, count: count) + inShape,
+      indices: nil,
+      indicesAreUnique: true,
+      gatherAxis: count - 1,
       gatherReshape: nil)
   }
 }
@@ -208,7 +227,11 @@ public struct PermuteAxes: TensorIndex {
         try await backend.axisPermutation(permutation: perm, shape: Array(inShape[..<perm.count]))
       }, shape: [reshape[0]], dtype: .int64)
     return TensorIndexResult(
-      reshape: reshape, indices: indices, gatherAxis: 0, gatherReshape: outShape)
+      reshape: reshape,
+      indices: indices,
+      indicesAreUnique: true,
+      gatherAxis: 0,
+      gatherReshape: outShape)
   }
 }
 
@@ -219,7 +242,8 @@ extension Array: TensorIndex where Element == any TensorIndex {
     alwaysAssert(inShape.count >= self.minTensorIndexDims)
     switch self.count {
     case 0:
-      return TensorIndexResult(reshape: inShape, indices: nil, gatherAxis: -1, gatherReshape: nil)
+      return TensorIndexResult(
+        reshape: inShape, indices: nil, indicesAreUnique: true, gatherAxis: -1, gatherReshape: nil)
     case 1:
       return self[0].tensorIndex(forShape: inShape)
     default:
@@ -227,57 +251,48 @@ extension Array: TensorIndex where Element == any TensorIndex {
       var gatherInSize: Int = 1
       var gatherShape: [Int] = []
       var indices: Tensor? = nil
+      var unique: Bool = true
       var innerShape: [Int] = inShape
+
+      func addFullAxes(_ axesShape: some Collection<Int>) {
+        if indices == nil {
+          // We can cheaply skip this gather dimension.
+          outerShape += axesShape
+        } else {
+          let innerCount = axesShape.product()
+          // We must explicitly represent the gather dimension.
+          indices = innerCount * indices!.unsqueeze(axis: 1)
+          indices = (indices! + Tensor(range: 0..<innerCount)).flatten()
+          gatherShape += axesShape
+          gatherInSize *= innerCount
+        }
+      }
 
       for x in self {
         let result = x.tensorIndex(forShape: innerShape)
+        if !result.indicesAreUnique {
+          unique = false
+        }
         alwaysAssert(
           result.reshape.product() == innerShape.product(),
           "indexing operation cannot change size of tensor in reshape")
         if result.gatherAxis > 0 {
-          let prefixShape = result.reshape[..<result.gatherAxis]
-          if indices == nil {
-            outerShape += prefixShape
-          } else {
-            // We cannot cheaply skip the dimension(s) with broadcasted gather.
-            let prefixSize = prefixShape.product()
-            indices =
-              prefixSize
-              * indices!.reshape([indices!.shape[0], 1]).repeating(axis: 1, count: prefixSize)
-            indices = (indices! + Tensor(range: 0..<prefixSize).expand(as: indices!)).flatten()
-            gatherShape += prefixShape
-            gatherInSize *= prefixSize
-          }
+          addFullAxes(result.reshape[..<result.gatherAxis])
         }
         if let newIndices = result.indices {
           if indices == nil {
             indices = newIndices
           } else {
             let axisSize = result.reshape[result.gatherAxis]
-            indices =
-              axisSize
-              * indices!.reshape([indices!.shape[0], 1]).repeating(
-                axis: 1, count: newIndices.shape[0])
-            indices = (indices! + newIndices.expand(as: indices!)).flatten()
+            indices = axisSize * indices!.unsqueeze(axis: 1)
+            indices = (indices! + newIndices).flatten()
           }
           gatherShape += result.gatherReshape ?? [newIndices.shape[0]]
           gatherInSize *= result.reshape[result.gatherAxis]
         } else if result.gatherAxis >= 0 {
           let axisSize = result.reshape[result.gatherAxis]
           let newShape = result.gatherReshape ?? [axisSize]
-          if indices == nil {
-            // We can cheaply skip this gather dimension.
-            outerShape += newShape
-          } else {
-            // We must explicitly represent the gather dimension.
-            indices =
-              axisSize
-              * indices!.reshape([indices!.shape[0], 1]).repeating(
-                axis: 1, count: axisSize)
-            indices = (indices! + Tensor(range: 0..<axisSize).expand(as: indices!)).flatten()
-            gatherShape += newShape
-            gatherInSize *= axisSize
-          }
+          addFullAxes(newShape)
         }
         innerShape = [Int](result.reshape[(result.gatherAxis + 1)...])
       }
@@ -292,8 +307,11 @@ extension Array: TensorIndex where Element == any TensorIndex {
         "cannot reshape to \(outerShape) + [\(gatherInSize)] + \(innerShape) from \(inShape)")
 
       return TensorIndexResult(
-        reshape: reshape, indices: indices,
-        gatherAxis: outerShape.count, gatherReshape: gatherShape)
+        reshape: reshape,
+        indices: indices,
+        indicesAreUnique: unique,
+        gatherAxis: outerShape.count,
+        gatherReshape: gatherShape)
     }
   }
 }
@@ -333,7 +351,8 @@ extension Tensor {
     let result = Array(index).tensorIndex(forShape: shape)
     var out = reshape(result.reshape)
     if let indices = result.indices {
-      out = out.gather(axis: result.gatherAxis, indices: indices)
+      out = out.gather(
+        axis: result.gatherAxis, indices: indices, indicesAreUnique: result.indicesAreUnique)
     }
     if let newShape = result.gatherReshape {
       out = out.reshape(

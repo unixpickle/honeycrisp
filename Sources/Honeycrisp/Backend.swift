@@ -8,6 +8,7 @@ public enum BackendError: Error {
   case failedToCreateCommandQueue
   case allocationFailed(Int)
   case kernelFailed(String)
+  case failedToLoadKernels(String)
 }
 
 open class Backend {
