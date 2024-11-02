@@ -26,7 +26,10 @@ let package = Package(
   targets: [
     .target(
       name: "Honeycrisp",
-      dependencies: [.product(name: "CoreMLBuilder", package: "coreml-builder")]),
+      dependencies: [.product(name: "CoreMLBuilder", package: "coreml-builder")],
+      resources: [
+        .process("Resources")
+      ]),
     .testTarget(
       name: "HoneycrispTests",
       dependencies: ["Honeycrisp", .product(name: "Gzip", package: "GzipSwift")],
