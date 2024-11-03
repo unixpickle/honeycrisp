@@ -1,5 +1,4 @@
 import Accelerate
-import Atomics
 import Foundation
 import Metal
 import MetalPerformanceShaders
