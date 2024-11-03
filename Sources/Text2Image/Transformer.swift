@@ -226,7 +226,9 @@ class Transformer: Trainable {
     var outputs: [Tensor] = []
     var prevToken = prefixes
     for _ in 0..<(config.TokenCount - prefixes.shape[1]) {
-      let logits = Tensor.withGrad(enabled: false) { self(prevToken, kvCache: kvCache)[..., -1].cast(.float32) }
+      let logits = Tensor.withGrad(enabled: false) {
+        self(prevToken, kvCache: kvCache)[..., -1].cast(.float32)
+      }
       let guidedLogits =
         if let cfgScale = cfgScale {
           {
@@ -247,7 +249,7 @@ class Transformer: Trainable {
       }
 
       // Don't let graph get too deep and consume memory.
-      let _ = try await samples.ints()
+      try await samples.wait()
 
       outputs.append(prevToken)
     }

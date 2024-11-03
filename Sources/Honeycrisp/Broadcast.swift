@@ -1,5 +1,15 @@
 import Metal
 
+/// A mapping from a broadcasted array to the underlying data array.
+///
+/// We can imagine we have some data with `dataCount` elements, but broadcast
+/// it to a virtual array of `dataCount * outerRepeats * innerRepeats`
+/// elements, where each element of the data is repeated sequentially
+/// `innerRepeats` times, and the entire result is repeated `outerRepeats`
+/// times.
+///
+/// An instance of this structure can be called as a function, and will map an
+/// index in the virtual array to an index in the data array.
 public struct BroadcastStrides {
   public let dataCount: Int
   public let outerRepeats: Int
@@ -9,6 +19,8 @@ public struct BroadcastStrides {
     outerRepeats == 1 && innerRepeats == 1
   }
 
+  /// Get the `RepeatDims` which could be applied to the raw array to get the
+  /// virtual array.
   public func repeats() -> [RepeatDims] {
     var result = [RepeatDims]()
     if innerRepeats > 1 {
@@ -21,97 +33,124 @@ public struct BroadcastStrides {
     return result
   }
 
+  /// Get the `ReduceDims` that we could apply to the virtual gradient array to
+  /// get a gradient for the raw data array.
   public func repeatsInverse() -> [ReduceDims] {
     return repeats().reversed().map { $0.inverse() }
   }
 
+  /// May an index in the virtual array to the data array.
   public func callAsFunction(_ i: Int) -> Int {
     assert(i >= 0 && i < dataCount * outerRepeats * innerRepeats)
     return (i / innerRepeats) % dataCount
   }
 }
 
+/// A structure annotating an actual instance of raw data with a
+/// `BroadcastStrides` indicating how to interpret it as a virtual array.
+///
+/// Note that this structure does not include the dtype of the underlying
+/// data, which is crucial for actually performing operations on it.
 public struct BroadcastData {
   public let strides: BroadcastStrides
   public let data: Tensor.Data
 
+  /// Get the size of the data array, in elements (not bytes).
   public var dataCount: Int { strides.dataCount }
+
+  /// If true, the data is actually not broadcasted and the raw array is
+  /// equal to the virtual array.
   public var isSimple: Bool { strides.isNoOp }
 }
 
+/// An ordered sequence of `RepeatDims` which, when applied, expands the
+/// dimensions of one tensor to another shape.
+///
+/// Each step includes the (axes) which it affects in the source tensor,
+/// and this may be empty if new (outer) axes are being created.
 private class RepeatSequence {
-  private var _steps: [RepeatDims] = []
-  private var _axes: [[Int]] = []
+  public struct Step {
+    let dims: RepeatDims
+    let axes: [Int]
+  }
+
+  private var _steps: [Step] = []
   public let inCount: Int
-  public var steps: [RepeatDims] { _steps }
-  public var axes: [[Int]] { _axes }
+  public var steps: [Step] { _steps }
 
   public var outCount: Int {
-    steps.count == 0 ? inCount : steps[steps.count - 1].outCount
+    steps.count == 0 ? inCount : steps[steps.count - 1].dims.outCount
   }
 
   public init(inCount: Int) {
     self.inCount = inCount
   }
 
-  private init(inCount: Int, steps: [RepeatDims], axes: [[Int]]) {
+  private init(inCount: Int, steps: [Step]) {
     self.inCount = inCount
     _steps = steps
-    _axes = axes
   }
 
   public func add(_ d: RepeatDims, axes: [Int]) {
     if _steps.isEmpty {
       assert(d.innerCount * d.outerCount == inCount)
-      _steps = [d]
-      _axes = [axes]
+      _steps = [Step(dims: d, axes: axes)]
     } else {
       let last = _steps[_steps.count - 1]
       assert(
-        d.innerCount >= last.innerCount * last.repeatCount,
+        d.innerCount >= last.dims.innerCount * last.dims.repeatCount,
         "repeats must be strided along increasing dimensions")
-      assert(d.outerCount * d.innerCount == last.outCount)
-      if last.innerCount * last.repeatCount == d.innerCount {
-        _steps[_steps.count - 1] = RepeatDims(
-          outerCount: d.outerCount, repeatCount: last.repeatCount * d.repeatCount,
-          innerCount: last.innerCount)
-        _axes[_axes.count - 1].append(contentsOf: axes)
+      assert(d.outerCount * d.innerCount == last.dims.outCount)
+      if last.dims.innerCount * last.dims.repeatCount == d.innerCount {
+        // We can modify the existing step
+        _steps[_steps.count - 1] = Step(
+          dims: RepeatDims(
+            outerCount: d.outerCount, repeatCount: last.dims.repeatCount * d.repeatCount,
+            innerCount: last.dims.innerCount
+          ),
+          axes: last.axes + axes)
       } else {
-        _steps.append(d)
-        _axes.append(axes)
+        _steps.append(Step(dims: d, axes: axes))
       }
     }
   }
 
+  /// Compress the repeat sequence such that we only repeat dimensions that are
+  /// not supported by broadcasting.
+  /// We then return a combination of a `RepeatSequence` which must be applied
+  /// to the original data, and then a `BroadcastStrides` to be used with the
+  /// result to get the full expansion.
   public func lazify() -> (RepeatSequence, BroadcastStrides) {
-    var s = _steps
-    var a = _axes
+    var newSteps = steps
     var result = BroadcastStrides(dataCount: outCount, outerRepeats: 1, innerRepeats: 1)
-    if let first = s.first, first.innerCount == 1 {
-      s.removeFirst()
-      a.removeFirst()
+    if let first = newSteps.first, first.dims.innerCount == 1 {
+      newSteps.removeFirst()
       result = BroadcastStrides(
-        dataCount: result.dataCount / first.repeatCount, outerRepeats: 1,
-        innerRepeats: first.repeatCount)
+        dataCount: result.dataCount / first.dims.repeatCount, outerRepeats: 1,
+        innerRepeats: first.dims.repeatCount)
 
       // We must modify all later repetitions to reflect the new
       // smaller inner dimension.
-      for (i, x) in s.enumerated() {
-        s[i] = RepeatDims(
-          outerCount: x.outerCount,
-          repeatCount: x.repeatCount,
-          innerCount: x.innerCount / first.repeatCount
+      for (i, x) in newSteps.enumerated() {
+        newSteps[i] = Step(
+          dims: RepeatDims(
+            outerCount: x.dims.outerCount,
+            repeatCount: x.dims.repeatCount,
+            innerCount: x.dims.innerCount / first.dims.repeatCount
+          ),
+          axes: x.axes
         )
       }
     }
-    if let last = s.last, last.outerCount == 1 {
-      s.removeLast()
-      a.removeLast()
+    if let last = newSteps.last, last.dims.outerCount == 1 {
+      newSteps.removeLast()
       result = BroadcastStrides(
-        dataCount: result.dataCount / last.repeatCount, outerRepeats: last.repeatCount,
-        innerRepeats: result.innerRepeats)
+        dataCount: result.dataCount / last.dims.repeatCount,
+        outerRepeats: last.dims.repeatCount,
+        innerRepeats: result.innerRepeats
+      )
     }
-    return (RepeatSequence(inCount: inCount, steps: s, axes: a), result)
+    return (RepeatSequence(inCount: inCount, steps: newSteps), result)
   }
 
   public func inverse() -> [ReduceDims] {
@@ -119,7 +158,11 @@ private class RepeatSequence {
     for step in steps.reversed() {
       result.append(
         ReduceDims(
-          outerCount: step.outerCount, reduceCount: step.repeatCount, innerCount: step.innerCount))
+          outerCount: step.dims.outerCount,
+          reduceCount: step.dims.repeatCount,
+          innerCount: step.dims.innerCount
+        )
+      )
     }
     return result
   }
@@ -133,7 +176,7 @@ extension Tensor {
 
   public func expand(shape newShape: [Int]) -> Tensor {
     let plan = planExpansion(shape: newShape)
-    return flatApplyRepeats(plan.steps).reshape(newShape)
+    return flatApplyRepeats(plan.steps.map { $0.dims }).reshape(newShape)
   }
 
   public static func broadcast(_ xs: [Tensor]) -> [Tensor] {
@@ -169,9 +212,9 @@ extension Tensor {
 
     let plan = planExpansion(shape: newShape)
     let (lazyPlan, bcast) = plan.lazify()
-    let expanded = flatApplyRepeats(lazyPlan.steps)
+    let expanded = flatApplyRepeats(lazyPlan.steps.map { $0.dims })
     var lazyShape = shape
-    for axis in lazyPlan.axes.flatMap({ $0 }) {
+    for axis in lazyPlan.steps.flatMap({ $0.axes }) {
       lazyShape[axis] = newShape[axis + (newShape.count - shape.count)]
     }
     assert(lazyShape.product() == expanded.shape.product())

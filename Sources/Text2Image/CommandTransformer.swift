@@ -32,9 +32,9 @@ class CommandTransformer: Command {
   let lr: Float = 0.0001
   let bs = 8
   let captionBytes: Int = 128
-  let saveInterval: Int = 500
+  let saveInterval: Int = 1000
   let cfgProb: Float = 0.1
-  let cfgScale: Float = 1.1
+  let cfgScales: [Float] = [1.0, 2.0, 4.0, 10.0]
 
   let savePath: String
   let vqPath: String
@@ -202,11 +202,19 @@ class CommandTransformer: Command {
   private func sampleAndSave() async throws {
     let filename = "text2im_samples.png"
     print("sampling to \(filename) ...")
-    let captions = captionTensor(testCaptions)
-    let samples = try await model.sample(prefixes: captions, cfgScale: cfgScale)
-    let embs = vqvae.bottleneck.embed(samples.reshape([-1, 16, 16]))
-    let sampleImages = vqvae.decoder(embs.move(axis: -1, to: 1)).move(axis: 1, to: -1)
-    let img = try await tensorToImage(tensor: sampleImages.flatten(endAxis: 1))
+    var images = [Tensor]()
+    for scale in cfgScales {
+      let rng = try await Backend.current.defaultRandom()
+      let state = try await rng.save()
+      try await rng.seed(0)
+      let captions = captionTensor(testCaptions)
+      let samples = try await model.sample(prefixes: captions, cfgScale: scale)
+      let embs = vqvae.bottleneck.embed(samples.reshape([-1, 16, 16]))
+      images.append(
+        vqvae.decoder(embs.move(axis: -1, to: 1)).move(axis: 1, to: -1).flatten(endAxis: 1))
+      try await rng.restore(state)
+    }
+    let img = try await tensorToImage(tensor: Tensor(concat: images, axis: 1))
     try img.write(to: URL(filePath: filename))
 
     print("saving to \(savePath) ...")

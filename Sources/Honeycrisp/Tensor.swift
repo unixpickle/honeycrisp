@@ -271,6 +271,12 @@ public final class Tensor {
     return data[0]
   }
 
+  public func wait() async throws {
+    if let c = (try await data).completeOnAllDevices {
+      try await c.value
+    }
+  }
+
   public func noGrad() -> Tensor {
     return Tensor(dataTask: dataTask, shape: shape, dtype: dtype)
   }
