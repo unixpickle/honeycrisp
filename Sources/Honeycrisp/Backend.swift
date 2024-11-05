@@ -17,15 +17,23 @@ open class Backend {
     case tensor(Tensor.Data)
     case scalar(T)
 
-    internal func getPointer(_ dtype: Tensor.DType) throws -> (UnsafeMutableRawPointer, Bool) {
+    public var isScalar: Bool {
+      if case .scalar(_) = self {
+        true
+      } else {
+        false
+      }
+    }
+
+    internal func makeOrGetBuffer(_ b: Backend, _ dtype: Tensor.DType) async throws -> MTLBuffer {
       switch self {
       case .tensor(let t):
-        (t.buffer.contents(), false)
+        try await t.cpuBuffer
       case .scalar(let s):
-        try {
-          let output = UnsafeMutableRawPointer.allocate(byteCount: dtype.byteSize, alignment: 16)
-          try arrayToPointer([s], output: output, dtype: dtype)
-          return (output, true)
+        try await {
+          let buf = try await b.allocate(length: dtype.byteSize)
+          try arrayToPointer([s], output: buf.contents(), dtype: dtype)
+          return buf
         }()
       }
     }
@@ -443,6 +451,12 @@ open class Backend {
 
 open class CPUBackend: Backend {
 
+  public struct CPUData: Tensor.Data {
+    public var buffer: MTLBuffer
+
+    public var cpuBuffer: MTLBuffer { buffer }
+  }
+
   public enum Allocator {
     case device
     case bucket
@@ -473,7 +487,7 @@ open class CPUBackend: Backend {
     }
 
     public func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) async throws
-      -> Tensor.Data
+      -> any Tensor.Data
     {
       let buffer = try await backend.allocate(length: count * dtype.byteSize)
       try await cpuBackend.serialize {
@@ -499,16 +513,16 @@ open class CPUBackend: Backend {
           try arrayToPointer(results, output: buffer.contents(), dtype: dtype)
         }
       }
-      return Tensor.Data(backend: backend, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
 
-    public func sample(count: Int, in range: Range<Int64>) async throws -> Tensor.Data {
+    public func sample(count: Int, in range: Range<Int64>) async throws -> any Tensor.Data {
       let buffer = try await backend.allocate(length: count * Tensor.DType.int64.byteSize)
       try await cpuBackend.serialize {
         let ints = (0..<count).map { _ in Int64.random(in: range) }
         try arrayToPointer(ints, output: buffer.contents(), dtype: .int64)
       }
-      return Tensor.Data(backend: backend, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
   }
 
@@ -573,14 +587,6 @@ open class CPUBackend: Backend {
         }
         let constResult = result!
         continuation.resume(with: constResult)
-      }
-    }
-  }
-
-  internal func waitForData(_ xs: Tensor.Data...) async throws {
-    for x in xs {
-      if let waiter = x.completeOnAllDevices {
-        try await waiter.value
       }
     }
   }
@@ -668,16 +674,17 @@ open class CPUBackend: Backend {
   ) async throws
     -> Tensor.Data
   {
-    try await waitForData(a.data, b.data)
+    let aBuf = try await a.data.cpuBuffer
+    let bBuf = try await b.data.cpuBuffer
 
     func apply<T: NumericTensorElement>(_: T.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
         if dtype == .float32 && (op != .mod) && a.isSimple && b.isSimple {
           let x = UnsafePointer<Float>(
-            a.data.buffer.contents().bindMemory(to: Float.self, capacity: a.dataCount))
+            aBuf.contents().bindMemory(to: Float.self, capacity: a.dataCount))
           let y = UnsafePointer<Float>(
-            b.data.buffer.contents().bindMemory(to: Float.self, capacity: b.dataCount))
+            bBuf.contents().bindMemory(to: Float.self, capacity: b.dataCount))
           let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
           switch op {
           case .add:
@@ -692,8 +699,8 @@ open class CPUBackend: Backend {
             fatalError()
           }
         } else {
-          try readBuffer(T.self, a.data.buffer, count: a.dataCount, dtype: dtype) { aData in
-            try readBuffer(T.self, b.data.buffer, count: b.dataCount, dtype: dtype) { bData in
+          try readBuffer(T.self, aBuf, count: a.dataCount, dtype: dtype) { aData in
+            try readBuffer(T.self, bBuf, count: b.dataCount, dtype: dtype) { bData in
               try writeBuffer(T.self, buffer, count: count, dtype: dtype) { cData in
                 for i in 0..<count {
                   cData[i] = op.apply(
@@ -704,7 +711,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(Int64.self)
@@ -719,14 +726,13 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a)
+    let aBuf = try await a.cpuBuffer
 
     func apply<T1: NumericTensorElement>(_ b: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
         if dtype == .float32 && (op != .mod) {
-          let x = UnsafePointer<Float>(
-            a.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          let x = UnsafePointer<Float>(aBuf.contents().bindMemory(to: Float.self, capacity: count))
           var bScalar =
             switch op {
             case .add, .mul: b.toFloat()
@@ -744,7 +750,7 @@ open class CPUBackend: Backend {
             fatalError()
           }
         } else {
-          try readBuffer(T1.self, a.buffer, count: count, dtype: dtype) { aData in
+          try readBuffer(T1.self, aBuf, count: count, dtype: dtype) { aData in
             try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { cData in
               for (i, x) in aData.enumerated() {
                 cData[i] = op.apply(x, b)
@@ -753,7 +759,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(b.toInt64())
@@ -768,13 +774,12 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(b)
+    let bBuf = try await b.cpuBuffer
     func apply<T1: NumericTensorElement>(_ a: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
         if dtype == .float32 && (op != .mod) {
-          let x = UnsafePointer<Float>(
-            b.buffer.contents().bindMemory(to: Float.self, capacity: count))
+          let x = UnsafePointer<Float>(bBuf.contents().bindMemory(to: Float.self, capacity: count))
           var aFloat = a.toFloat()
           var neg1 = Float(-1)
           let z = buffer.contents().bindMemory(to: Float.self, capacity: count)
@@ -791,7 +796,7 @@ open class CPUBackend: Backend {
             fatalError()
           }
         } else {
-          try readBuffer(T1.self, b.buffer, count: count, dtype: dtype) { bData in
+          try readBuffer(T1.self, bBuf, count: count, dtype: dtype) { bData in
             try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { cData in
               for (i, x) in bData.enumerated() {
                 cData[i] = op.apply(a, x)
@@ -800,7 +805,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(a.toInt64())
@@ -815,25 +820,27 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(input.data, coeff.data, bias.data)
+    let inBuf = try await input.data.cpuBuffer
+    let coeffBuf = try await coeff.data.cpuBuffer
+    let biasBuf = try await bias.data.cpuBuffer
     func apply<T1: NumericTensorElement>(_: T1.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
         if dtype == .float32 && input.isSimple && coeff.isSimple && bias.isSimple {
           let x = UnsafePointer<Float>(
-            input.data.buffer.contents().bindMemory(to: Float.self, capacity: count))
+            inBuf.contents().bindMemory(to: Float.self, capacity: count))
           let coeff = UnsafePointer<Float>(
-            coeff.data.buffer.contents().bindMemory(to: Float.self, capacity: count))
+            coeffBuf.contents().bindMemory(to: Float.self, capacity: count))
           let bias = UnsafePointer<Float>(
-            bias.data.buffer.contents().bindMemory(to: Float.self, capacity: count))
+            biasBuf.contents().bindMemory(to: Float.self, capacity: count))
           let output = buffer.contents().bindMemory(to: Float.self, capacity: count)
           vDSP_vma(x, 1, coeff, 1, bias, 1, output, 1, vDSP_Length(count))
         } else {
-          try readBuffer(T1.self, input.data.buffer, count: input.dataCount, dtype: dtype) {
+          try readBuffer(T1.self, inBuf, count: input.dataCount, dtype: dtype) {
             inData in
-            try readBuffer(T1.self, coeff.data.buffer, count: coeff.dataCount, dtype: dtype) {
+            try readBuffer(T1.self, coeffBuf, count: coeff.dataCount, dtype: dtype) {
               coeffData in
-              try readBuffer(T1.self, bias.data.buffer, count: bias.dataCount, dtype: dtype) {
+              try readBuffer(T1.self, biasBuf, count: bias.dataCount, dtype: dtype) {
                 biasData in
                 try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { outData in
                   for i in 0..<count {
@@ -847,7 +854,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(Int64.self)
@@ -862,25 +869,27 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(input.data, coeff.data, bias.data)
+    let inBuf = try await input.data.cpuBuffer
+    let coeffBuf = try await coeff.data.cpuBuffer
+    let biasBuf = try await bias.data.cpuBuffer
     func apply<T1: NumericTensorElement>(_: T1.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
         if dtype == .float32 && input.isSimple && coeff.isSimple && bias.isSimple {
           let x = UnsafePointer<Float>(
-            input.data.buffer.contents().bindMemory(to: Float.self, capacity: count))
+            inBuf.contents().bindMemory(to: Float.self, capacity: count))
           let coeff = UnsafePointer<Float>(
-            coeff.data.buffer.contents().bindMemory(to: Float.self, capacity: count))
+            coeffBuf.contents().bindMemory(to: Float.self, capacity: count))
           let bias = UnsafePointer<Float>(
-            bias.data.buffer.contents().bindMemory(to: Float.self, capacity: count))
+            biasBuf.contents().bindMemory(to: Float.self, capacity: count))
           let output = buffer.contents().bindMemory(to: Float.self, capacity: count)
           vDSP_vam(x, 1, bias, 1, coeff, 1, output, 1, vDSP_Length(count))
         } else {
-          try readBuffer(T1.self, input.data.buffer, count: input.dataCount, dtype: dtype) {
+          try readBuffer(T1.self, inBuf, count: input.dataCount, dtype: dtype) {
             inData in
-            try readBuffer(T1.self, coeff.data.buffer, count: coeff.dataCount, dtype: dtype) {
+            try readBuffer(T1.self, coeffBuf, count: coeff.dataCount, dtype: dtype) {
               coeffData in
-              try readBuffer(T1.self, bias.data.buffer, count: bias.dataCount, dtype: dtype) {
+              try readBuffer(T1.self, biasBuf, count: bias.dataCount, dtype: dtype) {
                 biasData in
                 try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { outData in
                   for i in 0..<count {
@@ -894,7 +903,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(Int64.self)
@@ -911,15 +920,16 @@ open class CPUBackend: Backend {
     -> Tensor.Data
   {
     assert(dtype.isFloat)
-    try await waitForData(input.data, mean.data, variance.data)
+    let inBuf = try await input.data.cpuBuffer
+    let meanBuf = try await mean.data.cpuBuffer
+    let varianceBuf = try await variance.data.cpuBuffer
     let buffer = try await allocate(length: count * dtype.byteSize)
     try await serialize {
-      try readBuffer(Float.self, input.data.buffer, count: input.dataCount, dtype: dtype) {
+      try readBuffer(Float.self, inBuf, count: input.dataCount, dtype: dtype) {
         inData in
-        try readBuffer(Float.self, mean.data.buffer, count: mean.dataCount, dtype: dtype) {
+        try readBuffer(Float.self, meanBuf, count: mean.dataCount, dtype: dtype) {
           meanData in
-          try readBuffer(Float.self, variance.data.buffer, count: variance.dataCount, dtype: dtype)
-          {
+          try readBuffer(Float.self, varianceBuf, count: variance.dataCount, dtype: dtype) {
             varianceData in
             try writeBuffer(Float.self, buffer, count: count, dtype: dtype) { outData in
               for i in 0..<count {
@@ -932,7 +942,7 @@ open class CPUBackend: Backend {
         }
       }
     }
-    return Tensor.Data(backend: self, buffer: buffer)
+    return CPUData(buffer: buffer)
   }
 
   override public func normalizeXGrad<T: TensorElement>(
@@ -942,12 +952,13 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(variance.data, outGrad.data)
+    let varianceBuf = try await variance.data.cpuBuffer
+    let outGradBuf = try await outGrad.data.cpuBuffer
     let buffer = try await allocate(length: count * dtype.byteSize)
     try await serialize {
-      try readBuffer(Float.self, variance.data.buffer, count: variance.dataCount, dtype: dtype) {
+      try readBuffer(Float.self, varianceBuf, count: variance.dataCount, dtype: dtype) {
         varianceData in
-        try readBuffer(Float.self, outGrad.data.buffer, count: outGrad.dataCount, dtype: dtype) {
+        try readBuffer(Float.self, outGradBuf, count: outGrad.dataCount, dtype: dtype) {
           outGradData in
           try writeBuffer(Float.self, buffer, count: count, dtype: dtype) { outData in
             for i in 0..<count {
@@ -959,7 +970,7 @@ open class CPUBackend: Backend {
         }
       }
     }
-    return Tensor.Data(backend: self, buffer: buffer)
+    return CPUData(buffer: buffer)
   }
 
   override public func normalizeVarianceGrad<T: TensorElement>(
@@ -969,18 +980,20 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(input.data, mean.data, variance.data, outGrad.data)
+    let inBuf = try await input.data.cpuBuffer
+    let meanBuf = try await mean.data.cpuBuffer
+    let varianceBuf = try await variance.data.cpuBuffer
+    let outGradBuf = try await outGrad.data.cpuBuffer
+
     let buffer = try await allocate(length: count * dtype.byteSize)
     try await serialize {
-      try readBuffer(Float.self, input.data.buffer, count: input.dataCount, dtype: dtype) {
+      try readBuffer(Float.self, inBuf, count: input.dataCount, dtype: dtype) {
         inputData in
-        try readBuffer(Float.self, mean.data.buffer, count: mean.dataCount, dtype: dtype) {
+        try readBuffer(Float.self, meanBuf, count: mean.dataCount, dtype: dtype) {
           meanData in
-          try readBuffer(Float.self, variance.data.buffer, count: variance.dataCount, dtype: dtype)
-          {
+          try readBuffer(Float.self, varianceBuf, count: variance.dataCount, dtype: dtype) {
             varianceData in
-            try readBuffer(Float.self, outGrad.data.buffer, count: outGrad.dataCount, dtype: dtype)
-            {
+            try readBuffer(Float.self, outGradBuf, count: outGrad.dataCount, dtype: dtype) {
               outGradData in
               try writeBuffer(Float.self, buffer, count: count, dtype: dtype) { outData in
                 for i in 0..<count {
@@ -995,7 +1008,7 @@ open class CPUBackend: Backend {
         }
       }
     }
-    return Tensor.Data(backend: self, buffer: buffer)
+    return CPUData(buffer: buffer)
   }
 
   override public func compare(
@@ -1004,13 +1017,14 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a, b)
+    let aBuf = try await a.cpuBuffer
+    let bBuf = try await b.cpuBuffer
 
     func apply<T1: NumericTensorElement>(_: T1.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * Tensor.DType.bool.byteSize)
       try await serialize {
-        try readBuffer(T1.self, a.buffer, count: count, dtype: dtype) { aData in
-          try readBuffer(T1.self, b.buffer, count: count, dtype: dtype) { bData in
+        try readBuffer(T1.self, aBuf, count: count, dtype: dtype) { aData in
+          try readBuffer(T1.self, bBuf, count: count, dtype: dtype) { bData in
             try writeBuffer(Bool.self, buffer, count: count, dtype: .bool) { cData in
               for (i, (x, y)) in zip(aData, bData).enumerated() {
                 cData[i] = op.apply(x, y)
@@ -1019,7 +1033,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(Int64.self)
@@ -1034,11 +1048,11 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a)
+    let aBuf = try await a.cpuBuffer
     func apply<T1: NumericTensorElement>(_ b: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * Tensor.DType.bool.byteSize)
       try await serialize {
-        try readBuffer(T1.self, a.buffer, count: count, dtype: dtype) { aData in
+        try readBuffer(T1.self, aBuf, count: count, dtype: dtype) { aData in
           try writeBuffer(Bool.self, buffer, count: count, dtype: .bool) { cData in
             for (i, x) in aData.enumerated() {
               cData[i] = op.apply(x, b)
@@ -1046,7 +1060,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(b.toInt64())
@@ -1061,11 +1075,11 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(b)
+    let bBuf = try await b.cpuBuffer
     func apply<T1: NumericTensorElement>(_ a: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * Tensor.DType.bool.byteSize)
       try await serialize {
-        try readBuffer(T1.self, b.buffer, count: count, dtype: dtype) { bData in
+        try readBuffer(T1.self, bBuf, count: count, dtype: dtype) { bData in
           try writeBuffer(Bool.self, buffer, count: count, dtype: .bool) { cData in
             for (i, x) in bData.enumerated() {
               cData[i] = op.apply(a, x)
@@ -1073,7 +1087,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(a.toInt64())
@@ -1088,16 +1102,16 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a)
+    let aBuf = try await a.cpuBuffer
 
     func apply<T: TensorElement>(_: T.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * outType.byteSize)
       try await serialize {
         var arr = [T](repeating: T(0.0), count: count)
-        try pointerToArray(a.buffer.contents(), output: &arr, dtype: inType)
+        try pointerToArray(aBuf.contents(), output: &arr, dtype: inType)
         try arrayToPointer(arr, output: buffer.contents(), dtype: outType)
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if inType == .int64 {
       return try await apply(Int64.self)
@@ -1112,14 +1126,14 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a)
+    let aBuf = try await a.cpuBuffer
 
     func apply<T1: NumericTensorElement>(_ b: T1, _ outScale: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
         if dtype == .float32 && (b == T1(2.0) || b == T1(-1.0)) && outScale == T1(1.0) {
           let x = UnsafePointer<Float>(
-            a.buffer.contents().bindMemory(to: Float.self, capacity: count))
+            aBuf.contents().bindMemory(to: Float.self, capacity: count))
           let z = UnsafeMutablePointer<Float>(
             buffer.contents().bindMemory(to: Float.self, capacity: count))
           if b == T1(2.0) {
@@ -1130,7 +1144,7 @@ open class CPUBackend: Backend {
             }
           }
         } else {
-          try readBuffer(T1.self, a.buffer, count: count, dtype: dtype) { arr in
+          try readBuffer(T1.self, aBuf, count: count, dtype: dtype) { arr in
             try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in
               for (i, x) in arr.enumerated() {
                 out[i] = outScale * x.pow(b)
@@ -1139,7 +1153,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(b.toInt64(), outScale.toInt64())
@@ -1154,14 +1168,14 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a)
+    let aBuf = try await a.cpuBuffer
 
     alwaysAssert(min != nil || max != nil, "cannot use clamp() without bounds")
 
     func apply<T1: NumericTensorElement>(_ min: T1?, _ max: T1?) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        try readBuffer(T1.self, a.buffer, count: count, dtype: dtype) { arr in
+        try readBuffer(T1.self, aBuf, count: count, dtype: dtype) { arr in
           try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in
             if let max = max, let min = min {
               for (i, x) in arr.enumerated() {
@@ -1183,7 +1197,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(min?.toInt64(), max?.toInt64())
@@ -1198,14 +1212,14 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a)
+    let aBuf = try await a.cpuBuffer
 
     if dtype == .float32 && op == .sum {
       let buffer = try await allocate(length: dims.outCount * dtype.byteSize)
       for i in 0..<dims.outerCount {
         for j in 0..<dims.innerCount {
           let inPtr = UnsafePointer<Float>(
-            a.buffer.contents().advanced(by: 4 * (j + i * dims.reduceCount * dims.innerCount))
+            aBuf.contents().advanced(by: 4 * (j + i * dims.reduceCount * dims.innerCount))
               .bindMemory(
                 to: Float.self, capacity: dims.reduceCount))
           let y = UnsafeMutablePointer<Float>(
@@ -1214,7 +1228,7 @@ open class CPUBackend: Backend {
           vDSP_sve(inPtr, vDSP_Stride(dims.innerCount), y, vDSP_Length(dims.reduceCount))
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
 
     func apply<T: NumericTensorElement>(_: T.Type) async throws -> Tensor.Data {
@@ -1222,7 +1236,7 @@ open class CPUBackend: Backend {
       case .sum:
         let buffer = try await allocate(length: dims.outCount * dtype.byteSize)
         try await serialize {
-          try readBuffer(T.self, a.buffer, count: dims.inCount, dtype: dtype) { arr in
+          try readBuffer(T.self, aBuf, count: dims.inCount, dtype: dtype) { arr in
             try writeBuffer(T.self, buffer, count: dims.outCount, dtype: dtype) { arrOut in
               var index: Int = 0
               for i in 0..<dims.outerCount {
@@ -1239,11 +1253,11 @@ open class CPUBackend: Backend {
             }
           }
         }
-        return Tensor.Data(backend: self, buffer: buffer)
+        return CPUData(buffer: buffer)
       case .argmin, .argmax:
         let buffer = try await allocate(length: dims.outCount * Tensor.DType.int64.byteSize)
         try await serialize {
-          try readBuffer(T.self, a.buffer, count: dims.inCount, dtype: dtype) { arr in
+          try readBuffer(T.self, aBuf, count: dims.inCount, dtype: dtype) { arr in
             try writeBuffer(Int64.self, buffer, count: dims.outCount, dtype: .int64) { arrOut in
               var outIndex: Int = 0
               for i in 0..<dims.outerCount {
@@ -1271,7 +1285,7 @@ open class CPUBackend: Backend {
             }
           }
         }
-        return Tensor.Data(backend: self, buffer: buffer)
+        return CPUData(buffer: buffer)
       }
     }
     if dtype == .int64 {
@@ -1287,10 +1301,12 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
+    let aBuf = try await a.cpuBuffer
+
     let totalCount = outerCount * middleCount * innerCount
     let buffer = try await allocate(length: totalCount * dtype.byteSize)
     try await serialize {
-      try readBuffer(Float.self, a.buffer, count: totalCount, dtype: dtype) { arr in
+      try readBuffer(Float.self, aBuf, count: totalCount, dtype: dtype) { arr in
         try writeBuffer(Float.self, buffer, count: totalCount, dtype: dtype) { arrOut in
           for i in 0..<outerCount {
             let outerOffset = i * innerCount * middleCount
@@ -1318,7 +1334,7 @@ open class CPUBackend: Backend {
         }
       }
     }
-    return Tensor.Data(backend: self, buffer: buffer)
+    return CPUData(buffer: buffer)
   }
 
   override public func logSoftmaxGrad(
@@ -1328,11 +1344,14 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
+    let aBuf = try await a.cpuBuffer
+    let outGradBuf = try await outGrad.cpuBuffer
+
     let totalCount = outerCount * middleCount * innerCount
     let buffer = try await allocate(length: totalCount * dtype.byteSize)
     try await serialize {
-      try readBuffer(Float.self, a.buffer, count: totalCount, dtype: dtype) { arr in
-        try readBuffer(Float.self, outGrad.buffer, count: totalCount, dtype: dtype) { arrGrad in
+      try readBuffer(Float.self, aBuf, count: totalCount, dtype: dtype) { arr in
+        try readBuffer(Float.self, outGradBuf, count: totalCount, dtype: dtype) { arrGrad in
           try writeBuffer(Float.self, buffer, count: totalCount, dtype: dtype) { arrOut in
             for i in 0..<outerCount {
               let outerOffset = i * innerCount * middleCount
@@ -1365,7 +1384,7 @@ open class CPUBackend: Backend {
         }
       }
     }
-    return Tensor.Data(backend: self, buffer: buffer)
+    return CPUData(buffer: buffer)
   }
 
   override public func repeated(
@@ -1374,10 +1393,10 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a)
+    let aBuf = try await a.cpuBuffer
     let outData = try await allocate(length: dims.outCount * dtype.byteSize)
     try await serialize {
-      let inData = a.buffer.contents()
+      let inData = aBuf.contents()
       let innerBytes = dtype.byteSize * dims.innerCount
       for i in 0..<dims.outerCount {
         for j in 0..<dims.repeatCount {
@@ -1388,7 +1407,7 @@ open class CPUBackend: Backend {
         }
       }
     }
-    return Tensor.Data(backend: self, buffer: outData)
+    return CPUData(buffer: outData)
   }
 
   override public func gather(
@@ -1397,16 +1416,17 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a, s.indices)
+    let aBuf = try await a.cpuBuffer
+    let idxBuf = try await s.indices.cpuBuffer
 
     let outBuffer = try await allocate(length: s.gatherOutCount * dtype.byteSize)
 
     if s.broadcasted {
       let innerSize = s.innerCount * dtype.byteSize
       try await serialize {
-        try readBuffer(Int64.self, s.indices.buffer, count: s.indicesCount, dtype: .int64) {
+        try readBuffer(Int64.self, idxBuf, count: s.indicesCount, dtype: .int64) {
           flatIndices in
-          let inData = a.buffer.contents()
+          let inData = aBuf.contents()
           let outData = outBuffer.contents()
           for i in 0..<s.outerCount {
             for (j, idx) in flatIndices.enumerated() {
@@ -1418,14 +1438,14 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: outBuffer)
+      return CPUData(buffer: outBuffer)
     }
 
     func apply<T: TensorElement>(_ zero: T) async throws -> Tensor.Data {
       try await serialize {
-        try readBuffer(Int64.self, s.indices.buffer, count: s.indicesCount, dtype: .int64) {
+        try readBuffer(Int64.self, idxBuf, count: s.indicesCount, dtype: .int64) {
           flatIndices in
-          try readBuffer(T.self, a.buffer, count: s.gatherInCount, dtype: dtype) { inArr in
+          try readBuffer(T.self, aBuf, count: s.gatherInCount, dtype: dtype) { inArr in
             try writeBuffer(T.self, outBuffer, count: s.gatherOutCount, dtype: dtype) { outArr in
               for i in 0..<s.outerCount {
                 for j in 0..<s.outCount {
@@ -1441,7 +1461,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: outBuffer)
+      return CPUData(buffer: outBuffer)
     }
     if dtype == .int64 {
       return try await apply(Int64(0))
@@ -1456,13 +1476,15 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a, s.indices)
+    let aBuf = try await a.cpuBuffer
+    let idxBuf = try await s.indices.cpuBuffer
+
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
       let buffer = try await allocate(length: s.gatherInCount * dtype.byteSize)
       try await serialize {
-        try readBuffer(Int64.self, s.indices.buffer, count: s.indicesCount, dtype: .int64) {
+        try readBuffer(Int64.self, idxBuf, count: s.indicesCount, dtype: .int64) {
           flatIndices in
-          try readBuffer(T.self, a.buffer, count: s.gatherOutCount, dtype: dtype) { inArr in
+          try readBuffer(T.self, aBuf, count: s.gatherOutCount, dtype: dtype) { inArr in
             var outArr = [T](repeating: zero, count: s.gatherInCount)
             for i in 0..<s.outerCount {
               for j in 0..<s.outCount {
@@ -1479,7 +1501,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(Int64(0))
@@ -1495,30 +1517,19 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    if case .tensor(let t) = a {
-      try await waitForData(t)
-    }
-    if case .tensor(let t) = b {
-      try await waitForData(t)
-    }
-
-    let (aData, aIsScalar) = try a.getPointer(dtype)
-    defer {
-      if aIsScalar {
-        aData.deallocate()
-      }
-    }
-    let (bData, bIsScalar) = try b.getPointer(dtype)
-    defer {
-      if bIsScalar {
-        bData.deallocate()
-      }
-    }
+    let maskBuf = try await mask.cpuBuffer
+    let aBuf = try await a.makeOrGetBuffer(self, dtype)
+    let bBuf = try await b.makeOrGetBuffer(self, dtype)
     let output = try await allocate(length: count * dtype.byteSize)
+
+    let aData = aBuf.contents()
+    let bData = bBuf.contents()
+    let aIsScalar = a.isScalar
+    let bIsScalar = b.isScalar
 
     try await serialize {
       let contents = output.contents()
-      let bools = mask.buffer.contents().bindMemory(to: UInt8.self, capacity: count)
+      let bools = maskBuf.contents().bindMemory(to: UInt8.self, capacity: count)
       for i in 0..<count {
         let off = i * dtype.byteSize
         if bools[i] != 0 {
@@ -1531,7 +1542,7 @@ open class CPUBackend: Backend {
       }
     }
 
-    return Tensor.Data(backend: self, buffer: output)
+    return CPUData(buffer: output)
   }
 
   override public func matmul(
@@ -1553,7 +1564,8 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a, b)
+    let aBuf = try await a.cpuBuffer
+    let bBuf = try await b.cpuBuffer
 
     let aCount = rows * inner
     let bCount = inner * cols
@@ -1563,10 +1575,10 @@ open class CPUBackend: Backend {
         try await serialize {
           for i in 0..<matrixCount {
             let x = UnsafePointer<Float>(
-              a.buffer.contents().advanced(by: i * aCount * dtype.byteSize).bindMemory(
+              aBuf.contents().advanced(by: i * aCount * dtype.byteSize).bindMemory(
                 to: Float.self, capacity: aCount))
             let y = UnsafePointer<Float>(
-              b.buffer.contents().advanced(by: i * bCount * dtype.byteSize).bindMemory(
+              bBuf.contents().advanced(by: i * bCount * dtype.byteSize).bindMemory(
                 to: Float.self, capacity: aCount))
             let z = buffer.contents().advanced(by: i * rows * cols * dtype.byteSize).bindMemory(
               to: Float.self, capacity: rows * cols)
@@ -1577,8 +1589,8 @@ open class CPUBackend: Backend {
         try await serialize {
           var arrA = [T](repeating: zero, count: matrixCount * aCount)
           var arrB = [T](repeating: zero, count: matrixCount * bCount)
-          try pointerToArray(a.buffer.contents(), output: &arrA, dtype: dtype)
-          try pointerToArray(b.buffer.contents(), output: &arrB, dtype: dtype)
+          try pointerToArray(aBuf.contents(), output: &arrA, dtype: dtype)
+          try pointerToArray(bBuf.contents(), output: &arrB, dtype: dtype)
           var arrC = [T](repeating: zero, count: matrixCount * rows * cols)
 
           func getA(_ matIdx: Int, _ i: Int, _ j: Int) -> T {
@@ -1620,7 +1632,7 @@ open class CPUBackend: Backend {
           try arrayToPointer(arrC, output: buffer.contents(), dtype: dtype)
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer)
+      return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
       return try await apply(Int64(0))
@@ -1633,12 +1645,12 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a)
+    let aBuf = try await a.cpuBuffer
 
     let rowSize = cols * dtype.byteSize
     let outBuf = try await allocate(length: batch * rows * rowSize)
     try await serialize {
-      let inPtr = a.buffer.contents()
+      let inPtr = aBuf.contents()
       let outPtr = outBuf.contents()
       for i in 0..<batch {
         for j in 0..<rows {
@@ -1654,7 +1666,7 @@ open class CPUBackend: Backend {
         }
       }
     }
-    return Tensor.Data(backend: self, buffer: outBuf)
+    return CPUData(buffer: outBuf)
   }
 
   internal func convNd<Dim: SpatialDim>(
@@ -1664,7 +1676,8 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(kernel, image)
+    let kernelBuf = try await kernel.cpuBuffer
+    let imageBuf = try await image.cpuBuffer
 
     let imageShape = config.imageTensorShape(batch: batch)
     let kernelShape = config.kernelTensorShape()
@@ -1674,11 +1687,11 @@ open class CPUBackend: Backend {
 
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
       try await serialize {
-        assert(kernel.buffer.allocatedSize >= dtype.byteSize * kernelShape.product())
-        assert(image.buffer.allocatedSize >= dtype.byteSize * imageShape.product())
-        try readBuffer(T.self, kernel.buffer, count: kernelShape.product(), dtype: dtype) {
+        assert(kernelBuf.allocatedSize >= dtype.byteSize * kernelShape.product())
+        assert(imageBuf.allocatedSize >= dtype.byteSize * imageShape.product())
+        try readBuffer(T.self, kernelBuf, count: kernelShape.product(), dtype: dtype) {
           arrKernel in
-          try readBuffer(T.self, image.buffer, count: imageShape.product(), dtype: dtype) {
+          try readBuffer(T.self, imageBuf, count: imageShape.product(), dtype: dtype) {
             arrImage in
             try writeBuffer(T.self, outBuf, count: outShape.product(), dtype: dtype) {
               arrOut in
@@ -1691,7 +1704,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: outBuf)
+      return CPUData(buffer: outBuf)
     }
     if dtype == .int64 {
       return try await apply(Int64(0))
@@ -1707,7 +1720,8 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(kernel, image)
+    let kernelBuf = try await kernel.cpuBuffer
+    let imageBuf = try await image.cpuBuffer
 
     let imageShape = config.imageTensorShape(batch: batch)
     let kernelShape = config.kernelTensorShape()
@@ -1717,11 +1731,11 @@ open class CPUBackend: Backend {
 
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
       try await serialize {
-        assert(kernel.buffer.allocatedSize >= dtype.byteSize * kernelShape.product())
-        assert(image.buffer.allocatedSize >= dtype.byteSize * outShape.product())
-        try readBuffer(T.self, kernel.buffer, count: kernelShape.product(), dtype: dtype) {
+        assert(kernelBuf.allocatedSize >= dtype.byteSize * kernelShape.product())
+        assert(imageBuf.allocatedSize >= dtype.byteSize * outShape.product())
+        try readBuffer(T.self, kernelBuf, count: kernelShape.product(), dtype: dtype) {
           arrKernel in
-          try readBuffer(T.self, image.buffer, count: outShape.product(), dtype: dtype) {
+          try readBuffer(T.self, imageBuf, count: outShape.product(), dtype: dtype) {
             arrImage in
             try writeBuffer(T.self, outBuf, count: imageShape.product(), dtype: dtype) { arrOut in
               let getKernel = ConvConfig<Dim>.LazyTensor(
@@ -1733,7 +1747,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: outBuf)
+      return CPUData(buffer: outBuf)
     }
     if dtype == .int64 {
       return try await apply(Int64(0))
@@ -1749,7 +1763,8 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(image, outGrad)
+    let imageBuf = try await image.cpuBuffer
+    let outGradBuf = try await outGrad.cpuBuffer
 
     let imageShape = config.imageTensorShape(batch: batch)
     let kernelShape = config.kernelTensorShape()
@@ -1759,9 +1774,9 @@ open class CPUBackend: Backend {
 
     func apply<T: NumericTensorElement>(_ zero: T) async throws -> Tensor.Data {
       try await serialize {
-        try readBuffer(T.self, image.buffer, count: imageShape.product(), dtype: dtype) {
+        try readBuffer(T.self, imageBuf, count: imageShape.product(), dtype: dtype) {
           arrImage in
-          try readBuffer(T.self, outGrad.buffer, count: outShape.product(), dtype: dtype) {
+          try readBuffer(T.self, outGradBuf, count: outShape.product(), dtype: dtype) {
             arrOutGrad in
             try writeBuffer(T.self, outBuf, count: kernelShape.product(), dtype: dtype) { arrOut in
               let getImage = config.lazy(from: arrImage, shape: imageShape)
@@ -1772,7 +1787,7 @@ open class CPUBackend: Backend {
           }
         }
       }
-      return Tensor.Data(backend: self, buffer: outBuf)
+      return CPUData(buffer: outBuf)
     }
     if dtype == .int64 {
       return try await apply(Int64(0))
@@ -1841,10 +1856,10 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await waitForData(a)
+    let aBuf = try await a.cpuBuffer
     let buffer = try await allocate(length: count * dtype.byteSize)
     try await serialize {
-      try readBuffer(Float.self, a.buffer, count: count, dtype: dtype) { arr in
+      try readBuffer(Float.self, aBuf, count: count, dtype: dtype) { arr in
         try writeBuffer(Float.self, buffer, count: count, dtype: dtype) { out in
           for (i, x) in arr.enumerated() {
             out[i] = op.apply(x)
@@ -1852,7 +1867,7 @@ open class CPUBackend: Backend {
         }
       }
     }
-    return Tensor.Data(backend: self, buffer: buffer)
+    return CPUData(buffer: buffer)
   }
 
   override public func concat(
@@ -1862,24 +1877,25 @@ open class CPUBackend: Backend {
     -> Tensor.Data
   {
     alwaysAssert(inputs.count == innerCounts.count)
+    var inBufs = [MTLBuffer]()
     for input in inputs {
-      try await waitForData(input)
+      inBufs.append(try await input.cpuBuffer)
     }
     let totalInner = innerCounts.sum()
     let buffer = try await allocate(length: outerCount * totalInner * dtype.byteSize)
     try await serialize {
       var outOffset = 0
       for i in 0..<outerCount {
-        for (input, innerCount) in zip(inputs, innerCounts) {
+        for (inBuf, innerCount) in zip(inBufs, innerCounts) {
           let chunkSize = innerCount * dtype.byteSize
           let outPtr = buffer.contents().advanced(by: outOffset)
-          let inPtr = input.buffer.contents().advanced(by: i * chunkSize)
+          let inPtr = inBuf.contents().advanced(by: i * chunkSize)
           outPtr.copyMemory(from: inPtr, byteCount: chunkSize)
           outOffset += chunkSize
         }
       }
     }
-    return Tensor.Data(backend: self, buffer: buffer)
+    return CPUData(buffer: buffer)
   }
 
   override public func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data
@@ -1900,7 +1916,7 @@ open class CPUBackend: Backend {
       }
       try arrayToPointer(newIndices, output: buffer.contents(), dtype: .int64)
     }
-    return Tensor.Data(backend: self, buffer: buffer)
+    return CPUData(buffer: buffer)
   }
 
   override public func defaultRandom() async throws -> RandomGenerator {

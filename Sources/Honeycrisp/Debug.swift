@@ -55,16 +55,11 @@ extension Tensor {
       return self
     }
     let task = createDataTask { t in
-      let result = try await t.data
-      if let c = result.completeOnAllDevices {
-        let _ = try await c.value
-      }
-      var floats = [Float](repeating: 0, count: t.shape.product())
-      try pointerToArray(result.buffer.contents(), output: &floats, dtype: t.dtype)
+      let floats = try await t.floats()
       if let onForward = onForward, !floats.allSatisfy({ !$0.isNaN }) {
         print("nan detected: \(onForward)")
       }
-      return result
+      return try await t.data
     }
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: task, shape: shape, dtype: dtype)

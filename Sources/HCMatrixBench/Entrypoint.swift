@@ -14,10 +14,7 @@ struct Main {
           let m2 = Tensor(rand: [innerSize, innerSize], dtype: .float16)
           func runMatmul() async throws {
             let result = m1 &* m2
-            let data = try await result.data
-            if let c = data.completeOnAllDevices {
-              let _ = try await c.value
-            }
+            try await result.wait()
           }
 
           try await runMatmul()

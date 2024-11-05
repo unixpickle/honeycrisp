@@ -6,6 +6,21 @@ import MetalPerformanceShadersGraph
 
 open class MPSBackend: CPUBackend {
 
+  internal struct GPUData: Tensor.Data {
+    public let backend: MPSBackend
+    public let buffer: MTLBuffer
+    public let completion: Task<Void, Error>?
+
+    public var cpuBuffer: MTLBuffer {
+      get async throws {
+        if let completion = completion {
+          let _ = try await completion.value
+        }
+        return buffer
+      }
+    }
+  }
+
   private struct MatmulKey: Hashable {
     let transA: Bool
     let transB: Bool
@@ -131,7 +146,7 @@ open class MPSBackend: CPUBackend {
           mpsBackend.dispatch1D(enc, state: state, threadCount: totalThreads)
           offset += UInt64(totalThreads)
         }
-        return Tensor.Data(backend: mpsBackend, buffer: output, completeOnAllDevices: completion)
+        return GPUData(backend: mpsBackend, buffer: output, completion: completion)
       }
     }
   }
@@ -232,13 +247,11 @@ open class MPSBackend: CPUBackend {
     }
   }
 
-  internal func waitForGPUData(_ xs: Tensor.Data...) async throws {
-    for x in xs {
-      if x.backend === self && x.completeOnAllDevices != nil {
-        continue
-      }
-      try await waitForData(x)
+  internal func gpuBuffer(_ data: Tensor.Data) async throws -> MTLBuffer {
+    if let data = data as? GPUData, data.backend === self {
+      return data.buffer
     }
+    return try await data.cpuBuffer
   }
 
   internal func getFunction(name: String) throws -> MTLComputePipelineState {
@@ -259,19 +272,19 @@ open class MPSBackend: CPUBackend {
     }
 
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    let aBuf = try await gpuBuffer(a)
     let output = try await allocate(length: count * dtype.byteSize)
 
-    try await waitForGPUData(a)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "pow") { buf, enc in
         let funcName = "vector_pow_\(MPSBackend.CastTypes[dtype]!)"
         let state = try getFunction(name: funcName)
         try setArguments(
-          enc, .buffer(a.buffer), .buffer(output), .float(b.toFloat()), .float(outScale.toFloat()),
+          enc, .buffer(aBuf), .buffer(output), .float(b.toFloat()), .float(outScale.toFloat()),
           .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -317,16 +330,17 @@ open class MPSBackend: CPUBackend {
         "sigmoid_grad"
       }
     let functionName = "\(namePrefix)_\(MPSBackend.CastTypes[dtype]!)"
+
+    let aBuf = try await gpuBuffer(a)
     let output = try await allocate(length: count * dtype.byteSize)
 
-    try await waitForGPUData(a)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "elemwise") { buf, enc in
         let state = try getFunction(name: functionName)
-        try setArguments(enc, .buffer(a.buffer), .buffer(output), .uint(UInt32(count)))
+        try setArguments(enc, .buffer(aBuf), .buffer(output), .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -356,14 +370,16 @@ open class MPSBackend: CPUBackend {
         "mod"
       }
     let functionName = "\(opName)vv_\(MPSBackend.CastTypes[dtype]!)"
+
+    let aBuf = try await gpuBuffer(a.data)
+    let bBuf = try await gpuBuffer(b.data)
     let output = try await allocate(length: count * dtype.byteSize)
 
-    try await waitForGPUData(a.data, b.data)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "binaryOp") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
-          enc, .buffer(a.data.buffer), .buffer(b.data.buffer), .buffer(output),
+          enc, .buffer(aBuf), .buffer(bBuf), .buffer(output),
           .opaque(
             (
               UInt32(a.strides.dataCount),
@@ -374,7 +390,7 @@ open class MPSBackend: CPUBackend {
             )))
         dispatch1D(enc, state: state, threadCount: count)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -404,17 +420,18 @@ open class MPSBackend: CPUBackend {
         "mod"
       }
     let functionName = "\(opName)vs_\(MPSBackend.CastTypes[dtype]!)"
+
+    let aBuf = try await gpuBuffer(a)
     let output = try await allocate(length: count * dtype.byteSize)
 
-    try await waitForGPUData(a)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "binaryOp") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
-          enc, .buffer(a.buffer), .float(b.toFloat()), .buffer(output), .uint(UInt32(count)))
+          enc, .buffer(aBuf), .float(b.toFloat()), .buffer(output), .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -444,17 +461,18 @@ open class MPSBackend: CPUBackend {
         "mod"
       }
     let functionName = "\(opName)sv_\(MPSBackend.CastTypes[dtype]!)"
+
+    let bBuf = try await gpuBuffer(b)
     let output = try await allocate(length: count * dtype.byteSize)
 
-    try await waitForGPUData(b)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "binaryOp") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
-          enc, .float(a.toFloat()), .buffer(b.buffer), .buffer(output), .uint(UInt32(count)))
+          enc, .float(a.toFloat()), .buffer(bBuf), .buffer(output), .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -494,14 +512,17 @@ open class MPSBackend: CPUBackend {
       }
     }
     let functionName = "\(method)_\(typeName)"
+
+    let inBuf = try await gpuBuffer(input.data)
+    let aBuf = try await gpuBuffer(a.data)
+    let bBuf = try await gpuBuffer(b.data)
     let output = try await allocate(length: count * dtype.byteSize)
 
-    try await waitForGPUData(input.data, a.data, b.data)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "addMulOrMulAdd") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
-          enc, .buffer(input.data.buffer), .buffer(a.data.buffer), .buffer(b.data.buffer),
+          enc, .buffer(inBuf), .buffer(aBuf), .buffer(bBuf),
           .buffer(output),
           .uint(UInt32(input.strides.dataCount)), .uint(UInt32(input.strides.innerRepeats)),
           .uint(UInt32(a.strides.dataCount)), .uint(UInt32(a.strides.innerRepeats)),
@@ -509,7 +530,7 @@ open class MPSBackend: CPUBackend {
           .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -526,14 +547,17 @@ open class MPSBackend: CPUBackend {
         input: input, mean: mean, variance: variance, epsilon: epsilon, count: count, dtype: dtype)
     }
     let functionName = "normalize_\(typeName)"
+
+    let inBuf = try await gpuBuffer(input.data)
+    let meanBuf = try await gpuBuffer(mean.data)
+    let varianceBuf = try await gpuBuffer(variance.data)
     let output = try await allocate(length: count * dtype.byteSize)
 
-    try await waitForGPUData(input.data, mean.data, variance.data)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "normalize") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
-          enc, .buffer(input.data.buffer), .buffer(mean.data.buffer), .buffer(variance.data.buffer),
+          enc, .buffer(inBuf), .buffer(meanBuf), .buffer(varianceBuf),
           .buffer(output),
           .opaque(
             (
@@ -549,7 +573,7 @@ open class MPSBackend: CPUBackend {
         )
         dispatch1D(enc, state: state, threadCount: count)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -568,14 +592,16 @@ open class MPSBackend: CPUBackend {
         dtype: dtype)
     }
     let functionName = "normalize_x_grad_\(typeName)"
+
+    let varianceBuf = try await gpuBuffer(variance.data)
+    let outGradBuf = try await gpuBuffer(outGrad.data)
     let output = try await allocate(length: count * dtype.byteSize)
 
-    try await waitForGPUData(variance.data, outGrad.data)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "normalizeXGrad") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
-          enc, .buffer(variance.data.buffer), .buffer(outGrad.data.buffer),
+          enc, .buffer(varianceBuf), .buffer(outGradBuf),
           .buffer(output),
           .opaque(
             (
@@ -589,7 +615,7 @@ open class MPSBackend: CPUBackend {
             )))
         dispatch1D(enc, state: state, threadCount: count)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -607,15 +633,19 @@ open class MPSBackend: CPUBackend {
         input: input, mean: mean, variance: variance, epsilon: epsilon, count: count, dtype: dtype)
     }
     let functionName = "normalize_var_grad_\(typeName)"
+
+    let inBuf = try await gpuBuffer(input.data)
+    let meanBuf = try await gpuBuffer(mean.data)
+    let varianceBuf = try await gpuBuffer(variance.data)
+    let outGradBuf = try await gpuBuffer(outGrad.data)
     let output = try await allocate(length: count * dtype.byteSize)
 
-    try await waitForGPUData(input.data, mean.data, variance.data, outGrad.data)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "normalizeVarianceGrad") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
-          enc, .buffer(input.data.buffer), .buffer(mean.data.buffer), .buffer(variance.data.buffer),
-          .buffer(outGrad.data.buffer),
+          enc, .buffer(inBuf), .buffer(meanBuf), .buffer(varianceBuf),
+          .buffer(outGradBuf),
           .buffer(output),
           .opaque(
             (
@@ -632,7 +662,7 @@ open class MPSBackend: CPUBackend {
             )))
         dispatch1D(enc, state: state, threadCount: count)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -649,16 +679,17 @@ open class MPSBackend: CPUBackend {
     }
 
     let functionName = "cast_\(inTypeName)_\(outTypeName)"
+
+    let aBuf = try await gpuBuffer(a)
     let output = try await allocate(length: count * outType.byteSize)
 
-    try await waitForGPUData(a)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "cast") { buf, enc in
         let state = try getFunction(name: functionName)
-        try setArguments(enc, .buffer(a.buffer), .buffer(output), .uint(UInt32(count)))
+        try setArguments(enc, .buffer(aBuf), .buffer(output), .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -674,28 +705,29 @@ open class MPSBackend: CPUBackend {
     alwaysAssert(count <= UInt32.max, "cannot apply clamp() to \(count) values")
 
     let functionName = "clamp_\(typeName)"
+
+    let aBuf = try await gpuBuffer(a)
     let output = try await allocate(length: count * dtype.byteSize)
 
-    try await waitForGPUData(a)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "clamp") { buf, enc in
         let state = try getFunction(name: functionName)
         if dtype == .int64 {
           try setArguments(
-            enc, .buffer(a.buffer), .buffer(output), .int64(min?.toInt64() ?? 0),
+            enc, .buffer(aBuf), .buffer(output), .int64(min?.toInt64() ?? 0),
             .int64(max?.toInt64() ?? 0), .uint(UInt32(min != nil ? 1 : 0)),
             .uint(UInt32(max != nil ? 1 : 1)),
             .uint(UInt32(count)))
         } else {
           try setArguments(
-            enc, .buffer(a.buffer), .buffer(output), .float(min?.toFloat() ?? 0),
+            enc, .buffer(aBuf), .buffer(output), .float(min?.toFloat() ?? 0),
             .float(max?.toFloat() ?? 0), .uint(UInt32(min != nil ? 1 : 0)),
             .uint(UInt32(max != nil ? 1 : 0)),
             .uint(UInt32(count)))
         }
         dispatch1D(enc, state: state, threadCount: count)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -710,23 +742,23 @@ open class MPSBackend: CPUBackend {
       outCount <= Int(UInt32.max),
       "cannot apply repeat kernel to this many values")
 
-    let output = try await allocate(length: outCount * dtype.byteSize)
-
     let typeName = dtype.metalSizeType
 
-    try await waitForGPUData(a)
+    let aBuf = try await gpuBuffer(a)
+    let output = try await allocate(length: outCount * dtype.byteSize)
+
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "repeated") { buf, enc in
         let state = try getFunction(name: "repeat_\(typeName)")
         try setArguments(
           enc,
-          .buffer(a.buffer),
+          .buffer(aBuf),
           .buffer(output),
           .opaque((UInt32(dims.innerCount), UInt32(dims.outerCount), UInt32(dims.repeatCount)))
         )
         dispatch1D(enc, state: state, threadCount: outCount)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -737,8 +769,9 @@ open class MPSBackend: CPUBackend {
     -> Tensor.Data
   {
     alwaysAssert(inputs.count == innerCounts.count)
+    var inBufs = [MTLBuffer]()
     for input in inputs {
-      try await waitForData(input)
+      inBufs.append(try await gpuBuffer(input))
     }
     let totalInner = innerCounts.sum()
     let buffer = try await allocate(length: outerCount * totalInner * dtype.byteSize)
@@ -752,14 +785,14 @@ open class MPSBackend: CPUBackend {
           let state = try getFunction(name: "strided_copy_\(typeName)")
           try setArguments(
             enc,
-            .buffer(inputs[i].buffer),
+            .buffer(inBufs[i]),
             .buffer(buffer),
             .opaque((UInt32(innerCount), UInt32(totalInner), UInt32(outerCount), UInt32(offset)))
           )
           dispatch1D(enc, state: state, threadCount: innerCount * outerCount)
         }
       }
-      return Tensor.Data(backend: self, buffer: buffer, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: buffer, completion: completion)
     }
   }
 
@@ -769,7 +802,8 @@ open class MPSBackend: CPUBackend {
     async throws
     -> Tensor.Data
   {
-    try await waitForGPUData(a, s.indices)
+    let aBuf = try await gpuBuffer(a)
+    let idxBuf = try await gpuBuffer(s.indices)
     let output = try await allocate(length: s.gatherOutCount * dtype.byteSize)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "gather") { buf, enc in
@@ -778,8 +812,8 @@ open class MPSBackend: CPUBackend {
         let state = try getFunction(name: functionName)
         try setArguments(
           enc,
-          .buffer(a.buffer),
-          .buffer(s.indices.buffer),
+          .buffer(aBuf),
+          .buffer(idxBuf),
           .buffer(output),
           .uint(UInt32(s.outerCount)),
           .uint(UInt32(s.outCount)),
@@ -788,7 +822,7 @@ open class MPSBackend: CPUBackend {
         )
         dispatch1D(enc, state: state, threadCount: s.gatherOutCount)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -798,7 +832,8 @@ open class MPSBackend: CPUBackend {
     async throws
     -> Tensor.Data
   {
-    try await waitForGPUData(a, s.indices)
+    let aBuf = try await gpuBuffer(a)
+    let idxBuf = try await gpuBuffer(s.indices)
 
     let outBytes = s.gatherInCount * dtype.byteSize
     let output = try await allocate(length: outBytes)
@@ -812,12 +847,12 @@ open class MPSBackend: CPUBackend {
             feeds: [
               scatter.inputA: MPSGraphTensorData(
                 MPSVector(
-                  buffer: a.buffer,
+                  buffer: aBuf,
                   descriptor: MPSVectorDescriptor(
                     length: s.gatherOutCount, dataType: mpsDType))),
               scatter.inputB: MPSGraphTensorData(
                 MPSVector(
-                  buffer: s.indices.buffer,
+                  buffer: idxBuf,
                   descriptor: MPSVectorDescriptor(length: s.indicesCount, dataType: .int64))),
             ],
             targetOperations: nil,
@@ -829,7 +864,7 @@ open class MPSBackend: CPUBackend {
             ],
             executionDescriptor: nil)
         }
-        return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+        return GPUData(backend: self, buffer: output, completion: completion)
       }
     }
 
@@ -853,13 +888,13 @@ open class MPSBackend: CPUBackend {
           throw BackendError.kernelFailed("could not create compute encoder")
         }
         try setArguments(
-          computeEncoder, .buffer(a.buffer), .buffer(s.indices.buffer), .buffer(output),
+          computeEncoder, .buffer(aBuf), .buffer(idxBuf), .buffer(output),
           .uint(UInt32(s.outerCount)), .uint(UInt32(s.outCount)),
           .uint(UInt32(s.middleCount)), .uint(UInt32(s.innerCount)))
         dispatch1D(computeEncoder, state: state, threadCount: s.gatherOutCount)
         computeEncoder.endEncoding()
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -927,7 +962,7 @@ open class MPSBackend: CPUBackend {
         )
         dispatch1D(enc, state: state, threadCount: outputCount)
       }
-      return Tensor.Data(backend: self, buffer: buffer, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: buffer, completion: completion)
     }
   }
 
@@ -941,9 +976,9 @@ open class MPSBackend: CPUBackend {
       return try await super.reduce(a, op: op, dims: dims, dtype: dtype)
     }
 
+    let aBuf = try await gpuBuffer(a)
     let output = try await allocate(
       length: dims.outCount * (op == .sum ? dtype : Tensor.DType.int64).byteSize)
-    try await waitForGPUData(a)
     return try await serialize { [self] in
       let red = self.createReduction(op: op, dims: dims, dtype: mpsDType)
       let completion = completionBuffer(label: "reduce") { buf in
@@ -952,7 +987,7 @@ open class MPSBackend: CPUBackend {
           feeds: [
             red.input: MPSGraphTensorData(
               MPSVector(
-                buffer: a.buffer,
+                buffer: aBuf,
                 descriptor: MPSVectorDescriptor(
                   length: dims.inCount, dataType: mpsDType)))
           ],
@@ -966,7 +1001,7 @@ open class MPSBackend: CPUBackend {
           ],
           executionDescriptor: nil)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -1012,8 +1047,8 @@ open class MPSBackend: CPUBackend {
     }
 
     let totalCount = outerCount * middleCount * innerCount
+    let aBuf = try await gpuBuffer(a)
     let output = try await allocate(length: totalCount * dtype.byteSize)
-    try await waitForGPUData(a)
     return try await serialize { [self] in
       let op = self.createLogSoftmax(
         outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: mpsDType)
@@ -1023,7 +1058,7 @@ open class MPSBackend: CPUBackend {
           feeds: [
             op.input: MPSGraphTensorData(
               MPSVector(
-                buffer: a.buffer,
+                buffer: aBuf,
                 descriptor: MPSVectorDescriptor(length: totalCount, dataType: mpsDType)))
           ],
           targetOperations: nil,
@@ -1036,7 +1071,7 @@ open class MPSBackend: CPUBackend {
           ],
           executionDescriptor: nil)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -1083,9 +1118,12 @@ open class MPSBackend: CPUBackend {
         a, outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: dtype)
     }
 
+    let aBuf = try await gpuBuffer(a)
+    let outGradBuf = try await gpuBuffer(outGrad)
+
     let totalCount = outerCount * middleCount * innerCount
     let output = try await allocate(length: totalCount * dtype.byteSize)
-    try await waitForGPUData(a)
+
     return try await serialize { [self] in
       let op = self.createLogSoftmaxGrad(
         outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: mpsDType)
@@ -1095,11 +1133,11 @@ open class MPSBackend: CPUBackend {
           feeds: [
             op.inputA: MPSGraphTensorData(
               MPSVector(
-                buffer: a.buffer,
+                buffer: aBuf,
                 descriptor: MPSVectorDescriptor(length: totalCount, dataType: mpsDType))),
             op.inputB: MPSGraphTensorData(
               MPSVector(
-                buffer: outGrad.buffer,
+                buffer: outGradBuf,
                 descriptor: MPSVectorDescriptor(length: totalCount, dataType: mpsDType))),
           ],
           targetOperations: nil,
@@ -1112,7 +1150,7 @@ open class MPSBackend: CPUBackend {
           ],
           executionDescriptor: nil)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -1184,18 +1222,20 @@ open class MPSBackend: CPUBackend {
     let bShape = transB ? (cols, inner) : (inner, cols)
 
     let output = try await allocate(length: matrixCount * rows * cols * dtype.byteSize)
-    try await waitForGPUData(a, b)
+    let aBuf = try await gpuBuffer(a)
+    let bBuf = try await gpuBuffer(b)
+
     return try await serialize { [self] in
       let mm = self.createMatmul(
         transA: transA, transB: transB, batch: matrixCount, rows: rows, inner: inner, cols: cols,
         dtype: mpsDType)
       let completion = completionBuffer(label: "batchedMatmul") { buf in
         alwaysAssert(
-          a.buffer.allocatedSize >= matrixCount * aShape.0 * aShape.1 * dtype.byteSize,
+          aBuf.allocatedSize >= matrixCount * aShape.0 * aShape.1 * dtype.byteSize,
           "matrix A buffer underflow")
         alwaysAssert(
-          b.buffer.allocatedSize >= matrixCount * bShape.0 * bShape.1 * dtype.byteSize,
-          "matrix B buffer underflow \(matrixCount) * \(bShape) * \(dtype.byteSize) vs \(b.buffer.allocatedSize)"
+          bBuf.allocatedSize >= matrixCount * bShape.0 * bShape.1 * dtype.byteSize,
+          "matrix B buffer underflow \(matrixCount) * \(bShape) * \(dtype.byteSize) vs \(bBuf.allocatedSize)"
         )
         alwaysAssert(
           output.allocatedSize >= matrixCount * rows * cols * dtype.byteSize,
@@ -1205,7 +1245,7 @@ open class MPSBackend: CPUBackend {
           feeds: [
             mm.inputA: MPSGraphTensorData(
               MPSMatrix(
-                buffer: a.buffer,
+                buffer: aBuf,
                 descriptor: MPSMatrixDescriptor(
                   rows: aShape.0, columns: aShape.1, matrices: matrixCount,
                   rowBytes: aShape.1 * dtype.byteSize,
@@ -1213,7 +1253,7 @@ open class MPSBackend: CPUBackend {
               rank: matrixCount > 1 ? 3 : 2),
             mm.inputB: MPSGraphTensorData(
               MPSMatrix(
-                buffer: b.buffer,
+                buffer: bBuf,
                 descriptor: MPSMatrixDescriptor(
                   rows: bShape.0, columns: bShape.1, matrices: matrixCount,
                   rowBytes: bShape.1 * dtype.byteSize,
@@ -1232,7 +1272,7 @@ open class MPSBackend: CPUBackend {
           ],
           executionDescriptor: nil)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -1295,27 +1335,29 @@ open class MPSBackend: CPUBackend {
     let outShape =
       transpose ? config.imageTensorShape(batch: batch) : config.outputTensorShape(batch: batch)
     let output = try await allocate(length: outShape.product() * dtype.byteSize)
-    try await waitForGPUData(image, kernel)
+    let imageBuf = try await gpuBuffer(image)
+    let kernelBuf = try await gpuBuffer(kernel)
+
     return try await serialize { [self] in
       let op = try self.createConv2D(
         config, batch: batch, kind: transpose ? .transpose : .forward, dtype: mpsDType)
       let completion = completionBuffer(label: "conv2D") { buf in
         alwaysAssert(
-          image.buffer.allocatedSize >= imageShape.product() * dtype.byteSize,
+          imageBuf.allocatedSize >= imageShape.product() * dtype.byteSize,
           "input image buffer underflow")
         alwaysAssert(
-          kernel.buffer.allocatedSize >= kernelShape.product() * dtype.byteSize,
+          kernelBuf.allocatedSize >= kernelShape.product() * dtype.byteSize,
           "kernel buffer underflow")
         op.graph.encode(
           to: buf as! MPSCommandBuffer,
           feeds: [
             op.inputA: MPSGraphTensorData(
               MPSVector(
-                buffer: image.buffer,
+                buffer: imageBuf,
                 descriptor: MPSVectorDescriptor(length: imageShape.product(), dataType: mpsDType))),
             op.inputB: MPSGraphTensorData(
               MPSVector(
-                buffer: kernel.buffer,
+                buffer: kernelBuf,
                 descriptor: MPSVectorDescriptor(length: kernelShape.product(), dataType: mpsDType))),
           ], targetOperations: nil,
           resultsDictionary: [
@@ -1325,7 +1367,7 @@ open class MPSBackend: CPUBackend {
                 descriptor: MPSVectorDescriptor(length: outShape.product(), dataType: mpsDType)))
           ], executionDescriptor: nil)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
@@ -1408,26 +1450,27 @@ open class MPSBackend: CPUBackend {
     let kernelShape = config.kernelTensorShape()
     let outShape = config.outputTensorShape(batch: batch)
     let output = try await allocate(length: kernelShape.product() * dtype.byteSize)
-    try await waitForGPUData(image, outGrad)
+    let imageBuf = try await gpuBuffer(image)
+    let outGradBuf = try await gpuBuffer(outGrad)
     return try await serialize { [self] in
       let op = try self.createConv2D(config, batch: batch, kind: .kernelGrad, dtype: mpsDType)
       let completion = completionBuffer(label: "conv2DKernelGrad") { buf in
         alwaysAssert(
-          image.buffer.allocatedSize >= imageShape.product() * dtype.byteSize,
+          imageBuf.allocatedSize >= imageShape.product() * dtype.byteSize,
           "input image buffer underflow")
         alwaysAssert(
-          outGrad.buffer.allocatedSize >= outShape.product() * dtype.byteSize,
+          outGradBuf.allocatedSize >= outShape.product() * dtype.byteSize,
           "output gradient buffer underflow")
         op.graph.encode(
           to: buf as! MPSCommandBuffer,
           feeds: [
             op.inputA: MPSGraphTensorData(
               MPSVector(
-                buffer: image.buffer,
+                buffer: imageBuf,
                 descriptor: MPSVectorDescriptor(length: imageShape.product(), dataType: mpsDType))),
             op.inputB: MPSGraphTensorData(
               MPSVector(
-                buffer: outGrad.buffer,
+                buffer: outGradBuf,
                 descriptor: MPSVectorDescriptor(length: outShape.product(), dataType: mpsDType))),
           ], targetOperations: nil,
           resultsDictionary: [
@@ -1437,7 +1480,7 @@ open class MPSBackend: CPUBackend {
                 descriptor: MPSVectorDescriptor(length: kernelShape.product(), dataType: mpsDType)))
           ], executionDescriptor: nil)
       }
-      return Tensor.Data(backend: self, buffer: output, completeOnAllDevices: completion)
+      return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 

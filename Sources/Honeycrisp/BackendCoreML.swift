@@ -3,6 +3,20 @@ import CoreMLBuilder
 
 open class CoreMLBackend: BackendWrapper {
 
+  internal struct AsyncData: Tensor.Data {
+    public let tasks: [Task<Void, Error>]
+    public let buffer: MTLBuffer
+
+    public var cpuBuffer: MTLBuffer {
+      get async throws {
+        for task in tasks {
+          let _ = try await task.value
+        }
+        return buffer
+      }
+    }
+  }
+
   internal struct MatmulKey: Hashable {
     public let sizeA0: Int
     public let sizeA1: Int
@@ -102,14 +116,6 @@ open class CoreMLBackend: BackendWrapper {
     }
   }
 
-  internal func waitForData(_ xs: Tensor.Data...) async throws {
-    for x in xs {
-      if let waiter = x.completeOnAllDevices {
-        try await waiter.value
-      }
-    }
-  }
-
   override public func matmul(
     a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
     inner: Int, cols: Int, dtype: Tensor.DType
@@ -140,7 +146,8 @@ open class CoreMLBackend: BackendWrapper {
         cols: rows, dtype: dtype)
     }
 
-    try await waitForData(a, b)
+    let aBuf = try await a.cpuBuffer
+    let bBuf = try await b.cpuBuffer
 
     let aCount = rows * inner
     let bCount = inner * cols
@@ -168,19 +175,19 @@ open class CoreMLBackend: BackendWrapper {
               transB: transB, isFloat32: dtype == .float32)
             try await runModel(buildModel: { mc in try await mc.matmul(mmKey) }) { model in
               let x = try MLMultiArray(
-                dataPointer: a.buffer.contents().advanced(
+                dataPointer: aBuf.contents().advanced(
                   by: (i * aCount + aIdx * matmulKey.sizeA1) * dtype.byteSize),
                 shape: mpsShape([aSize, matmulKey.sizeA1]),
                 dataType: matmulKey.isFloat32 ? .float32 : .float16,
                 strides: mpsShape([matmulKey.sizeA1, 1]),
-                deallocator: { [a = a.buffer] _ in _ = a }
+                deallocator: { [a = aBuf] _ in _ = a }
               )
               let y = try MLMultiArray(
-                dataPointer: b.buffer.contents().advanced(by: i * bCount * dtype.byteSize),
+                dataPointer: bBuf.contents().advanced(by: i * bCount * dtype.byteSize),
                 shape: mpsShape([matmulKey.sizeB0, matmulKey.sizeB1]),
                 dataType: x.dataType,
                 strides: mpsShape([matmulKey.sizeB1, 1]),
-                deallocator: { [b = b.buffer] _ in _ = b }
+                deallocator: { [b = bBuf] _ in _ = b }
               )
               let featureProvider: MLFeatureProvider = try MLDictionaryFeatureProvider(
                 dictionary: [
@@ -203,10 +210,7 @@ open class CoreMLBackend: BackendWrapper {
           })
       }
     }
-    for task in tasks {
-      let _ = try await task.value
-    }
-    return Tensor.Data(backend: self, buffer: buffer)
+    return AsyncData(tasks: tasks, buffer: buffer)
   }
 
 }

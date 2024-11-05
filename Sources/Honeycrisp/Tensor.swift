@@ -45,17 +45,8 @@ public final class Tensor {
     }
   }
 
-  public struct Data {
-    public let backend: Backend
-    public let buffer: MTLBuffer
-    public let completeOnAllDevices: Task<Void, Error>?
-
-    public init(backend: Backend, buffer: MTLBuffer, completeOnAllDevices: Task<Void, Error>? = nil)
-    {
-      self.backend = backend
-      self.buffer = buffer
-      self.completeOnAllDevices = completeOnAllDevices
-    }
+  public protocol Data {
+    var cpuBuffer: MTLBuffer { get async throws }
   }
 
   public final class BackwardHandle {
@@ -145,7 +136,7 @@ public final class Tensor {
     #if DEBUG
       self.dataTask = Task {
         let result = try await dataTask.value
-        let allocSize = result.buffer.allocatedSize
+        let allocSize = try await result.cpuBuffer.allocatedSize
         let minSize = shape.product() * dtype.byteSize
         alwaysAssert(allocSize >= minSize, "buffer of size \(allocSize) underflows shape \(shape)")
         return result
@@ -176,10 +167,10 @@ public final class Tensor {
       dtype.canUseScalarType(T.self),
       "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
     let backend = Backend.current
-    self.dataTask = Task {
+    self.dataTask = Tensor.createDataTask {
       let buf = try await backend.allocate(length: dtype.byteSize * shape.product())
       try arrayToPointer(data, output: buf.contents(), dtype: dtype)
-      return Data(backend: backend, buffer: buf)
+      return CPUBackend.CPUData(buffer: buf)
     }
     self.shape = shape
     self.dtype = dtype
@@ -234,11 +225,8 @@ public final class Tensor {
 
   public func copyToArray<T: TensorElement>(_ out: inout [T]) async throws {
     alwaysAssert(out.count == shape.product(), "out size must match our size")
-    let data = try await data
-    if let c = data.completeOnAllDevices {
-      try await c.value
-    }
-    try pointerToArray(data.buffer.contents(), output: &out, dtype: dtype)
+    let buf = try await data.cpuBuffer
+    try pointerToArray(buf.contents(), output: &out, dtype: dtype)
   }
 
   public func floats() async throws -> [Float] {
@@ -272,9 +260,7 @@ public final class Tensor {
   }
 
   public func wait() async throws {
-    if let c = (try await data).completeOnAllDevices {
-      try await c.value
-    }
+    let _ = try await (try await data).cpuBuffer
   }
 
   public func noGrad() -> Tensor {
@@ -283,6 +269,14 @@ public final class Tensor {
 
   internal func createDataTask(_ fn: @escaping (Tensor) async throws -> Data) -> Task<Data, Error> {
     Tensor.createDataTask(self, fn)
+  }
+
+  static internal func createDataTask(
+    _ fn: @escaping () async throws -> Data
+  ) -> Task<Data, Error> {
+    return Task {
+      try await fn()
+    }
   }
 
   static internal func createDataTask(

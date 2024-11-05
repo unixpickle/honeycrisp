@@ -34,7 +34,7 @@ class CommandTransformer: Command {
   let captionBytes: Int = 128
   let saveInterval: Int = 1000
   let cfgProb: Float = 0.1
-  let cfgScales: [Float] = [1.0, 2.0, 4.0, 10.0]
+  let cfgScales: [Float] = [1.0, 2.0, 4.0]
 
   let savePath: String
   let vqPath: String
