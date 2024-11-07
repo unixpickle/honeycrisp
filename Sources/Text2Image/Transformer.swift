@@ -217,7 +217,9 @@ class Transformer: Trainable {
     return h
   }
 
-  func sample(prefixes: Tensor, cfgScale: Float? = nil) async throws -> Tensor {
+  func sample(prefixes: Tensor, generator: RandomGenerator? = nil, cfgScale: Float? = nil)
+    async throws -> Tensor
+  {
     assert(prefixes.shape.count == 2, "\(prefixes.shape)")
     assert(prefixes.shape[1] >= 1, "\(prefixes.shape)")
     let prefixes =
@@ -227,7 +229,12 @@ class Transformer: Trainable {
     var prevToken = prefixes
     for _ in 0..<(config.TokenCount - prefixes.shape[1]) {
       let logits = Tensor.withGrad(enabled: false) {
-        self(prevToken, kvCache: kvCache)[..., -1].cast(.float32)
+        // Without asDependency, we may allocate fp16 parameters many
+        // times at once since the internal cast() in the model doesn't
+        // depend on any other result tensors.
+        prevToken.asDependency {
+          self(prevToken, kvCache: kvCache)[..., -1].cast(.float32)
+        }
       }
       let guidedLogits =
         if let cfgScale = cfgScale {
@@ -240,16 +247,19 @@ class Transformer: Trainable {
         } else {
           logits
         }
-      let gumbels = -(-Tensor(randLike: guidedLogits).log()).log()
+
+      // Without this dependency, we could potentially generate the gumbels
+      // in an arbitrary order.
+      let gumbels = logits.asDependency {
+        -(-Tensor(randLike: guidedLogits, generator: generator).log()).log()
+      }
+
       let samples = (guidedLogits + gumbels).argmax(axis: -1).unsqueeze(axis: 1)
       if cfgScale == nil {
         prevToken = samples
       } else {
         prevToken = samples.repeating(axis: 0, count: 2)
       }
-
-      // Don't let graph get too deep and consume memory.
-      try await samples.wait()
 
       outputs.append(prevToken)
     }

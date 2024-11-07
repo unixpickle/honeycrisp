@@ -1221,9 +1221,9 @@ open class MPSBackend: CPUBackend {
     let aShape = transA ? (inner, rows) : (rows, inner)
     let bShape = transB ? (cols, inner) : (inner, cols)
 
-    let output = try await allocate(length: matrixCount * rows * cols * dtype.byteSize)
     let aBuf = try await gpuBuffer(a)
     let bBuf = try await gpuBuffer(b)
+    let output = try await allocate(length: matrixCount * rows * cols * dtype.byteSize)
 
     return try await serialize { [self] in
       let mm = self.createMatmul(
@@ -1334,9 +1334,9 @@ open class MPSBackend: CPUBackend {
     let kernelShape = config.kernelTensorShape()
     let outShape =
       transpose ? config.imageTensorShape(batch: batch) : config.outputTensorShape(batch: batch)
-    let output = try await allocate(length: outShape.product() * dtype.byteSize)
     let imageBuf = try await gpuBuffer(image)
     let kernelBuf = try await gpuBuffer(kernel)
+    let output = try await allocate(length: outShape.product() * dtype.byteSize)
 
     return try await serialize { [self] in
       let op = try self.createConv2D(
@@ -1449,9 +1449,9 @@ open class MPSBackend: CPUBackend {
     let imageShape = config.imageTensorShape(batch: batch)
     let kernelShape = config.kernelTensorShape()
     let outShape = config.outputTensorShape(batch: batch)
-    let output = try await allocate(length: kernelShape.product() * dtype.byteSize)
     let imageBuf = try await gpuBuffer(image)
     let outGradBuf = try await gpuBuffer(outGrad)
+    let output = try await allocate(length: kernelShape.product() * dtype.byteSize)
     return try await serialize { [self] in
       let op = try self.createConv2D(config, batch: batch, kind: .kernelGrad, dtype: mpsDType)
       let completion = completionBuffer(label: "conv2DKernelGrad") { buf in

@@ -112,6 +112,47 @@ public final class Tensor {
     }
   }
 
+  private static let DataDependenciesKey = "HONEYCRISP_DATA_DEPENDENCIES"
+
+  /// Run a block such that all of the `Tensor`s created within the block will
+  /// wait for the current `Tensor`'s data to be available before beginning
+  /// execution of any backend routines.
+  ///
+  /// Note that, if the backward pass is not performed within the block, then
+  /// tensors in the backward pass may, in theory, not wait for the data. This
+  /// is unlikely, however, since gradients typically depend on results from
+  /// the forward pass, which will correctly wait for the data.
+  ///
+  /// This has no effect on `Tensor`s explicitly created with the `dataTask:`
+  /// initializer. It only affects data tasks created with the `createDataTask`
+  /// helpers, which should be used internally whenever a backend method is
+  /// called.
+  public func asDependency<T>(waitForCPU: Bool = true, _ fn: () throws -> T) rethrows -> T {
+    let t = self.noGrad()
+    let task = Task {
+      let data = try await t.data
+      if waitForCPU {
+        let _ = try await data.cpuBuffer
+      }
+    }
+
+    let key = Tensor.DataDependenciesKey
+    if let deps = Thread.current.threadDictionary[key] {
+      let old = deps as! [Task<Void, Error>]
+      defer {
+        Thread.current.threadDictionary[key] = old
+      }
+      Thread.current.threadDictionary[key] = old + [task]
+      return try fn()
+    } else {
+      defer {
+        Thread.current.threadDictionary.removeObject(forKey: key)
+      }
+      Thread.current.threadDictionary[key] = [task]
+      return try fn()
+    }
+  }
+
   public let dataTask: Task<Data, Error>
   public let shape: [Int]
   public let dtype: DType
@@ -134,6 +175,9 @@ public final class Tensor {
     backwardImpl: (((Tensor) -> Void))? = nil
   ) {
     #if DEBUG
+      // This can be helpful to catch a common error case where a backend
+      // accidentally miscalculates the size of a buffer and silently
+      // overflows it.
       self.dataTask = Task {
         let result = try await dataTask.value
         let allocSize = try await result.cpuBuffer.allocatedSize
@@ -150,11 +194,13 @@ public final class Tensor {
       self.backwardImpl = backwardImpl
       self.needsGrad = backwardImpl != nil
     } else {
+      alwaysAssert(
+        backwardImpl == nil, "cannot provide a backward function if !Tensor.isGradEnabled")
       self.needsGrad = false
     }
   }
 
-  public init<T: TensorElement>(
+  convenience public init<T: TensorElement>(
     data: [T], shape: [Int], dtype: DType? = nil, backwardImpl: ((Tensor) -> Void)? = nil
   ) {
     let dtype = dtype ?? T.dtype
@@ -167,19 +213,12 @@ public final class Tensor {
       dtype.canUseScalarType(T.self),
       "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
     let backend = Backend.current
-    self.dataTask = Tensor.createDataTask {
+    let dataTask = Tensor.createDataTask {
       let buf = try await backend.allocate(length: dtype.byteSize * shape.product())
       try arrayToPointer(data, output: buf.contents(), dtype: dtype)
       return CPUBackend.CPUData(buffer: buf)
     }
-    self.shape = shape
-    self.dtype = dtype
-    if Tensor.isGradEnabled {
-      self.backwardImpl = backwardImpl
-      self.needsGrad = backwardImpl != nil
-    } else {
-      self.needsGrad = false
-    }
+    self.init(dataTask: dataTask, shape: shape, dtype: dtype, backwardImpl: backwardImpl)
   }
 
   public convenience init<T: NumericTensorElement>(
@@ -274,8 +313,17 @@ public final class Tensor {
   static internal func createDataTask(
     _ fn: @escaping () async throws -> Data
   ) -> Task<Data, Error> {
-    return Task {
-      try await fn()
+    if let deps = Thread.current.threadDictionary[Tensor.DataDependenciesKey] {
+      Task {
+        for dep in deps as! [Task<Void, Error>] {
+          let _ = try await dep.value
+        }
+        return try await fn()
+      }
+    } else {
+      Task {
+        try await fn()
+      }
     }
   }
 
@@ -283,7 +331,7 @@ public final class Tensor {
     _ x: Tensor, _ fn: @escaping (Tensor) async throws -> Data
   ) -> Task<Data, Error> {
     let safeRef1 = x.noGrad()
-    return Task {
+    return createDataTask {
       try await fn(safeRef1)
     }
   }
@@ -293,7 +341,7 @@ public final class Tensor {
   ) -> Task<Data, Error> {
     let safeRef1 = x.noGrad()
     let safeRef2 = y.noGrad()
-    return Task {
+    return createDataTask {
       try await fn(safeRef1, safeRef2)
     }
   }
@@ -305,7 +353,7 @@ public final class Tensor {
     let safeRef1 = x.noGrad()
     let safeRef2 = y.noGrad()
     let safeRef3 = z.noGrad()
-    return Task {
+    return createDataTask {
       try await fn(safeRef1, safeRef2, safeRef3)
     }
   }
@@ -318,7 +366,7 @@ public final class Tensor {
     let safeRef2 = x.noGrad()
     let safeRef3 = y.noGrad()
     let safeRef4 = z.noGrad()
-    return Task {
+    return createDataTask {
       try await fn(safeRef1, safeRef2, safeRef3, safeRef4)
     }
   }

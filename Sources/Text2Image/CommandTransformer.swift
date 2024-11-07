@@ -204,15 +204,14 @@ class CommandTransformer: Command {
     print("sampling to \(filename) ...")
     var images = [Tensor]()
     for scale in cfgScales {
-      let rng = try await Backend.current.defaultRandom()
-      let state = try await rng.save()
-      try await rng.seed(0)
+      let gen = try await Backend.current.createRandom()
+      try await gen.seed(step)
+
       let captions = captionTensor(testCaptions)
-      let samples = try await model.sample(prefixes: captions, cfgScale: scale)
+      let samples = try await model.sample(prefixes: captions, generator: gen, cfgScale: scale)
       let embs = vqvae.bottleneck.embed(samples.reshape([-1, 16, 16]))
       images.append(
         vqvae.decoder(embs.move(axis: -1, to: 1)).move(axis: 1, to: -1).flatten(endAxis: 1))
-      try await rng.restore(state)
     }
     let img = try await tensorToImage(tensor: Tensor(concat: images, axis: 1))
     try img.write(to: URL(filePath: filename))
