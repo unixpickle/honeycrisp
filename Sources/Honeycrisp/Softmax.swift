@@ -1,6 +1,9 @@
+import HCBacktrace
+
 extension Tensor {
 
-  public func logSoftmax(axis: Int = -1) -> Tensor {
+  @recordCaller
+  private func _logSoftmax(axis: Int = -1) -> Tensor {
     alwaysAssert(dtype.isNumeric, "dtype \(dtype) not supported for logSoftmax")
     let posAxis = positiveAxis(axis)
     alwaysAssert(posAxis >= 0 && posAxis < shape.count, "invalid axis \(axis) for shape \(shape)")
@@ -26,7 +29,8 @@ extension Tensor {
     }
   }
 
-  static public func logSoftmaxGrad(inputs: Tensor, grads: Tensor, axis: Int = -1) -> Tensor {
+  @recordCaller
+  private static func _logSoftmaxGrad(inputs: Tensor, grads: Tensor, axis: Int = -1) -> Tensor {
     alwaysAssert(inputs.dtype.isNumeric)
     alwaysAssert(inputs.dtype == grads.dtype)
     alwaysAssert(inputs.shape == grads.shape)
@@ -52,7 +56,8 @@ extension Tensor {
     }
   }
 
-  public func softmax(axis: Int = -1) -> Tensor {
+  @recordCaller
+  private func _softmax(axis: Int = -1) -> Tensor {
     logSoftmax().exp()
   }
 

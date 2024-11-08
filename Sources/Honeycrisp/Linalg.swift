@@ -1,6 +1,9 @@
+import HCBacktrace
+
 extension Tensor {
 
-  public static func outer(_ a: Tensor, _ b: Tensor) -> Tensor {
+  @recordCaller
+  private static func _outer(_ a: Tensor, _ b: Tensor) -> Tensor {
     alwaysAssert(
       a.shape.count == 1 && b.shape.count == 1,
       "invalid shapes for outer product: \(a.shape), \(b.shape)")
@@ -10,7 +13,8 @@ extension Tensor {
       transOut: false)
   }
 
-  public static func matmul(
+  @recordCaller
+  private static func _matmul(
     a: Tensor, transA: Bool, b: Tensor, transB: Bool, transOut: Bool, aGradBackend: Backend? = nil,
     bGradBackend: Backend? = nil
   )
@@ -48,7 +52,8 @@ extension Tensor {
     }
   }
 
-  public static func batchedMatmul(
+  @recordCaller
+  private static func _batchedMatmul(
     a: Tensor, transA: Bool, b: Tensor, transB: Bool, transOut: Bool
   )
     -> Tensor
@@ -98,7 +103,8 @@ extension Tensor {
     return matmul(a: lhs, transA: false, b: rhs, transB: false, transOut: false)
   }
 
-  public func tril() -> Tensor {
+  @recordCaller
+  private func _tril() -> Tensor {
     let backend = Backend.current
     let newData = createDataTask { t in
       return try await backend.tril(

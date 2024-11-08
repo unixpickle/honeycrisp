@@ -1,5 +1,6 @@
 import Accelerate
 import Foundation
+import HCBacktrace
 import Metal
 import MetalPerformanceShaders
 import MetalPerformanceShadersGraph

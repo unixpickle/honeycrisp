@@ -1,4 +1,5 @@
 import Foundation
+import HCBacktrace
 
 public enum ElemwiseOp {
   case sin
@@ -68,17 +69,11 @@ private func safeSigmoid(_ x: Float) -> Float {
 
 private func safeTanh(_ x: Float) -> Float {
   2 * safeSigmoid(2 * x) - 1
-  // if x < -20 {
-  //   -1
-  // } else if x > 20 {
-  //   1
-  // } else {
-  //   tanh(x)
-  // }
 }
 
 extension Tensor {
-  public func elemwise(op: ElemwiseOp, grad gradOp: ElemwiseOp? = nil) -> Tensor {
+  @recordCaller
+  private func _elemwise(op: ElemwiseOp, grad gradOp: ElemwiseOp? = nil) -> Tensor {
     let backend = Backend.current
     let newData = createDataTask { t in
       try await backend.elemwise(
@@ -94,51 +89,63 @@ extension Tensor {
     }
   }
 
-  public func sin() -> Tensor {
+  @recordCaller
+  private func _sin() -> Tensor {
     self.elemwise(op: .sin, grad: .cos)
   }
 
-  public func cos() -> Tensor {
+  @recordCaller
+  private func _cos() -> Tensor {
     self.elemwise(op: .cos, grad: .minusSin)
   }
 
-  public func exp() -> Tensor {
+  @recordCaller
+  private func _exp() -> Tensor {
     self.elemwise(op: .exp, grad: .exp)
   }
 
-  public func log() -> Tensor {
+  @recordCaller
+  private func _log() -> Tensor {
     self.elemwise(op: .log, grad: .recip)
   }
 
-  public func sigmoid() -> Tensor {
+  @recordCaller
+  private func _sigmoid() -> Tensor {
     self.elemwise(op: .sigmoid, grad: .sigmoidGrad)
   }
 
-  public func relu() -> Tensor {
+  @recordCaller
+  private func _relu() -> Tensor {
     self.elemwise(op: .relu, grad: .reluGrad)
   }
 
-  public func abs() -> Tensor {
+  @recordCaller
+  private func _abs() -> Tensor {
     self.elemwise(op: .abs, grad: .absGrad)
   }
 
-  public func tanh() -> Tensor {
+  @recordCaller
+  private func _tanh() -> Tensor {
     2 * (2 * self).sigmoid() - 1
   }
 
-  public func gelu() -> Tensor {
+  @recordCaller
+  private func _gelu() -> Tensor {
     self.elemwise(op: .gelu, grad: .geluGrad)
   }
 
-  public func silu() -> Tensor {
+  @recordCaller
+  private func _silu() -> Tensor {
     return self * self.sigmoid()
   }
 
-  public func sqrt() -> Tensor {
+  @recordCaller
+  private func _sqrt() -> Tensor {
     pow(0.5)
   }
 
-  public func rsqrt() -> Tensor {
+  @recordCaller
+  private func _rsqrt() -> Tensor {
     pow(-0.5)
   }
 }

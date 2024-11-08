@@ -1,6 +1,7 @@
 // swift-tools-version: 5.10
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
+import CompilerPluginSupport
 import PackageDescription
 
 let package = Package(
@@ -9,7 +10,9 @@ let package = Package(
     .macOS(.v13)
   ],
   products: [
-    // Products define the executables and libraries a package produces, making them visible to other packages.
+    .library(
+      name: "HCBacktrace",
+      targets: ["HCBacktrace"]),
     .library(
       name: "Honeycrisp",
       targets: ["Honeycrisp"]),
@@ -18,15 +21,31 @@ let package = Package(
       targets: ["MNIST"]),
   ],
   dependencies: [
+    .package(
+      url: "https://github.com/swiftlang/swift-syntax.git", "509.0.0"..<"601.0.0-prerelease"),
     .package(url: "https://github.com/1024jp/GzipSwift", "6.0.0"..<"6.1.0"),
     .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.9.0"),
     .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0"..<"4.0.0"),
     .package(url: "https://github.com/unixpickle/coreml-builder.git", "0.1.0"..<"0.2.0"),
   ],
   targets: [
+    .macro(
+      name: "HCBacktraceMacros",
+      dependencies: [
+        .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
+        .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
+      ],
+      path: "Sources/HCBacktrace/Macros"),
+    .target(
+      name: "HCBacktrace",
+      dependencies: ["HCBacktraceMacros"],
+      path: "Sources/HCBacktrace/Implementation"),
     .target(
       name: "Honeycrisp",
-      dependencies: [.product(name: "CoreMLBuilder", package: "coreml-builder")],
+      dependencies: [
+        .product(name: "CoreMLBuilder", package: "coreml-builder"),
+        "HCBacktrace",
+      ],
       resources: [
         .process("Resources")
       ]),

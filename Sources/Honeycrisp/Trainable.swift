@@ -1,4 +1,5 @@
 import Foundation
+import HCBacktrace
 
 public protocol MaybeTensor {
   var isNil: Bool { get }
@@ -213,7 +214,8 @@ open class Trainable {
 
   public typealias State = [String: StateItem]
 
-  public func state() async throws -> State {
+  @recordCaller
+  private func _state() async throws -> State {
     var result = State()
     for (name, param) in registeredParams {
       if let data = param.data {
@@ -234,7 +236,8 @@ open class Trainable {
     case dtypeMismatch(String)
   }
 
-  public func loadState(
+  @recordCaller
+  private func _loadState(
     _ state: State, mustSetAllParameters: Bool = true, mustUseAllStates: Bool = true
   ) throws {
     var state = state
@@ -318,7 +321,8 @@ public class Linear: Trainable {
     }
   }
 
-  public func callAsFunction(_ x: Tensor, weightGradBackend: Backend? = nil) -> Tensor {
+  @recordCaller
+  private func _callAsFunction(_ x: Tensor, weightGradBackend: Backend? = nil) -> Tensor {
     if x.shape.count > 2 {
       let squashedBatch = x.reshape([
         x.shape[..<(x.shape.count - 1)].product(), x.shape[x.shape.count - 1],
@@ -418,7 +422,8 @@ public class Conv2D: Trainable {
     }
   }
 
-  public func callAsFunction(_ x: Tensor) -> Tensor {
+  @recordCaller
+  private func _callAsFunction(_ x: Tensor) -> Tensor {
     alwaysAssert(x.shape.count == 4, "invalid input shape for conv2d: \(x.shape)")
     let (height, width, channels) =
       if channelsLast {
@@ -459,7 +464,8 @@ public class Dropout: Trainable {
     self.dropProb = dropProb
   }
 
-  public func callAsFunction(_ x: Tensor) -> Tensor {
+  @recordCaller
+  private func _callAsFunction(_ x: Tensor) -> Tensor {
     if mode == .training {
       (Tensor(randLike: x) >= dropProb).when(isTrue: (1.0 / (1.0 - dropProb)) * x, isFalse: 0)
     } else {
@@ -491,7 +497,8 @@ public class LayerNorm: Trainable {
     }
   }
 
-  public func callAsFunction(_ x: Tensor) -> Tensor {
+  @recordCaller
+  private func _callAsFunction(_ x: Tensor) -> Tensor {
     alwaysAssert(
       x.shape.count >= shape.count && Array(x.shape[(x.shape.count - shape.count)...]) == shape,
       "LayerNorm shape \(shape) is incompatible with input shape \(x.shape)")
@@ -545,7 +552,8 @@ public class GroupNorm: Trainable {
     }
   }
 
-  public func callAsFunction(_ x: Tensor) -> Tensor {
+  @recordCaller
+  private func _callAsFunction(_ x: Tensor) -> Tensor {
     if channelsLast {
       alwaysAssert(
         x.shape[x.shape.count - 1] == channelCount,

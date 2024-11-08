@@ -1,3 +1,5 @@
+import HCBacktrace
+
 public struct ScatterGatherIndices {
   public let broadcasted: Bool
   public let indices: Tensor.Data
@@ -26,7 +28,9 @@ public struct ScatterGatherIndices {
 }
 
 extension Tensor {
-  public func gather(axis: Int, indices: Tensor, indicesAreUnique: Bool = false) -> Tensor {
+
+  @recordCaller
+  private func _gather(axis: Int, indices: Tensor, indicesAreUnique: Bool = false) -> Tensor {
     let axis = positiveAxis(axis)
     alwaysAssert(indices.dtype == .int64, "can only gather with indices of dtype \(indices.dtype)")
     alwaysAssert(
@@ -69,7 +73,8 @@ extension Tensor {
     }
   }
 
-  public func scatter(axis: Int, count: Int, indices: Tensor, indicesAreUnique: Bool = false)
+  @recordCaller
+  private func _scatter(axis: Int, count: Int, indices: Tensor, indicesAreUnique: Bool = false)
     -> Tensor
   {
     let axis = positiveAxis(axis)
@@ -106,4 +111,5 @@ extension Tensor {
       }
     }
   }
+
 }

@@ -1,5 +1,8 @@
+import HCBacktrace
+
 extension Tensor {
-  public func when(isTrue: Tensor, isFalse: Tensor) -> Tensor {
+  @recordCaller
+  private func _when(isTrue: Tensor, isFalse: Tensor) -> Tensor {
     alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
     alwaysAssert(
       isTrue.dtype == isFalse.dtype,
@@ -29,7 +32,8 @@ extension Tensor {
     }
   }
 
-  public func when<T: TensorElement>(isTrue: Tensor, isFalse: T) -> Tensor {
+  @recordCaller
+  private func _when<T: TensorElement>(isTrue: Tensor, isFalse: T) -> Tensor {
     alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
     alwaysAssert(
       self.shape == isTrue.shape,
@@ -51,7 +55,8 @@ extension Tensor {
     }
   }
 
-  public func when<T: TensorElement>(isTrue: T, isFalse: Tensor) -> Tensor {
+  @recordCaller
+  private func _when<T: TensorElement>(isTrue: T, isFalse: Tensor) -> Tensor {
     alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
     alwaysAssert(
       self.shape == isFalse.shape,
@@ -73,7 +78,8 @@ extension Tensor {
     }
   }
 
-  public func when<T: TensorElement>(isTrue: T, isFalse: T, dtype: DType) -> Tensor {
+  @recordCaller
+  private func _when<T: TensorElement>(isTrue: T, isFalse: T, dtype: DType) -> Tensor {
     alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
     let backend = Backend.current
     let newData = createDataTask { t in

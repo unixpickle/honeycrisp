@@ -1,4 +1,5 @@
 import Foundation
+import HCBacktrace
 
 public struct ReduceDims: Hashable {
   let outerCount: Int
@@ -47,32 +48,39 @@ public enum ReduceOp {
 }
 
 extension Tensor {
-  public func sum(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+  @recordCaller
+  private func _sum(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
     reduce(op: .sum, axis: axis, keepdims: keepdims)
   }
 
-  public func argmax(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+  @recordCaller
+  private func _argmax(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
     reduce(op: .argmax, axis: axis, keepdims: keepdims)
   }
 
-  public func argmin(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+  @recordCaller
+  private func _argmin(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
     reduce(op: .argmin, axis: axis, keepdims: keepdims)
   }
 
-  public func min(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+  @recordCaller
+  private func _min(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
     gatherFromReduce(op: .argmin, axis: axis, keepdims: keepdims)
   }
 
-  public func max(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+  @recordCaller
+  private func _max(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
     gatherFromReduce(op: .argmax, axis: axis, keepdims: keepdims)
   }
 
-  public func mean(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+  @recordCaller
+  private func _mean(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
     let axis = positiveAxis(axis)
     return sum(axis: axis, keepdims: keepdims) / Float(axis != nil ? shape[axis!] : shape.product())
   }
 
-  public func variance(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+  @recordCaller
+  private func _variance(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
     let mean = self.mean(axis: axis, keepdims: true)
     let result = (self - mean.expand(as: self)).pow(2).mean(axis: axis, keepdims: true)
     if keepdims {
@@ -84,13 +92,15 @@ extension Tensor {
     }
   }
 
-  public func meanAndVariance(axis: Int? = nil, keepdims: Bool = false) -> (Tensor, Tensor) {
+  @recordCaller
+  private func _meanAndVariance(axis: Int? = nil, keepdims: Bool = false) -> (Tensor, Tensor) {
     let moment1 = self.mean(axis: axis, keepdims: true)
     let moment2 = self.pow(2).mean(axis: axis, keepdims: true)
     return (moment1, (moment2 - moment1.pow(2)).clamp(min: 0))
   }
 
-  public func maxPool2D(width kw: Int, height kh: Int, channelsLast: Bool = false) -> Tensor {
+  @recordCaller
+  private func _maxPool2D(width kw: Int, height kh: Int, channelsLast: Bool = false) -> Tensor {
     alwaysAssert(shape.count == 4, "invalid shape for maxPool2D \(shape)")
     let b = shape[0]
     let (h, w, c) = channelsLast ? (shape[1], shape[2], shape[3]) : (shape[2], shape[3], shape[1])
@@ -105,7 +115,8 @@ extension Tensor {
     }
   }
 
-  internal func gatherFromReduce(op: ReduceOp, axis: Int?, keepdims: Bool) -> Tensor {
+  @recordCaller
+  internal func _gatherFromReduce(op: ReduceOp, axis: Int?, keepdims: Bool) -> Tensor {
     guard let axis = positiveAxis(axis) else {
       let result = flatten().gatherFromReduce(op: op, axis: 0, keepdims: false)
       return keepdims ? result.reshape(Array(repeating: 1, count: shape.count)) : result
@@ -115,7 +126,8 @@ extension Tensor {
     return keepdims ? selection : selection.squeeze(axis: axis)
   }
 
-  internal func reduce(
+  @recordCaller
+  internal func _reduce(
     op: ReduceOp, axis: Int? = nil, keepdims: Bool = false
   ) -> Tensor {
     guard let axis = positiveAxis(axis) else {
@@ -141,11 +153,12 @@ extension Tensor {
     }
   }
 
+  @recordCaller
   // Repeat the tensor along a given axis for zero or more times.
   //
   // The axis may be equal to shape.count, in which case a new trailing
   // dimension is added with the value `count`.
-  public func repeating(axis: Int, count: Int) -> Tensor {
+  private func _repeating(axis: Int, count: Int) -> Tensor {
     let axis = positiveAxis(axis)
     alwaysAssert(axis >= 0 && axis <= shape.count, "axis \(axis) out of bounds for shape \(shape)")
     let outerCount = shape[..<axis].product()
@@ -161,7 +174,8 @@ extension Tensor {
     ]).reshape(newShape)
   }
 
-  internal func reduceDims(_ axis: Int? = nil) -> ReduceDims {
+  @recordCaller
+  internal func _reduceDims(_ axis: Int? = nil) -> ReduceDims {
     if let axis = axis {
       let axis = (axis < 0 ? axis + shape.count : axis)
       alwaysAssert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
@@ -175,7 +189,8 @@ extension Tensor {
     }
   }
 
-  internal func flatApplySums(_ allDims: [ReduceDims]) -> Tensor {
+  @recordCaller
+  internal func _flatApplySums(_ allDims: [ReduceDims]) -> Tensor {
     let backend = Backend.current
     let newData = createDataTask { t in
       var count = t.shape.product()
@@ -199,7 +214,8 @@ extension Tensor {
     }
   }
 
-  internal func flatApplyRepeats(_ allDims: [RepeatDims]) -> Tensor {
+  @recordCaller
+  internal func _flatApplyRepeats(_ allDims: [RepeatDims]) -> Tensor {
     let backend = Backend.current
     let newData = createDataTask { t in
       var count = t.shape.product()

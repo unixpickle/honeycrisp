@@ -1,7 +1,9 @@
 import Foundation
+import HCBacktrace
 
 extension Tensor {
-  public func printing(onForward: String? = nil, onGrad: String? = nil) -> Tensor {
+  @recordCaller
+  private func _printing(onForward: String? = nil, onGrad: String? = nil) -> Tensor {
     let forwardFn: ((Tensor) async throws -> Void)? =
       if let onForward = onForward {
         { t in
@@ -23,7 +25,8 @@ extension Tensor {
     return printing(onForward: forwardFn, onGrad: bwdFn)
   }
 
-  public func printing(
+  @recordCaller
+  private func _printing(
     onForward: ((Tensor) async throws -> Void)? = nil,
     onGrad: ((Tensor) async throws -> Void)? = nil
   ) -> Tensor {
@@ -49,7 +52,8 @@ extension Tensor {
     }
   }
 
-  public func checkNaN(onForward: String? = nil, onGrad: String? = nil) -> Tensor {
+  @recordCaller
+  private func _checkNaN(onForward: String? = nil, onGrad: String? = nil) -> Tensor {
     alwaysAssert(dtype == .float32)
     if onForward == nil && onGrad == nil {
       return self
@@ -69,19 +73,5 @@ extension Tensor {
         handle.backward(Backend.current) { grad.checkNaN(onForward: onGrad) }
       }
     }
-  }
-}
-
-func alwaysAssert(
-  _ condition: Bool, _ message: String? = nil, file: StaticString = #filePath, line: UInt = #line
-) {
-  if !condition {
-    let msg =
-      if let message = message {
-        "Assertion failure at \(file):\(line) with message: \(message)"
-      } else {
-        "Assertion failure at \(file):\(line)"
-      }
-    fatalError(msg)
   }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import HCBacktrace
 
 open class Optimizer {
   public typealias Parameter = Trainable.Parameter
@@ -15,8 +16,13 @@ open class Optimizer {
     }
   }
 
-  open func step() {
+  internal func step() {
     preconditionFailure("Method not implemented")
+  }
+
+  @recordCaller
+  private func _step() {
+    step()
   }
 }
 
@@ -41,7 +47,7 @@ public class Adam: Optimizer {
     super.init(parameters)
   }
 
-  override public func step() {
+  override internal func step() {
     for (name, var param) in parameters {
       guard let grad = param.grad else {
         continue
@@ -67,7 +73,8 @@ public class Adam: Optimizer {
     public var moment2: [String: TensorState] = [:]
   }
 
-  public func state() async throws -> State {
+  @recordCaller
+  private func _state() async throws -> State {
     State(
       stepIndex: stepIndex,
       moment1: try await tensorsToStates(moment1),
@@ -75,7 +82,8 @@ public class Adam: Optimizer {
     )
   }
 
-  public func loadState(_ state: State) throws {
+  @recordCaller
+  private func _loadState(_ state: State) throws {
     stepIndex = state.stepIndex
     moment1 = statesToTensors(state.moment1)
     moment2 = statesToTensors(state.moment2)

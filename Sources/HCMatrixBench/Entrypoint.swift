@@ -1,4 +1,5 @@
 import Foundation
+import HCBacktrace
 import Honeycrisp
 
 @main
@@ -13,7 +14,7 @@ struct Main {
           let m1 = Tensor(rand: [outerSize, innerSize], dtype: .float16)
           let m2 = Tensor(rand: [innerSize, innerSize], dtype: .float16)
           func runMatmul() async throws {
-            let result = m1 &* m2
+            let result = Backtrace.record { m1.t() &* m2 }
             try await result.wait()
           }
 

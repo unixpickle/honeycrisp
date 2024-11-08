@@ -1,3 +1,4 @@
+import HCBacktrace
 import Metal
 
 /// A mapping from a broadcasted array to the underlying data array.
@@ -170,32 +171,38 @@ private class RepeatSequence {
 
 extension Tensor {
 
-  public func expand(as asTensor: Tensor) -> Tensor {
+  @recordCaller
+  private func _expand(as asTensor: Tensor) -> Tensor {
     expand(shape: asTensor.shape)
   }
 
-  public func expand(shape newShape: [Int]) -> Tensor {
+  @recordCaller
+  private func _expand(shape newShape: [Int]) -> Tensor {
     let plan = planExpansion(shape: newShape)
     return flatApplyRepeats(plan.steps.map { $0.dims }).reshape(newShape)
   }
 
-  public static func broadcast(_ xs: [Tensor]) -> [Tensor] {
+  @recordCaller
+  private static func _broadcast(_ xs: [Tensor]) -> [Tensor] {
     let shape = Tensor.broadcastShape(xs.map { $0.shape })
     return xs.map { $0.expand(shape: shape) }
   }
 
-  public static func broadcast(_ x: Tensor, _ y: Tensor) -> (Tensor, Tensor) {
+  @recordCaller
+  private static func _broadcast(_ x: Tensor, _ y: Tensor) -> (Tensor, Tensor) {
     let results = broadcast([x, y])
     return (results[0], results[1])
   }
 
-  internal static func lazyBroadcast(_ t: [Tensor]) -> ([Int], [(Tensor, BroadcastStrides)]) {
+  @recordCaller
+  internal static func _lazyBroadcast(_ t: [Tensor]) -> ([Int], [(Tensor, BroadcastStrides)]) {
     let newShape = broadcastShape(t.map { $0.shape })
     let results = t.map { $0.lazyExpand(shape: newShape) }
     return (newShape, results)
   }
 
-  internal static func lazyBroadcast(_ t1: Tensor, _ t2: Tensor) -> (
+  @recordCaller
+  internal static func _lazyBroadcast(_ t1: Tensor, _ t2: Tensor) -> (
     [Int], ((Tensor, BroadcastStrides), (Tensor, BroadcastStrides))
   ) {
     let newShape = broadcastShape([t1.shape, t2.shape])
@@ -204,7 +211,8 @@ extension Tensor {
     return (newShape, (r1, r2))
   }
 
-  internal func lazyExpand(shape newShape: [Int]) -> (Tensor, BroadcastStrides) {
+  @recordCaller
+  internal func _lazyExpand(shape newShape: [Int]) -> (Tensor, BroadcastStrides) {
     alwaysAssert(
       newShape.count >= shape.count,
       "cannot broadcast shape \(shape) to shorter shape \(newShape)"
@@ -221,7 +229,8 @@ extension Tensor {
     return (expanded.reshape(lazyShape), bcast)
   }
 
-  internal func reduceBroadcast(_ bcast: BroadcastStrides, as tensor: Tensor) -> Tensor {
+  @recordCaller
+  internal func _reduceBroadcast(_ bcast: BroadcastStrides, as tensor: Tensor) -> Tensor {
     return flatApplySums(bcast.repeatsInverse()).reshape(tensor.shape)
   }
 
@@ -259,7 +268,8 @@ extension Tensor {
     return result
   }
 
-  internal static func broadcastShape(_ s: [[Int]]) -> [Int] {
+  @recordCaller
+  internal static func _broadcastShape(_ s: [[Int]]) -> [Int] {
     if s.count == 1 {
       return s[0]
     } else if s.count == 2 {

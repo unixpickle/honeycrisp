@@ -1,4 +1,5 @@
 import Foundation
+import HCBacktrace
 
 public struct TensorState: Codable {
   public enum TensorData {
@@ -79,7 +80,8 @@ extension Tensor {
     }
   }
 
-  public func state() async throws -> TensorState {
+  @recordCaller
+  private func _state() async throws -> TensorState {
     switch self.dtype {
     case .float16, .float32:
       TensorState(data: .floats(try await floats()), shape: shape, dtype: dtype)

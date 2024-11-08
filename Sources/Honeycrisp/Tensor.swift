@@ -1,3 +1,4 @@
+import HCBacktrace
 import Metal
 
 public final class Tensor {
@@ -66,7 +67,8 @@ public final class Tensor {
       canSkip = false
     }
 
-    public func backward(_ backend: Backend, _ gradFn: () -> Tensor) {
+    @recordCaller
+    private func _backward(_ backend: Backend, _ gradFn: () -> Tensor) {
       alwaysAssert(addGrad != nil, "cannot re-use backward handle")
       let ag = addGrad!
       addGrad = nil
@@ -95,7 +97,8 @@ public final class Tensor {
     }
   }
 
-  public static func withGrad<T>(enabled flag: Bool, _ fn: () throws -> T) rethrows -> T {
+  @recordCaller
+  private static func _withGrad<T>(enabled flag: Bool, _ fn: () throws -> T) rethrows -> T {
     if let enabled = Thread.current.threadDictionary[GradEnabledThreadKey] {
       let old = enabled as! Bool
       defer {
@@ -171,20 +174,27 @@ public final class Tensor {
   private var numBackwardHandles: Int = 0
 
   public init(
-    dataTask: Task<Data, Error>, shape: [Int], dtype: DType,
-    backwardImpl: (((Tensor) -> Void))? = nil
+    dataTask: Task<Data, Error>,
+    shape: [Int],
+    dtype: DType,
+    backwardImpl: (((Tensor) -> Void))? = nil,
+    function: StaticString = #function,
+    file: StaticString = #file,
+    line: UInt = #line
   ) {
     #if DEBUG
       // This can be helpful to catch a common error case where a backend
       // accidentally miscalculates the size of a buffer and silently
       // overflows it.
-      self.dataTask = Task {
-        let result = try await dataTask.value
-        let allocSize = try await result.cpuBuffer.allocatedSize
-        let minSize = shape.product() * dtype.byteSize
-        alwaysAssert(allocSize >= minSize, "buffer of size \(allocSize) underflows shape \(shape)")
-        return result
-      }
+      self.dataTask = Tensor.createDataTask(
+        {
+          let result = try await dataTask.value
+          let allocSize = try await result.cpuBuffer.allocatedSize
+          let minSize = shape.product() * dtype.byteSize
+          alwaysAssert(
+            allocSize >= minSize, "buffer of size \(allocSize) underflows shape \(shape)")
+          return result
+        }, function: function, file: file, line: line)
     #else
       self.dataTask = dataTask
     #endif
@@ -194,111 +204,176 @@ public final class Tensor {
       self.backwardImpl = backwardImpl
       self.needsGrad = backwardImpl != nil
     } else {
-      alwaysAssert(
-        backwardImpl == nil, "cannot provide a backward function if !Tensor.isGradEnabled")
+      Backtrace.record(function: function, file: file, line: line) {
+        alwaysAssert(
+          backwardImpl == nil, "cannot provide a backward function if !Tensor.isGradEnabled")
+      }
       self.needsGrad = false
     }
   }
 
   convenience public init<T: TensorElement>(
-    data: [T], shape: [Int], dtype: DType? = nil, backwardImpl: ((Tensor) -> Void)? = nil
+    data: [T],
+    shape: [Int],
+    dtype: DType? = nil,
+    backwardImpl: ((Tensor) -> Void)? = nil,
+    function: StaticString = #function,
+    file: StaticString = #file,
+    line: UInt = #line
   ) {
     let dtype = dtype ?? T.dtype
-    if !dtype.supportsGrad {
-      alwaysAssert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
-    }
-    alwaysAssert(
-      data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
-    alwaysAssert(
-      dtype.canUseScalarType(T.self),
-      "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
-    let backend = Backend.current
-    let dataTask = Tensor.createDataTask {
-      let buf = try await backend.allocate(length: dtype.byteSize * shape.product())
-      try arrayToPointer(data, output: buf.contents(), dtype: dtype)
-      return CPUBackend.CPUData(buffer: buf)
+    let dataTask = Backtrace.record(function: function, file: file, line: line) {
+      if !dtype.supportsGrad {
+        alwaysAssert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
+      }
+      alwaysAssert(
+        data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
+      alwaysAssert(
+        dtype.canUseScalarType(T.self),
+        "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
+      let backend = Backend.current
+      return Tensor.createDataTask {
+        let buf = try await backend.allocate(length: dtype.byteSize * shape.product())
+        try arrayToPointer(data, output: buf.contents(), dtype: dtype)
+        return CPUBackend.CPUData(buffer: buf)
+      }
     }
     self.init(dataTask: dataTask, shape: shape, dtype: dtype, backwardImpl: backwardImpl)
   }
 
   public convenience init<T: NumericTensorElement>(
-    range: Range<T>, dtype: DType? = nil
+    range: Range<T>,
+    dtype: DType? = nil,
+    function: StaticString = #function,
+    file: StaticString = #file,
+    line: UInt = #line
   ) where Range<T>: Collection {
     let arr = Array(range)
-    self.init(data: arr, shape: [arr.count], dtype: dtype ?? T.dtype)
+    self.init(
+      data: arr, shape: [arr.count], dtype: dtype ?? T.dtype, function: function, file: file,
+      line: line)
   }
 
   public convenience init<T: NumericTensorElement>(
-    range: ClosedRange<T>, dtype: DType? = nil
+    range: ClosedRange<T>,
+    dtype: DType? = nil,
+    function: StaticString = #function,
+    file: StaticString = #file,
+    line: UInt = #line
   ) where ClosedRange<T>: Collection {
     let arr = Array(range)
-    self.init(data: arr, shape: [arr.count], dtype: dtype ?? T.dtype)
+    self.init(
+      data: arr, shape: [arr.count], dtype: dtype ?? T.dtype, function: function, file: file,
+      line: line)
   }
 
-  public convenience init(zerosLike: Tensor) {
-    self.init(constant: 0, like: zerosLike)
+  public convenience init(
+    zerosLike: Tensor,
+    function: StaticString = #function,
+    file: StaticString = #file,
+    line: UInt = #line
+  ) {
+    self.init(constant: 0, like: zerosLike, function: function, file: file, line: line)
   }
 
-  public convenience init(onesLike: Tensor) {
-    self.init(constant: 1, like: onesLike)
+  public convenience init(
+    onesLike: Tensor,
+    function: StaticString = #function,
+    file: StaticString = #file,
+    line: UInt = #line
+  ) {
+    self.init(constant: 1, like: onesLike, function: function, file: file, line: line)
   }
 
-  public convenience init(zeros shape: [Int], dtype: DType = .float32) {
-    self.init(constant: 0, shape: shape, dtype: dtype)
+  public convenience init(
+    zeros shape: [Int],
+    dtype: DType = .float32,
+    function: StaticString = #function,
+    file: StaticString = #file,
+    line: UInt = #line
+  ) {
+    self.init(constant: 0, shape: shape, dtype: dtype, function: function, file: file, line: line)
   }
 
-  public convenience init(ones shape: [Int], dtype: DType = .float32) {
-    self.init(constant: 1, shape: shape, dtype: dtype)
-  }
-
-  public convenience init<T: TensorElement>(constant: T, like: Tensor) {
-    self.init(constant: constant, shape: like.shape, dtype: like.dtype)
+  public convenience init(
+    ones shape: [Int],
+    dtype: DType = .float32,
+    function: StaticString = #function,
+    file: StaticString = #file,
+    line: UInt = #line
+  ) {
+    self.init(constant: 1, shape: shape, dtype: dtype, function: function, file: file, line: line)
   }
 
   public convenience init<T: TensorElement>(
-    constant: T, shape: [Int], dtype: DType? = nil
+    constant: T,
+    like: Tensor,
+    function: StaticString = #function,
+    file: StaticString = #file,
+    line: UInt = #line
   ) {
     self.init(
-      data: [T](repeating: constant, count: shape.product()), shape: shape, dtype: dtype)
+      constant: constant, shape: like.shape, dtype: like.dtype, function: function, file: file,
+      line: line)
   }
 
-  public func copyToArray<T: TensorElement>(_ out: inout [T]) async throws {
+  public convenience init<T: TensorElement>(
+    constant: T,
+    shape: [Int],
+    dtype: DType? = nil,
+    function: StaticString = #function,
+    file: StaticString = #file,
+    line: UInt = #line
+  ) {
+    self.init(
+      data: [T](repeating: constant, count: shape.product()), shape: shape, dtype: dtype,
+      function: function, file: file, line: line)
+  }
+
+  @recordCaller
+  private func _copyToArray<T: TensorElement>(_ out: inout [T]) async throws {
     alwaysAssert(out.count == shape.product(), "out size must match our size")
     let buf = try await data.cpuBuffer
     try pointerToArray(buf.contents(), output: &out, dtype: dtype)
   }
 
-  public func floats() async throws -> [Float] {
+  @recordCaller
+  private func _floats() async throws -> [Float] {
     var out = [Float](repeating: 0, count: shape.product())
     try await copyToArray(&out)
     return out
   }
 
-  public func ints() async throws -> [Int] {
+  @recordCaller
+  private func _ints() async throws -> [Int] {
     var out = [Int](repeating: 0, count: shape.product())
     try await copyToArray(&out)
     return out
   }
 
-  public func int64s() async throws -> [Int64] {
+  @recordCaller
+  private func _int64s() async throws -> [Int64] {
     var out = [Int64](repeating: 0, count: shape.product())
     try await copyToArray(&out)
     return out
   }
 
-  public func bools() async throws -> [Bool] {
+  @recordCaller
+  private func _bools() async throws -> [Bool] {
     var out = [Bool](repeating: false, count: shape.product())
     try await copyToArray(&out)
     return out
   }
 
-  public func item() async throws -> Float {
+  @recordCaller
+  private func _item() async throws -> Float {
     alwaysAssert(shape.product() == 1, "cannot call item() on Tensor of shape \(shape)")
     let data = try await floats()
     return data[0]
   }
 
-  public func wait() async throws {
+  @recordCaller
+  private func _wait() async throws {
     let _ = try await (try await data).cpuBuffer
   }
 
@@ -306,28 +381,39 @@ public final class Tensor {
     return Tensor(dataTask: dataTask, shape: shape, dtype: dtype)
   }
 
-  internal func createDataTask(_ fn: @escaping (Tensor) async throws -> Data) -> Task<Data, Error> {
+  @recordCaller
+  internal func _createDataTask(_ fn: @escaping (Tensor) async throws -> Data) -> Task<Data, Error>
+  {
     Tensor.createDataTask(self, fn)
   }
 
   static internal func createDataTask(
-    _ fn: @escaping () async throws -> Data
+    _ fn: @escaping () async throws -> Data,
+    function: StaticString = #function,
+    file: StaticString = #file,
+    line: UInt = #line
   ) -> Task<Data, Error> {
-    if let deps = Thread.current.threadDictionary[Tensor.DataDependenciesKey] {
+    let callers = Backtrace.current + [CodeLocation(function: function, file: file, line: line)]
+    return if let deps = Thread.current.threadDictionary[Tensor.DataDependenciesKey] {
       Task {
-        for dep in deps as! [Task<Void, Error>] {
-          let _ = try await dep.value
+        try await Backtrace.override(callers) {
+          for dep in deps as! [Task<Void, Error>] {
+            let _ = try await dep.value
+          }
+          return try await fn()
         }
-        return try await fn()
       }
     } else {
       Task {
-        try await fn()
+        try await Backtrace.override(callers) {
+          try await fn()
+        }
       }
     }
   }
 
-  static internal func createDataTask(
+  @recordCaller
+  static internal func _createDataTask(
     _ x: Tensor, _ fn: @escaping (Tensor) async throws -> Data
   ) -> Task<Data, Error> {
     let safeRef1 = x.noGrad()
@@ -336,7 +422,8 @@ public final class Tensor {
     }
   }
 
-  static internal func createDataTask(
+  @recordCaller
+  static internal func _createDataTask(
     _ x: Tensor, _ y: Tensor, _ fn: @escaping (Tensor, Tensor) async throws -> Data
   ) -> Task<Data, Error> {
     let safeRef1 = x.noGrad()
@@ -346,7 +433,8 @@ public final class Tensor {
     }
   }
 
-  static internal func createDataTask(
+  @recordCaller
+  static internal func _createDataTask(
     _ x: Tensor, _ y: Tensor, _ z: Tensor,
     _ fn: @escaping (Tensor, Tensor, Tensor) async throws -> Data
   ) -> Task<Data, Error> {
@@ -358,7 +446,8 @@ public final class Tensor {
     }
   }
 
-  static internal func createDataTask(
+  @recordCaller
+  static internal func _createDataTask(
     _ w: Tensor, _ x: Tensor, _ y: Tensor, _ z: Tensor,
     _ fn: @escaping (Tensor, Tensor, Tensor, Tensor) async throws -> Data
   ) -> Task<Data, Error> {
@@ -371,7 +460,8 @@ public final class Tensor {
     }
   }
 
-  public func onGrad(_ action: @escaping ((Tensor) -> Void)) -> Tensor {
+  @recordCaller
+  private func _onGrad(_ action: @escaping ((Tensor) -> Void)) -> Tensor {
     alwaysAssert(dtype.supportsGrad, "cannot compute gradients for dtype \(dtype)")
     if !Tensor.isGradEnabled {
       return Tensor(dataTask: dataTask, shape: shape, dtype: dtype)
@@ -386,7 +476,8 @@ public final class Tensor {
     }
   }
 
-  public func reshape(_ newShape: [Int]) -> Tensor {
+  @recordCaller
+  private func _reshape(_ newShape: [Int]) -> Tensor {
     if shape == newShape {
       return self
     }
@@ -403,11 +494,13 @@ public final class Tensor {
     }
   }
 
-  public func reshape(as x: Tensor) -> Tensor {
+  @recordCaller
+  private func _reshape(as x: Tensor) -> Tensor {
     reshape(x.shape)
   }
 
-  internal func fillNegativeOneInShape(_ newShape: [Int]) -> [Int] {
+  @recordCaller
+  internal func _fillNegativeOneInShape(_ newShape: [Int]) -> [Int] {
     guard let idx = newShape.firstIndex(of: -1) else {
       return newShape
     }
@@ -425,7 +518,8 @@ public final class Tensor {
     return result
   }
 
-  public func flatten(startAxis: Int = 0, endAxis: Int = -1) -> Tensor {
+  @recordCaller
+  private func _flatten(startAxis: Int = 0, endAxis: Int = -1) -> Tensor {
     let startAxis = positiveAxis(startAxis)
     let endAxis = shape.count == 0 && endAxis == -1 ? 0 : positiveAxis(endAxis)
     if startAxis == 0 && endAxis == 0 && shape.count == 0 {
@@ -436,7 +530,8 @@ public final class Tensor {
       shape[..<startAxis] + [shape[startAxis...endAxis].product()] + shape[(endAxis + 1)...])
   }
 
-  public func squeeze(axis: Int) -> Tensor {
+  @recordCaller
+  private func _squeeze(axis: Int) -> Tensor {
     let posAxis = positiveAxis(axis)
     alwaysAssert(shape[posAxis] == 1, "cannot squeeze axis \(axis) for shape \(shape)")
     var newShape = shape
@@ -444,7 +539,8 @@ public final class Tensor {
     return reshape(newShape)
   }
 
-  public func unsqueeze(axis: Int) -> Tensor {
+  @recordCaller
+  private func _unsqueeze(axis: Int) -> Tensor {
     let posAxis = axis < 0 ? axis + shape.count + 1 : axis
     alwaysAssert(posAxis >= 0, "axis \(axis) out of bounds for shape \(shape)")
     var newShape = shape
@@ -452,11 +548,13 @@ public final class Tensor {
     return reshape(newShape)
   }
 
-  public func cast(as t: Tensor) -> Tensor {
+  @recordCaller
+  private func _cast(as t: Tensor) -> Tensor {
     cast(t.dtype)
   }
 
-  public func cast(_ newType: DType) -> Tensor {
+  @recordCaller
+  private func _cast(_ newType: DType) -> Tensor {
     if newType == dtype {
       return self
     }
@@ -784,7 +882,8 @@ public final class Tensor {
     }
   }
 
-  public func pow<T: NumericTensorElement>(_ exponent: T, outScale: T = 1.0) -> Tensor {
+  @recordCaller
+  private func _pow<T: NumericTensorElement>(_ exponent: T, outScale: T = 1.0) -> Tensor {
     alwaysAssert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
     let backend = Backend.current
     let newData = createDataTask { t in
@@ -807,7 +906,8 @@ public final class Tensor {
     }
   }
 
-  public func clamp<T: NumericTensorElement>(min: T? = nil, max: T? = nil) -> Tensor {
+  @recordCaller
+  private func _clamp<T: NumericTensorElement>(min: T? = nil, max: T? = nil) -> Tensor {
     alwaysAssert(dtype.isNumeric, "cannot use clamp() with dtype \(dtype)")
     alwaysAssert(min != nil || max != nil, "cannot use clamp() without bounds")
     let backend = Backend.current
@@ -826,7 +926,8 @@ public final class Tensor {
     }
   }
 
-  internal static func compare(lhs: Tensor, rhs: Tensor, op: ComparisonOp) -> Tensor {
+  @recordCaller
+  internal static func _compare(lhs: Tensor, rhs: Tensor, op: ComparisonOp) -> Tensor {
     alwaysAssert(
       lhs.shape == rhs.shape,
       "shape mismatch for == operator: lhs=\(lhs.shape) rhs=\(rhs.shape)"
@@ -843,7 +944,8 @@ public final class Tensor {
     return Tensor(dataTask: newData, shape: lhs.shape, dtype: .bool)
   }
 
-  internal static func compare<T: TensorElement>(lhs: Tensor, rhs: T, op: ComparisonOp) -> Tensor {
+  @recordCaller
+  internal static func _compare<T: TensorElement>(lhs: Tensor, rhs: T, op: ComparisonOp) -> Tensor {
     let backend = Backend.current
     let newData = createDataTask(lhs) { lhs in
       try await backend.compare(
@@ -853,7 +955,8 @@ public final class Tensor {
     return Tensor(dataTask: newData, shape: lhs.shape, dtype: .bool)
   }
 
-  internal static func compare<T: TensorElement>(lhs: T, rhs: Tensor, op: ComparisonOp) -> Tensor {
+  @recordCaller
+  internal static func _compare<T: TensorElement>(lhs: T, rhs: Tensor, op: ComparisonOp) -> Tensor {
     let backend = Backend.current
     let newData = createDataTask(rhs) { rhs in
       try await backend.compare(
@@ -948,7 +1051,8 @@ public final class Tensor {
     compare(lhs: lhs, rhs: rhs, op: .greaterEqual)
   }
 
-  public func backward(_ grad: Tensor? = nil) {
+  @recordCaller
+  private func _backward(_ grad: Tensor? = nil) {
     alwaysAssert(needsGrad, "backward called on Tensor that does not need grad")
     let grad =
       if let grad = grad {
@@ -961,7 +1065,8 @@ public final class Tensor {
     Tensor.withGrad(enabled: true) { self.saveForBackward() }.backward(Backend.current) { grad }
   }
 
-  public func saveForBackward() -> BackwardHandle {
+  @recordCaller
+  private func _saveForBackward() -> BackwardHandle {
     alwaysAssert(Tensor.isGradEnabled, "backward handle cannot be saved while grads are disabled")
     if !self.needsGrad {
       return BackwardHandle()
@@ -972,6 +1077,8 @@ public final class Tensor {
 
     numBackwardHandles += 1
     let backend = Backend.current
+
+    let creationTrace = Backtrace.trace()
 
     return BackwardHandle(
       addGrad: { [self] grad in
@@ -998,12 +1105,16 @@ public final class Tensor {
       cancel: { [self] in
         numBackwardHandles -= 1
         if self.curGrad != nil && numBackwardHandles == 0 {
-          alwaysAssert(false, "backward pass was incompleted due to an unused reference")
+          alwaysAssert(
+            false,
+            "backward pass was incompleted due to an unused reference.\n\nTraceback of reference creation:\n\n\(Backtrace.format(creationTrace))"
+          )
         }
       })
   }
 
-  internal func positiveAxis(_ axis: Int?) -> Int? {
+  @recordCaller
+  internal func _positiveAxis(_ axis: Int?) -> Int? {
     if let axis = axis {
       // Type annotation needed to clarify overload of method.
       let result: Int = positiveAxis(axis)
@@ -1012,7 +1123,9 @@ public final class Tensor {
       return nil
     }
   }
-  internal func positiveAxis(_ axis: Int) -> Int {
+
+  @recordCaller
+  internal func _positiveAxis(_ axis: Int) -> Int {
     let result = axis < 0 ? axis + shape.count : axis
     alwaysAssert(result >= 0, "axis \(axis) out of bounds for shape \(shape)")
     return result

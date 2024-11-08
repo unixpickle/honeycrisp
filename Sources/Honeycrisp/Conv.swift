@@ -1,3 +1,5 @@
+import HCBacktrace
+
 public enum ConvConfigError: Error {
   case invalidGroups(String)
 }
@@ -451,37 +453,46 @@ public typealias Conv1DConfig = ConvConfig<SpatialDim1D>
 public typealias Conv2DConfig = ConvConfig<SpatialDim2D>
 
 extension Tensor {
-  public static func conv1D(_ conv: Conv1DConfig, image: Tensor, kernel: Tensor) -> Tensor {
+  @recordCaller
+  private static func _conv1D(_ conv: Conv1DConfig, image: Tensor, kernel: Tensor) -> Tensor {
     convND(conv, image: image, kernel: kernel)
   }
 
-  public static func conv1DTranspose(_ conv: Conv1DConfig, image: Tensor, kernel: Tensor) -> Tensor
+  @recordCaller
+  private static func _conv1DTranspose(_ conv: Conv1DConfig, image: Tensor, kernel: Tensor)
+    -> Tensor
   {
     convNDTranspose(conv, image: image, kernel: kernel)
   }
 
-  public static func conv1DKernelGrad(_ conv: Conv1DConfig, image: Tensor, outGrad: Tensor)
+  @recordCaller
+  private static func _conv1DKernelGrad(_ conv: Conv1DConfig, image: Tensor, outGrad: Tensor)
     -> Tensor
   {
     convNDKernelGrad(conv, image: image, outGrad: outGrad)
   }
 
-  public static func conv2D(_ conv: Conv2DConfig, image: Tensor, kernel: Tensor) -> Tensor {
+  @recordCaller
+  private static func _conv2D(_ conv: Conv2DConfig, image: Tensor, kernel: Tensor) -> Tensor {
     convND(conv, image: image, kernel: kernel)
   }
 
-  public static func conv2DTranspose(_ conv: Conv2DConfig, image: Tensor, kernel: Tensor) -> Tensor
+  @recordCaller
+  private static func _conv2DTranspose(_ conv: Conv2DConfig, image: Tensor, kernel: Tensor)
+    -> Tensor
   {
     convNDTranspose(conv, image: image, kernel: kernel)
   }
 
-  public static func conv2DKernelGrad(_ conv: Conv2DConfig, image: Tensor, outGrad: Tensor)
+  @recordCaller
+  private static func _conv2DKernelGrad(_ conv: Conv2DConfig, image: Tensor, outGrad: Tensor)
     -> Tensor
   {
     convNDKernelGrad(conv, image: image, outGrad: outGrad)
   }
 
-  internal static func convND<Dim: SpatialDim>(
+  @recordCaller
+  internal static func _convND<Dim: SpatialDim>(
     _ conv: ConvConfig<Dim>, image: Tensor, kernel: Tensor
   ) -> Tensor {
     alwaysAssert(
@@ -534,7 +545,8 @@ extension Tensor {
     }
   }
 
-  internal static func convNDTranspose<Dim: SpatialDim>(
+  @recordCaller
+  internal static func _convNDTranspose<Dim: SpatialDim>(
     _ conv: ConvConfig<Dim>, image: Tensor, kernel: Tensor
   ) -> Tensor {
     alwaysAssert(
@@ -585,7 +597,8 @@ extension Tensor {
     }
   }
 
-  internal static func convNDKernelGrad<Dim: SpatialDim>(
+  @recordCaller
+  internal static func _convNDKernelGrad<Dim: SpatialDim>(
     _ conv: ConvConfig<Dim>, image: Tensor, outGrad: Tensor
   )
     -> Tensor
