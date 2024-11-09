@@ -70,9 +70,9 @@ public struct RecordCaller: PeerMacro {
     }
 
     // Add parameters that capture caller position.
-    let argFunc = context.makeUniqueName("function")
-    let argFile = context.makeUniqueName("file")
-    let argLine = context.makeUniqueName("line")
+    let argFunc = TokenSyntax.identifier("function")
+    let argFile = TokenSyntax.identifier("file")
+    let argLine = TokenSyntax.identifier("line")
     newParams.append(
       FunctionParameterSyntax(
         firstName: argFunc,
@@ -113,18 +113,20 @@ public struct RecordCaller: PeerMacro {
     // Make method public if it is marked as private.
     var newMods = [DeclModifierSyntax]()
     for mod in newNode.modifiers {
-      let name = "\(mod.name)"
-      if name.contains("private") {
+      if mod.name.tokenKind == .keyword(SwiftSyntax.Keyword.private) {
         newMods.append(
           DeclModifierSyntax(
-            name: TokenSyntax(stringLiteral: "public"), trailingTrivia: mod.trailingTrivia))
+            name: TokenSyntax(
+              .keyword(SwiftSyntax.Keyword.public), leadingTrivia: mod.name.leadingTrivia,
+              trailingTrivia: mod.name.trailingTrivia, presence: .present),
+            trailingTrivia: mod.trailingTrivia))
       } else {
         newMods.append(mod)
       }
     }
     newNode.modifiers = DeclModifierListSyntax(newMods)
 
-    // Call the function inside `Backtrace.record`.
+    // Call the original function inside `Backtrace.record`.
     let callExpr: ExprSyntax = maybeTryAndAwait(
       FunctionCallExprSyntax(
         calledExpression: ExprSyntax("Backtrace.record"),

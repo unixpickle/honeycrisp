@@ -65,6 +65,7 @@ extension Tensor {
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { [self] grad in
+        let shape = shape
         handle.backward(backend) {
           grad.scatter(
             axis: axis, count: shape[axis], indices: indices, indicesAreUnique: indicesAreUnique)

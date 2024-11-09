@@ -55,6 +55,8 @@ public final class Tensor {
     private var cancel: (() -> Void)?
     private var canSkip: Bool
 
+    private static let BackwardStackKey = "HONEYCRISP_BACKWARD_STACK"
+
     init() {
       self.addGrad = { _ in () }
       self.cancel = { () in () }
@@ -68,15 +70,38 @@ public final class Tensor {
     }
 
     @recordCaller
-    private func _backward(_ backend: Backend, _ gradFn: () -> Tensor) {
+    private func _backward(_ backend: Backend, _ gradFn: @escaping () -> Tensor) {
+      typealias StackType = (Backend, (() -> Tensor), ((Tensor) -> Void))
       alwaysAssert(addGrad != nil, "cannot re-use backward handle")
       let ag = addGrad!
       addGrad = nil
       cancel = nil
-      if !canSkip {
-        let grad = backend.use { gradFn() }
-        alwaysAssert(!grad.needsGrad, "second-order gradients are not supported")
-        ag(grad)
+      if canSkip {
+        return
+      }
+
+      // Why do we need this manual stack, when we could just use the "real"
+      // callstack to implement these recursive depth-first backwards?
+      //
+      // The answer is that our computation graph might be somewhat deep,
+      // and we can actually hit stack overflows, even for somewhat small
+      // models like a 12 layer Transformer.
+      if let stack = Thread.current.threadDictionary[BackwardHandle.BackwardStackKey] {
+        var newStack = (stack as! [StackType])
+        newStack.append((backend, gradFn, ag))
+        Thread.current.threadDictionary[BackwardHandle.BackwardStackKey] = newStack
+      } else {
+        var fullStack = [(backend, gradFn, ag)]
+        while let (backend, gradFn, ag) = fullStack.popLast() {
+          Thread.current.threadDictionary[BackwardHandle.BackwardStackKey] = [StackType]()
+          let grad = backend.use { gradFn() }
+          ag(grad)
+          let newEntries =
+            Thread.current.threadDictionary[BackwardHandle.BackwardStackKey]
+            as! [StackType]
+          Thread.current.threadDictionary.removeObject(forKey: BackwardHandle.BackwardStackKey)
+          fullStack.append(contentsOf: newEntries.reversed())
+        }
       }
     }
 
@@ -489,6 +514,7 @@ public final class Tensor {
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: dataTask, shape: useShape, dtype: dtype) { [self] grad in
+        let shape = shape
         handle.backward(Backend.current) { grad.reshape(shape) }
       }
     }
