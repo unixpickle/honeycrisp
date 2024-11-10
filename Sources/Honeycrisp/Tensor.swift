@@ -1,8 +1,26 @@
 import HCBacktrace
 import Metal
 
+/// An asynchronous, multi-dimensional array of integral, floating point, or boolean values.
+///
+/// The type of data stored in a Tensor can be checked via the ``Tensor/dtype`` attribute.
+///
+/// Each Tensor has a corresponding shape, accessed via ``Tensor/shape``, which indicates the
+/// dimensions of each axis of the Tensor. The shape may be empty, in which case the Tensor is
+/// a single scalar value.
+///
+/// Tensors may be differentiable, which can be checked via ``Tensor/needsGrad``. When a
+/// Tensor is differentiable, downstream operations will keep track of this Tensor and support
+/// backpropagation through it for gradient calculations.
+///
+/// The data of a ``Tensor`` is computed asynchronously, and can be accessed via the
+/// asynchronous ``Tensor/data`` attribute. The data itself might not exist on the CPU, and
+/// may instead be stored in a place specific to the ``Backend`` which produced it. However,
+/// all implementations of ``Tensor/Data`` must provide the ability to access the data on the
+/// CPU via the ``Tensor/Data/cpuBuffer`` attribute.
 public final class Tensor {
 
+  /// A type of numeric or boolean data stored in a ``Tensor`` object.
   public enum DType: Codable {
     case int64
     case bool
@@ -46,10 +64,20 @@ public final class Tensor {
     }
   }
 
+  /// An abstract protocol representing a glob of tensor data that may be stored anywhere and/or
+  /// computed lazily.
   public protocol Data {
+    /// Get the data as a concrete, CPU-mapped buffer.
     var cpuBuffer: MTLBuffer { get async throws }
   }
 
+  /// A single-use reference to a ``Tensor`` that is stored in the forward pass and used in the
+  /// backward pass to propagate gradients to the Tensor.
+  ///
+  /// These objects will typically be created via ``Tensor/saveForBackward(function:file:line:)``.
+  ///
+  /// When a `BackwardHandle` is created but never used, its `deinit` implementation will inform
+  /// the underlying ``Tensor`` that one fewer operation is waiting for gradients.
   public final class BackwardHandle {
     private var addGrad: ((Tensor) -> Void)?
     private var cancel: (() -> Void)?
@@ -181,11 +209,30 @@ public final class Tensor {
     }
   }
 
+  /// The `Task` which is responsible for computing the data of the Tensor.
+  ///
+  /// Rather than accessing this directly, you may use the ``Tensor/data`` attribute.
   public let dataTask: Task<Data, Error>
+
+  /// The dimensions of each axis of the Tensor.
+  ///
+  /// For a normal array of values, this will look like `[N]` where `N` is the total count.
+  /// For a matrix, this could be `[rows, columns]`.
+  ///
+  /// The shape may be empty, in which case the Tensor is a single scalar value.
   public let shape: [Int]
+
+  /// The type of data stored as elements in this ``Tensor``.
   public let dtype: DType
+
+  /// Whether or not this ``Tensor`` can handle backpropagation.
+  ///
+  /// When this is `true`, downstream operations should store a handle to this tensor by calling
+  /// ``saveForBackward(function:file:line:)`` and then calling the resulting handle's
+  /// ``BackwardHandle/backward(_:_:function:file:line:)`` method in the backward pass.
   public let needsGrad: Bool
 
+  /// The asynchronously computed data representing the values of this ``Tensor``.
   public var data: Data {
     get async throws {
       try await dataTask.value

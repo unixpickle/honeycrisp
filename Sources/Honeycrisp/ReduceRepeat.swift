@@ -154,10 +154,6 @@ extension Tensor {
   }
 
   @recordCaller
-  // Repeat the tensor along a given axis for zero or more times.
-  //
-  // The axis may be equal to shape.count, in which case a new trailing
-  // dimension is added with the value `count`.
   private func _repeating(axis: Int, count: Int) -> Tensor {
     let axis = positiveAxis(axis)
     alwaysAssert(axis >= 0 && axis <= shape.count, "axis \(axis) out of bounds for shape \(shape)")

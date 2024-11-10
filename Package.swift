@@ -27,6 +27,7 @@ let package = Package(
     .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.9.0"),
     .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0"..<"4.0.0"),
     .package(url: "https://github.com/unixpickle/coreml-builder.git", "0.1.0"..<"0.2.0"),
+    .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.1.0"),
   ],
   targets: [
     .macro(
