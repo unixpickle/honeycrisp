@@ -79,7 +79,9 @@ extension Tensor {
     file: StaticString = #file,
     line: UInt = #line
   ) {
-    self.init(rand: other.shape, dist: .normal, dtype: other.dtype, generator: generator, function: function, file: file, line: line)
+    self.init(
+      rand: other.shape, dist: .normal, dtype: other.dtype, generator: generator,
+      function: function, file: file, line: line)
   }
 
   public convenience init(
@@ -89,10 +91,12 @@ extension Tensor {
     file: StaticString = #file,
     line: UInt = #line
   ) {
-    self.init(rand: other.shape, dist: .uniform, dtype: other.dtype, generator: generator, function: function, file: file, line: line)
+    self.init(
+      rand: other.shape, dist: .uniform, dtype: other.dtype, generator: generator,
+      function: function, file: file, line: line)
   }
 
-  private convenience init(
+  public convenience init(
     randInt shape: [Int],
     in range: Range<Int64>,
     generator: RandomGenerator? = nil,
@@ -115,6 +119,7 @@ extension Tensor {
         return try await generator.sample(count: shape.product(), in: range)
       }
     }
-    self.init(dataTask: dataTask, shape: shape, dtype: .int64, function: function, file: file, line: line)
+    self.init(
+      dataTask: dataTask, shape: shape, dtype: .int64, function: function, file: file, line: line)
   }
 }

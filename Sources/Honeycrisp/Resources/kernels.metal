@@ -628,18 +628,8 @@ constant uint PHILOX_KEY_B = 0xBB67AE85;
 constant constexpr float M_PI = 3.14159265358979323846264338327950288;
 
 inline uint umulhi(uint x, uint y) {
-    uint x0 = x & 0xffff;
-    uint x1 = x >> 16;
-    uint y0 = y & 0xffff;
-    uint y1 = y >> 16;
-
-    // Three terms that sum to the total product
-    uint p0 = x0 * y0;
-    uint p1 = x1 * y0 + x0 * y1; // downshifted by 16
-    uint p2 = x1 * y1; // downshifted by 32
-    p1 += p0 >> 16;
-    p2 += p1 >> 16;
-    return p2;
+    ulong prod = ((ulong)x) * ((ulong)y);
+    return (uint)(prod >> 32);
 }
 
 inline void philox(uint seed0, uint seed1, uint offset, thread uint* c) {
@@ -659,6 +649,61 @@ inline void philox(uint seed0, uint seed1, uint offset, thread uint* c) {
         c[3] = PHILOX_ROUND_A * prev_c0;
         k0 = (k0 + PHILOX_KEY_A);
         k1 = (k1 + PHILOX_KEY_B);
+    }
+}
+
+constant uint64_t MAX_ULONG = 0xFFFFFFFFFFFFFFFF;
+
+ulong next_pow_of_two(ulong x) {
+    if (x == 0) {
+        return 1;
+    }
+
+    if (x >= (MAX_ULONG >> 1)) {
+        return MAX_ULONG;
+    }
+
+    x--;
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    x |= x >> 32;
+    return x + 1;
+}
+
+kernel void rand_long(
+    device ulong* output [[buffer(0)]],
+    constant uint &seed0 [[buffer(1)]],
+    constant uint &seed1 [[buffer(2)]],
+    constant uint &offset [[buffer(3)]],
+    constant uint &size [[buffer(4)]],
+    constant ulong &minVal [[buffer(5)]],
+    constant ulong &count [[buffer(6)]],
+    uint id [[thread_position_in_grid]]
+) {
+    ulong sample = 0;
+    uint found = 0;
+    uint c[4];
+
+    ulong bound = next_pow_of_two(count);
+
+    for (int i = 0; i < 32; i++) {
+        philox(seed0, seed1, offset + i + id*32, c);
+        ulong v1 = (((ulong)c[0]) | (((ulong)c[1]) << 32)) % bound;
+        ulong v2 = (((ulong)c[2]) | (((ulong)c[3]) << 32)) % bound;
+        if (v1 < count && !found) {
+            found = 1;
+            sample = v1;
+        }
+        if (v2 < count && !found) {
+            found = 1;
+            sample = v2;
+        }
+    }
+    if (id < size) {
+        output[id] = sample + minVal;
     }
 }
 

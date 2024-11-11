@@ -150,6 +150,33 @@ open class MPSBackend: CPUBackend {
         return GPUData(backend: mpsBackend, buffer: output, completion: completion)
       }
     }
+
+    override public func sample(count: Int, in range: Range<Int64>) async throws
+      -> Tensor.Data
+    {
+      alwaysAssert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
+
+      let output = try await mpsBackend.allocate(length: count * Tensor.DType.int64.byteSize)
+
+      return try await mpsBackend.serialize { [self] in
+        let completion = try mpsBackend.completionBufferAndEncoder(label: "sampleInt") { buf, enc in
+          let state = try mpsBackend.getFunction(name: "rand_long")
+          try mpsBackend.setArguments(
+            enc,
+            .buffer(output),
+            .uint(UInt32(seed)),
+            .uint(UInt32(seed >> 32)),
+            .uint(UInt32(offset)),
+            .uint(UInt32(count)),
+            .int64(range.lowerBound),
+            .int64(range.upperBound &- range.lowerBound)
+          )
+          mpsBackend.dispatch1D(enc, state: state, threadCount: count)
+          offset += UInt64(count) * 32
+        }
+        return GPUData(backend: mpsBackend, buffer: output, completion: completion)
+      }
+    }
   }
 
   private static let CastTypes: [Tensor.DType: String] = [
@@ -213,6 +240,7 @@ open class MPSBackend: CPUBackend {
         names.append("\(op)_\(type)")
       }
     }
+    names.append("rand_long")
     for type in ["char", "short", "int", "long"] {
       names.append("repeat_\(type)")
       names.append("strided_copy_\(type)")
@@ -1576,6 +1604,7 @@ open class MPSBackend: CPUBackend {
     case uints([UInt32])
     case float(Float)
     case int64(Int64)
+    case uint64(UInt64)
     case buffer(any MTLBuffer)
     case data(Data)
 
@@ -1589,6 +1618,8 @@ open class MPSBackend: CPUBackend {
         try b.makeFloatBuffer(x)
       case .int64(let x):
         try b.makeInt64Buffer(x)
+      case .uint64(let x):
+        try b.makeUInt64Buffer(x)
       case .buffer(let x):
         x
       case .data(let x):
@@ -1654,6 +1685,13 @@ open class MPSBackend: CPUBackend {
   }
 
   internal func makeInt64Buffer(_ x: Int64) throws -> MTLBuffer {
+    var x = x
+    let result = try allocateSync(length: 8)
+    result.contents().copyMemory(from: &x, byteCount: 8)
+    return result
+  }
+
+  internal func makeUInt64Buffer(_ x: UInt64) throws -> MTLBuffer {
     var x = x
     let result = try allocateSync(length: 8)
     result.contents().copyMemory(from: &x, byteCount: 8)

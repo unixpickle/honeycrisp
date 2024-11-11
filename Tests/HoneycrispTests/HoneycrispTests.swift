@@ -1296,6 +1296,27 @@ final class HoneycrispTests: XCTestCase {
         try await assertDataEqual(a, b)
       } catch BackendError.notImplemented(_) {
       }
+
+      // Check some edge cases of integer generation.
+      var bits = Tensor(randInt: [20000], in: 0..<(10_000_000_403 * 2)) / 10_000_000_403
+      var mean = try await bits.cast(.float32).mean().item()
+      XCTAssert(abs(mean - 0.5) < 1e-2, "highest bit was incorrect, mean is \(mean)")
+
+      bits = Tensor(randInt: [100000], in: 0..<0x780f_ffff_ffff_ffff) / 0x7000_0000_0000_0000
+      mean = try await bits.cast(.float32).mean().item()
+      XCTAssert(abs(mean - 0.06721) < 1e-2, "high bits incorrect, got mean \(mean)")
+
+      bits =
+        Tensor(randInt: [100000], in: 0x400f_ffff_ffff_ffff..<0x780f_ffff_ffff_ffff)
+        / 0x6000_0000_0000_0000
+      mean = try await bits.cast(.float32).mean().item()
+      XCTAssert(abs(mean - 0.42948) < 1e-2, "high bits incorrect, got mean \(mean)")
+
+      bits =
+        Tensor(randInt: [100000], in: (-0x400f_ffff_ffff_ffff)..<0x780f_ffff_ffff_ffff)
+        / 0x600_0000_0000_000
+      mean = try await bits.cast(.float32).mean().item()
+      XCTAssert(abs(mean - 74.35) < 0.5, "high bits incorrect, got mean \(mean)")
     }
   }
 
