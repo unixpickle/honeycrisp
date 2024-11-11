@@ -29,7 +29,7 @@ class CommandTransformer: Command {
     "a cute corgi vector graphic. corgi dog graphic",
   ]
 
-  let lr: Float = 0.0001
+  let lr: Float = 0.00001
   let bs = 8
   let captionBytes: Int = 128
   let saveInterval: Int = 1000

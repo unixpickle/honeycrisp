@@ -225,6 +225,39 @@ DEFINE_CLAMP(float, float)
 DEFINE_CLAMP(long, long)
 DEFINE_CLAMP(half, float)
 
+#define DEFINE_WHEN(type) \
+    struct when_args_##type { \
+        uint maskCount; \
+        uint maskDiv; \
+        uint trueCount; \
+        uint trueDiv; \
+        uint falseCount; \
+        uint falseDiv; \
+        uint N; \
+    }; \
+    kernel void when_##type( \
+        device const char* mask [[buffer(0)]], \
+        device const type* trueIn [[buffer(1)]], \
+        device const type* falseIn [[buffer(2)]], \
+        device type* output [[buffer(3)]], \
+        device when_args_##type& args [[buffer(4)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < args.N) { \
+            char input = mask[id]; \
+            if (mask[(id / args.maskDiv) % args.maskCount]) { \
+                output[id] = trueIn[(id / args.trueDiv) % args.trueCount]; \
+            } else { \
+                output[id] = falseIn[(id / args.falseDiv) % args.falseCount]; \
+            } \
+        } \
+    }
+
+DEFINE_WHEN(char)
+DEFINE_WHEN(short)
+DEFINE_WHEN(int)
+DEFINE_WHEN(long)
+
 kernel void vector_pow_half(
     device const half* input [[buffer(0)]],
     device half* output [[buffer(1)]],

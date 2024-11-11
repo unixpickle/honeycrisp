@@ -15,22 +15,23 @@ public enum BackendError: Error {
 open class Backend {
 
   public enum TensorOrScalar<T: TensorElement> {
-    case tensor(Tensor.Data)
-    case scalar(T)
+    case tensor(BroadcastData)
+    case scalar(T, Int)
 
-    public var isScalar: Bool {
-      if case .scalar(_) = self {
-        true
-      } else {
-        false
+    internal var strides: BroadcastStrides {
+      switch self {
+      case .tensor(let t):
+        t.strides
+      case .scalar(_, let s):
+        BroadcastStrides(dataCount: 1, outerRepeats: s, innerRepeats: 1)
       }
     }
 
     internal func makeOrGetBuffer(_ b: Backend, _ dtype: Tensor.DType) async throws -> MTLBuffer {
       switch self {
       case .tensor(let t):
-        try await t.cpuBuffer
-      case .scalar(let s):
+        try await t.data.cpuBuffer
+      case .scalar(let s, _):
         try await {
           let buf = try await b.allocate(length: dtype.byteSize)
           try arrayToPointer([s], output: buf.contents(), dtype: dtype)
@@ -328,7 +329,7 @@ open class Backend {
   }
 
   public func when<T>(
-    _ mask: Tensor.Data, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
+    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
     dtype: Tensor.DType
   )
     async throws
@@ -1512,33 +1513,34 @@ open class CPUBackend: Backend {
   }
 
   override public func when<T>(
-    _ mask: Tensor.Data, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
+    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    let maskBuf = try await mask.cpuBuffer
+    let maskBuf = try await mask.data.cpuBuffer
+    let maskStrides = mask.strides
     let aBuf = try await a.makeOrGetBuffer(self, dtype)
     let bBuf = try await b.makeOrGetBuffer(self, dtype)
     let output = try await allocate(length: count * dtype.byteSize)
 
     let aData = aBuf.contents()
     let bData = bBuf.contents()
-    let aIsScalar = a.isScalar
-    let bIsScalar = b.isScalar
+    let aStrides = a.strides
+    let bStrides = b.strides
 
     try await serialize {
       let contents = output.contents()
       let bools = maskBuf.contents().bindMemory(to: UInt8.self, capacity: count)
       for i in 0..<count {
-        let off = i * dtype.byteSize
-        if bools[i] != 0 {
-          contents.advanced(by: off).copyMemory(
-            from: aData.advanced(by: aIsScalar ? 0 : off), byteCount: dtype.byteSize)
+        let outOff = i * dtype.byteSize
+        if bools[maskStrides(i)] != 0 {
+          contents.advanced(by: outOff).copyMemory(
+            from: aData.advanced(by: aStrides(i) * dtype.byteSize), byteCount: dtype.byteSize)
         } else {
-          contents.advanced(by: off).copyMemory(
-            from: bData.advanced(by: bIsScalar ? 0 : off), byteCount: dtype.byteSize)
+          contents.advanced(by: outOff).copyMemory(
+            from: bData.advanced(by: bStrides(i) * dtype.byteSize), byteCount: dtype.byteSize)
         }
       }
     }

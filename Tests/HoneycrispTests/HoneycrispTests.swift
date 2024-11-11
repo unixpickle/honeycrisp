@@ -1138,16 +1138,101 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testWhen() async throws {
-    let x = Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [4])
-    let y = Tensor(data: [-1.0, -2.0, -3.0, -4.0], shape: [4])
-    let mask = Tensor(data: [false, true, true, false], shape: [4])
-    var xGrad: Tensor?
-    var yGrad: Tensor?
-    let out = mask.when(isTrue: x.onGrad { g in xGrad = g }, isFalse: y.onGrad { g in yGrad = g })
-    try await assertDataEqual(out, [-1.0, 2.0, 3.0, -4.0])
-    out.backward(Tensor(data: [5.0, 6.0, 7.0, 8.0], shape: [4]))
-    try await assertDataEqual(xGrad!, [0, 6.0, 7.0, 0.0])
-    try await assertDataEqual(yGrad!, [5.0, 0.0, 0.0, 8.0])
+    try await runInBackends {
+      let x = Tensor(data: [1.0, 2.0, 3.0, 4.0], shape: [4])
+      let y = Tensor(data: [-1.0, -2.0, -3.0, -4.0], shape: [4])
+      let mask = Tensor(data: [false, true, true, false], shape: [4])
+      var xGrad: Tensor?
+      var yGrad: Tensor?
+      let out = mask.when(isTrue: x.onGrad { g in xGrad = g }, isFalse: y.onGrad { g in yGrad = g })
+      try await assertDataEqual(out, [-1.0, 2.0, 3.0, -4.0])
+      out.backward(Tensor(data: [5.0, 6.0, 7.0, 8.0], shape: [4]))
+      try await assertDataEqual(xGrad!, [0, 6.0, 7.0, 0.0])
+      try await assertDataEqual(yGrad!, [5.0, 0.0, 0.0, 8.0])
+
+      // Make sure pure scalar inputs work.
+      try await assertDataEqual(
+        mask.when(isTrue: 1.0, isFalse: -1.0, dtype: .float32), [-1, 1, 1, -1])
+
+      for maskShape in [[1, 6, 1], [3, 6, 2], [3, 1, 2]] {
+        let mask = Tensor(rand: maskShape) < 0.5
+        for trueShape in [[1, 6, 1], [3, 6, 2], [3, 1, 2]] {
+          let isTrue = Tensor(rand: trueShape)
+          for falseShape in [[1, 6, 1], [3, 6, 2], [3, 1, 2]] {
+            let isFalse = Tensor(rand: falseShape)
+
+            // Test with both arguments as tensors.
+            let _ = try await {
+              var isTrueGrad: Tensor?
+              var isFalseGrad: Tensor?
+              let actual = mask.when(
+                isTrue: isTrue.onGrad { g in isTrueGrad = g },
+                isFalse: isFalse.onGrad { g in isFalseGrad = g })
+
+              var isTrueGradExp: Tensor?
+              var isFalseGradExp: Tensor?
+              let bcasted = Tensor.broadcast([
+                mask, isTrue.onGrad { isTrueGradExp = $0 }, isFalse.onGrad { isFalseGradExp = $0 },
+              ])
+              let expected = bcasted[0].when(isTrue: bcasted[1], isFalse: bcasted[2])
+
+              try await assertDataEqual(actual, expected)
+
+              let outGrad = Tensor(randLike: expected)
+              expected.backward(outGrad)
+              actual.backward(outGrad)
+
+              try await assertClose(isTrueGrad!, isTrueGradExp!)
+              try await assertClose(isFalseGrad!, isFalseGradExp!)
+            }()
+
+            // Test with isFalse as a scalar
+            let _ = try await {
+              var isTrueGrad: Tensor?
+              let actual = mask.when(
+                isTrue: isTrue.onGrad { g in isTrueGrad = g },
+                isFalse: 3.1415)
+
+              var isTrueGradExp: Tensor?
+              let bcasted = Tensor.broadcast([
+                mask, isTrue.onGrad { isTrueGradExp = $0 },
+              ])
+              let expected = bcasted[0].when(isTrue: bcasted[1], isFalse: 3.1415)
+
+              try await assertDataEqual(actual, expected)
+
+              let outGrad = Tensor(randLike: expected)
+              expected.backward(outGrad)
+              actual.backward(outGrad)
+
+              try await assertClose(isTrueGrad!, isTrueGradExp!)
+            }()
+
+            // Test with isTrue as a scalar
+            let _ = try await {
+              var isFalseGrad: Tensor?
+              let actual = mask.when(
+                isTrue: 3.1415,
+                isFalse: isFalse.onGrad { g in isFalseGrad = g })
+
+              var isFalseGradExp: Tensor?
+              let bcasted = Tensor.broadcast([
+                mask, isFalse.onGrad { isFalseGradExp = $0 },
+              ])
+              let expected = bcasted[0].when(isTrue: 3.1415, isFalse: bcasted[1])
+
+              try await assertDataEqual(actual, expected)
+
+              let outGrad = Tensor(randLike: expected)
+              expected.backward(outGrad)
+              actual.backward(outGrad)
+
+              try await assertClose(isFalseGrad!, isFalseGradExp!)
+            }()
+          }
+        }
+      }
+    }
   }
 
   func testOneHot() async throws {
@@ -1313,7 +1398,7 @@ final class HoneycrispTests: XCTestCase {
       XCTAssert(abs(mean - 0.42948) < 1e-2, "high bits incorrect, got mean \(mean)")
 
       bits =
-        Tensor(randInt: [100000], in: (-0x400f_ffff_ffff_ffff)..<0x780f_ffff_ffff_ffff)
+        Tensor(randInt: [300000], in: (-0x400f_ffff_ffff_ffff)..<0x780f_ffff_ffff_ffff)
         / 0x600_0000_0000_000
       mean = try await bits.cast(.float32).mean().item()
       XCTAssert(abs(mean - 74.35) < 0.5, "high bits incorrect, got mean \(mean)")

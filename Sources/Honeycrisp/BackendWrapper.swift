@@ -247,7 +247,7 @@ open class BackendWrapper: Backend {
   }
 
   override public func when<T>(
-    _ mask: Tensor.Data, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _ x: T.Type, count: Int,
+    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _ x: T.Type, count: Int,
     dtype: Tensor.DType
   )
     async throws

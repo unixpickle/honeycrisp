@@ -242,6 +242,7 @@ open class MPSBackend: CPUBackend {
     }
     names.append("rand_long")
     for type in ["char", "short", "int", "long"] {
+      names.append("when_\(type)")
       names.append("repeat_\(type)")
       names.append("strided_copy_\(type)")
       for mode in ["", "_bcast"] {
@@ -754,6 +755,66 @@ open class MPSBackend: CPUBackend {
             .uint(UInt32(max != nil ? 1 : 0)),
             .uint(UInt32(count)))
         }
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return GPUData(backend: self, buffer: output, completion: completion)
+    }
+  }
+
+  internal func tensorOrScalarBuffer<T>(_ obj: TensorOrScalar<T>, _ dtype: Tensor.DType)
+    async throws -> MTLBuffer
+  {
+    switch obj {
+    case .tensor(let t):
+      try await gpuBuffer(t.data)
+    case .scalar(let s, _):
+      try await {
+        let buf = try await allocate(length: dtype.byteSize)
+        try arrayToPointer([s], output: buf.contents(), dtype: dtype)
+        return buf
+      }()
+    }
+  }
+
+  override public func when<T>(
+    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    alwaysAssert(count < UInt32.max, "cannot apply when() to \(count) elements")
+
+    let maskBuf = try await gpuBuffer(mask.data)
+    let maskStrides = mask.strides
+    let aBuf = try await tensorOrScalarBuffer(a, dtype)
+    let bBuf = try await tensorOrScalarBuffer(b, dtype)
+    let aStrides = a.strides
+    let bStrides = b.strides
+
+    let output = try await allocate(length: count * dtype.byteSize)
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(label: "when") { buf, enc in
+        let typeName = dtype.metalSizeType
+        let functionName = "when_\(typeName)"
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc,
+          .buffer(maskBuf),
+          .buffer(aBuf),
+          .buffer(bBuf),
+          .buffer(output),
+          .opaque(
+            (
+              UInt32(maskStrides.dataCount),
+              UInt32(maskStrides.innerRepeats),
+              UInt32(aStrides.dataCount),
+              UInt32(aStrides.innerRepeats),
+              UInt32(bStrides.dataCount),
+              UInt32(bStrides.innerRepeats),
+              UInt32(count)
+            ))
+        )
         dispatch1D(enc, state: state, threadCount: count)
       }
       return GPUData(backend: self, buffer: output, completion: completion)
