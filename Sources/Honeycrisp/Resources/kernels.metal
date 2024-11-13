@@ -16,7 +16,18 @@ inline T pythonFmod(T lhs, T rhs) {
     }
 }
 
-#define BINARY_KERNELS(name, expr, type) \
+template <typename T>
+inline T pythonIntMod(T lhs, T rhs) {
+    if (rhs < 0) {
+      return -pythonIntMod(-lhs, -rhs);
+    } else if (lhs < 0) {
+      return (rhs - ((rhs - lhs) % rhs)) % rhs;
+    } else {
+      return lhs % rhs;
+    }
+}
+
+#define BINARY_KERNELS(name, expr, type, outType) \
     struct name##vv_args_##type { \
         uint aCount; \
         uint aDiv; \
@@ -27,7 +38,7 @@ inline T pythonFmod(T lhs, T rhs) {
     kernel void name##vv_##type( \
         device const type* a [[buffer(0)]], \
         device const type* b [[buffer(1)]], \
-        device type* c [[buffer(2)]], \
+        device outType* c [[buffer(2)]], \
         constant struct name##vv_args_##type &args [[buffer(3)]], \
         uint id [[thread_position_in_grid]] \
     ) { \
@@ -40,7 +51,7 @@ inline T pythonFmod(T lhs, T rhs) {
     kernel void name##vs_##type( \
         device const type* a [[buffer(0)]], \
         device const float& b [[buffer(1)]], \
-        device type* c [[buffer(2)]], \
+        device outType* c [[buffer(2)]], \
         constant uint &N [[buffer(3)]], \
         uint id [[thread_position_in_grid]] \
     ) { \
@@ -53,7 +64,7 @@ inline T pythonFmod(T lhs, T rhs) {
     kernel void name##sv_##type( \
         device const float& a [[buffer(0)]], \
         device const type* b [[buffer(1)]], \
-        device type* c [[buffer(2)]], \
+        device outType* c [[buffer(2)]], \
         constant uint &N [[buffer(3)]], \
         uint id [[thread_position_in_grid]] \
     ) { \
@@ -64,16 +75,23 @@ inline T pythonFmod(T lhs, T rhs) {
         } \
     }
 
-BINARY_KERNELS(add, x+y, float)
-BINARY_KERNELS(sub, x-y, float)
-BINARY_KERNELS(mul, x*y, float)
-BINARY_KERNELS(div, x/y, float)
-BINARY_KERNELS(mod, (pythonFmod(x,y)), float)
-BINARY_KERNELS(add, x+y, half)
-BINARY_KERNELS(sub, x-y, half)
-BINARY_KERNELS(mul, x*y, half)
-BINARY_KERNELS(div, x/y, half)
-BINARY_KERNELS(mod, (pythonFmod(x,y)), half)
+#define ALL_BINARY_KERNELS_FOR_IN_TYPE(type) \
+    BINARY_KERNELS(add, x+y, type, type) \
+    BINARY_KERNELS(sub, x-y, type, type) \
+    BINARY_KERNELS(mul, x*y, type, type) \
+    BINARY_KERNELS(div, x/y, type, type) \
+    BINARY_KERNELS(lt, x<y, type, char) \
+    BINARY_KERNELS(gt, x>y, type, char) \
+    BINARY_KERNELS(le, x<=y, type, char) \
+    BINARY_KERNELS(ge, x>=y, type, char) \
+    BINARY_KERNELS(eq, x==y, type, char)
+
+ALL_BINARY_KERNELS_FOR_IN_TYPE(half)
+ALL_BINARY_KERNELS_FOR_IN_TYPE(float)
+ALL_BINARY_KERNELS_FOR_IN_TYPE(long)
+BINARY_KERNELS(mod, (pythonFmod(x,y)), half, half)
+BINARY_KERNELS(mod, (pythonFmod(x,y)), float, float)
+BINARY_KERNELS(mod, (pythonIntMod(x,y)), long, long)
 
 #define DEFINE_FUSED_ADD_MUL(type) \
     kernel void add_mul_##type( \
@@ -244,7 +262,6 @@ DEFINE_CLAMP(half, float)
         uint id [[thread_position_in_grid]] \
     ) { \
         if (id < args.N) { \
-            char input = mask[id]; \
             if (mask[(id / args.maskDiv) % args.maskCount]) { \
                 output[id] = trueIn[(id / args.trueDiv) % args.trueCount]; \
             } else { \

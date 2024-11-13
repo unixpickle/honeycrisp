@@ -20,26 +20,3 @@ public enum NumericBinaryOp {
     }
   }
 }
-
-public enum ComparisonOp {
-  case equal
-  case less
-  case lessEqual
-  case greater
-  case greaterEqual
-
-  public func apply<T: TensorElement>(_ a: T, _ b: T) -> Bool {
-    switch self {
-    case .equal:
-      a == b
-    case .less:
-      a < b
-    case .lessEqual:
-      a <= b
-    case .greater:
-      a > b
-    case .greaterEqual:
-      a >= b
-    }
-  }
-}

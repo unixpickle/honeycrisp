@@ -150,7 +150,7 @@ open class Backend {
   }
 
   public func binaryOp(
-    a: BroadcastData, b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -222,7 +222,7 @@ open class Backend {
   }
 
   public func compare(
-    _ a: Tensor.Data, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -672,7 +672,7 @@ open class CPUBackend: Backend {
   }
 
   override public func binaryOp(
-    a: BroadcastData, b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   ) async throws
     -> Tensor.Data
   {
@@ -1014,22 +1014,24 @@ open class CPUBackend: Backend {
   }
 
   override public func compare(
-    _ a: Tensor.Data, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    let aBuf = try await a.cpuBuffer
-    let bBuf = try await b.cpuBuffer
+    let aBuf = try await a.data.cpuBuffer
+    let bBuf = try await b.data.cpuBuffer
+    let aStrides = a.strides
+    let bStrides = b.strides
 
     func apply<T1: NumericTensorElement>(_: T1.Type) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * Tensor.DType.bool.byteSize)
       try await serialize {
-        try readBuffer(T1.self, aBuf, count: count, dtype: dtype) { aData in
-          try readBuffer(T1.self, bBuf, count: count, dtype: dtype) { bData in
+        try readBuffer(T1.self, aBuf, count: aStrides.dataCount, dtype: dtype) { aData in
+          try readBuffer(T1.self, bBuf, count: bStrides.dataCount, dtype: dtype) { bData in
             try writeBuffer(Bool.self, buffer, count: count, dtype: .bool) { cData in
-              for (i, (x, y)) in zip(aData, bData).enumerated() {
-                cData[i] = op.apply(x, y)
+              for i in 0..<count {
+                cData[i] = op.apply(aData[aStrides(i)], bData[bStrides(i)])
               }
             }
           }

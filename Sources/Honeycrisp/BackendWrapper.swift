@@ -53,13 +53,13 @@ open class BackendWrapper: Backend {
   }
 
   override public func binaryOp(
-    a: BroadcastData, b: BroadcastData, op: NumericBinaryOp, count: Int,
+    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.binaryOp(a: a, b: b, op: op, count: count, dtype: dtype)
+    try await wrapped.binaryOp(a, b, op: op, count: count, dtype: dtype)
   }
 
   override public func binaryOp<T: NumericTensorElement>(
@@ -134,7 +134,7 @@ open class BackendWrapper: Backend {
   }
 
   override public func compare(
-    _ a: Tensor.Data, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data

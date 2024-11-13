@@ -251,8 +251,8 @@ open class MPSBackend: CPUBackend {
         }
       }
     }
-    for op in ["add", "sub", "mul", "div", "mod"] {
-      for type in ["half", "float"] {
+    for op in ["add", "sub", "mul", "div", "mod", "lt", "gt", "le", "ge", "eq"] {
+      for type in ["half", "float", "long"] {
         for args in ["vv", "sv", "vs"] {
           names.append("\(op)\(args)_\(type)")
         }
@@ -374,32 +374,48 @@ open class MPSBackend: CPUBackend {
     }
   }
 
+  internal static func binaryOpType(_ dtype: Tensor.DType) -> String? {
+    switch dtype {
+    case .float16:
+      "half"
+    case .float32:
+      "float"
+    case .int64:
+      "long"
+    default:
+      nil
+    }
+  }
+
+  internal static func binaryOpName(_ op: NumericBinaryOp) -> String {
+    switch op {
+    case .add:
+      "add"
+    case .mul:
+      "mul"
+    case .sub:
+      "sub"
+    case .div:
+      "div"
+    case .mod:
+      "mod"
+    }
+  }
+
   override public func binaryOp(
-    a: BroadcastData, b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    if dtype != .float16 && dtype != .float32 {
-      return try await super.binaryOp(a: a, b: b, op: op, count: count, dtype: dtype)
+    guard let typeName = Self.binaryOpType(dtype) else {
+      return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
     }
 
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
-    let opName =
-      switch op {
-      case .add:
-        "add"
-      case .mul:
-        "mul"
-      case .sub:
-        "sub"
-      case .div:
-        "div"
-      case .mod:
-        "mod"
-      }
-    let functionName = "\(opName)vv_\(MPSBackend.CastTypes[dtype]!)"
+    let opName = Self.binaryOpName(op)
+    let functionName = "\(opName)vv_\(typeName)"
 
     let aBuf = try await gpuBuffer(a.data)
     let bBuf = try await gpuBuffer(b.data)
@@ -430,26 +446,14 @@ open class MPSBackend: CPUBackend {
     async throws
     -> Tensor.Data
   {
-    if dtype != .float16 && dtype != .float32 {
+    guard let typeName = Self.binaryOpType(dtype) else {
       return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
     }
 
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
-    let opName =
-      switch op {
-      case .add:
-        "add"
-      case .mul:
-        "mul"
-      case .sub:
-        "sub"
-      case .div:
-        "div"
-      case .mod:
-        "mod"
-      }
-    let functionName = "\(opName)vs_\(MPSBackend.CastTypes[dtype]!)"
+    let opName = Self.binaryOpName(op)
+    let functionName = "\(opName)vs_\(typeName)"
 
     let aBuf = try await gpuBuffer(a)
     let output = try await allocate(length: count * dtype.byteSize)
@@ -471,32 +475,131 @@ open class MPSBackend: CPUBackend {
     async throws
     -> Tensor.Data
   {
-    if dtype != .float16 && dtype != .float32 {
+    guard let typeName = Self.binaryOpType(dtype) else {
       return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
     }
 
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
-    let opName =
-      switch op {
-      case .add:
-        "add"
-      case .mul:
-        "mul"
-      case .sub:
-        "sub"
-      case .div:
-        "div"
-      case .mod:
-        "mod"
-      }
-    let functionName = "\(opName)sv_\(MPSBackend.CastTypes[dtype]!)"
+    let opName = Self.binaryOpName(op)
+    let functionName = "\(opName)sv_\(typeName)"
 
     let bBuf = try await gpuBuffer(b)
     let output = try await allocate(length: count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "binaryOp") { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc, .float(a.toFloat()), .buffer(bBuf), .buffer(output), .uint(UInt32(count)))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return GPUData(backend: self, buffer: output, completion: completion)
+    }
+  }
+
+  internal static func comparisonOpName(_ op: ComparisonOp) -> String {
+    switch op {
+    case .less:
+      "lt"
+    case .lessEqual:
+      "le"
+    case .greater:
+      "gt"
+    case .greaterEqual:
+      "ge"
+    case .equal:
+      "eq"
+    }
+  }
+
+  override public func compare(
+    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    guard let typeName = Self.binaryOpType(dtype) else {
+      return try await super.compare(a, b, op: op, count: count, dtype: dtype)
+    }
+
+    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+
+    let opName = Self.comparisonOpName(op)
+    let functionName = "\(opName)vv_\(typeName)"
+
+    let aBuf = try await gpuBuffer(a.data)
+    let bBuf = try await gpuBuffer(b.data)
+    let output = try await allocate(length: count * Tensor.DType.bool.byteSize)
+
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(label: "compare") { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc, .buffer(aBuf), .buffer(bBuf), .buffer(output),
+          .opaque(
+            (
+              UInt32(a.strides.dataCount),
+              UInt32(a.strides.innerRepeats),
+              UInt32(b.strides.dataCount),
+              UInt32(b.strides.innerRepeats),
+              UInt32(count)
+            )))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return GPUData(backend: self, buffer: output, completion: completion)
+    }
+  }
+
+  override public func compare<T: TensorElement>(
+    _ a: Tensor.Data, _ b: T, op: ComparisonOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    guard let typeName = Self.binaryOpType(dtype) else {
+      return try await super.compare(a, b, op: op, count: count, dtype: dtype)
+    }
+
+    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+
+    let opName = Self.comparisonOpName(op)
+    let functionName = "\(opName)vs_\(typeName)"
+
+    let aBuf = try await gpuBuffer(a)
+    let output = try await allocate(length: count * Tensor.DType.bool.byteSize)
+
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(label: "compare") { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc, .buffer(aBuf), .float(b.toFloat()), .buffer(output), .uint(UInt32(count)))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return GPUData(backend: self, buffer: output, completion: completion)
+    }
+  }
+
+  override public func compare<T: TensorElement>(
+    _ a: T, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    guard let typeName = Self.binaryOpType(dtype) else {
+      return try await super.compare(a, b, op: op, count: count, dtype: dtype)
+    }
+
+    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+
+    let opName = Self.comparisonOpName(op)
+    let functionName = "\(opName)sv_\(typeName)"
+
+    let bBuf = try await gpuBuffer(b)
+    let output = try await allocate(length: count * Tensor.DType.bool.byteSize)
+
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(label: "compare") { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .float(a.toFloat()), .buffer(bBuf), .buffer(output), .uint(UInt32(count)))

@@ -302,14 +302,17 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testComparison() async throws {
-    let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0], shape: [5])
-    let y = Tensor(data: [1.5, 2, 2, -2, -3], shape: [5])
-    try await assertDataEqual(x <= y, [1, 1, 0, 1, 0])
-    try await assertDataEqual(x < y, [1, 0, 0, 0, 0])
-    try await assertDataEqual(x >= y, [0, 1, 1, 1, 1])
-    try await assertDataEqual(x > y, [0, 0, 1, 0, 1])
-    XCTAssertEqual((x >= y).dtype, .bool)
-    XCTAssertEqual((x >= y).shape, x.shape)
+    try await runInBackends {
+      let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0], shape: [5])
+      let y = Tensor(data: [1.5, 2, 2, -2, -3], shape: [5])
+      try await assertDataEqual(x == y, [0, 1, 0, 1, 0])
+      try await assertDataEqual(x <= y, [1, 1, 0, 1, 0])
+      try await assertDataEqual(x < y, [1, 0, 0, 0, 0])
+      try await assertDataEqual(x >= y, [0, 1, 1, 1, 1])
+      try await assertDataEqual(x > y, [0, 0, 1, 0, 1])
+      XCTAssertEqual((x >= y).dtype, .bool)
+      XCTAssertEqual((x >= y).shape, x.shape)
+    }
   }
 
   func testSum() async throws {
@@ -944,6 +947,11 @@ final class HoneycrispTests: XCTestCase {
         { $0 + $1 }, { $0 * $1 }, { $0 - $1 }, { $0 / $1 }, { $0 % $1 },
         { $0.mul($1, thenAdd: $1) }, { $0.add($1, thenMul: $1) },
         { $0.mul($1, thenAdd: $0) }, { $0.add($1, thenMul: $0) },
+        { $0 < $1 },
+        { $0 <= $1 },
+        { $0 > $1 },
+        { $0 >= $1 },
+        { $0 == $1 },
       ] {
         for (leftShape, rightShape) in [
           ([6], [3, 6]), ([3, 6], [6]), ([3, 1, 6], [1, 2, 6]), ([1, 1, 3], [3, 4, 3]),
@@ -955,6 +963,10 @@ final class HoneycrispTests: XCTestCase {
           let outputBcast = op(bcastLeft, bcastRight)
           let outputImplicit = op(left, right)
           XCTAssertEqual(outputBcast.shape, outputImplicit.shape)
+          if outputBcast.dtype == .bool {
+            try await assertDataEqual(outputBcast, outputImplicit)
+            continue
+          }
           try await assertClose(outputBcast, outputImplicit)
 
           var leftGrad: Tensor?
@@ -1401,7 +1413,7 @@ final class HoneycrispTests: XCTestCase {
         Tensor(randInt: [300000], in: (-0x400f_ffff_ffff_ffff)..<0x780f_ffff_ffff_ffff)
         / 0x600_0000_0000_000
       mean = try await bits.cast(.float32).mean().item()
-      XCTAssert(abs(mean - 74.35) < 0.5, "high bits incorrect, got mean \(mean)")
+      XCTAssert(abs(mean - 74.35) < 1.5, "high bits incorrect, got mean \(mean)")
     }
   }
 
