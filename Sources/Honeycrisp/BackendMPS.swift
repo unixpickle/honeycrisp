@@ -250,6 +250,9 @@ open class MPSBackend: CPUBackend {
           names.append("\(op)\(mode)_\(type)")
         }
       }
+      for op in ["xor", "and", "or"] {
+        names.append("\(op)_\(type)")
+      }
     }
     for op in ["add", "sub", "mul", "div", "mod", "lt", "gt", "le", "ge", "eq"] {
       for type in ["half", "float", "long"] {
@@ -603,6 +606,121 @@ open class MPSBackend: CPUBackend {
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .float(a.toFloat()), .buffer(bBuf), .buffer(output), .uint(UInt32(count)))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return GPUData(backend: self, buffer: output, completion: completion)
+    }
+  }
+
+  public static func bitwiseOpName(_ op: BitwiseOp) -> String {
+    switch op {
+    case .or:
+      "or"
+    case .and:
+      "and"
+    case .xor:
+      "xor"
+    }
+  }
+
+  override public func bitwiseOp(
+    _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+
+    let opName = Self.bitwiseOpName(op)
+    let functionName = "\(opName)_\(dtype.metalSizeType)"
+
+    let aBuf = try await gpuBuffer(a.data)
+    let bBuf = try await gpuBuffer(b.data)
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(label: "bitwiseOp") { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc, .buffer(aBuf), .buffer(bBuf), .buffer(output),
+          .opaque(
+            (
+              UInt32(a.strides.dataCount),
+              UInt32(a.strides.innerRepeats),
+              UInt32(b.strides.dataCount),
+              UInt32(b.strides.innerRepeats),
+              UInt32(count)
+            )))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return GPUData(backend: self, buffer: output, completion: completion)
+    }
+  }
+
+  override public func bitwiseOp<T: TensorElementBitPattern>(
+    _ a: Tensor.Data, _ b: T, op: BitwiseOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+
+    let opName = Self.bitwiseOpName(op)
+    let functionName = "\(opName)_\(dtype.metalSizeType)"
+
+    let aBuf = try await gpuBuffer(a)
+    let bData = b.bitsForBitwiseOp
+    alwaysAssert(bData.count == dtype.byteSize)
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(label: "bitwiseOp") { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc, .buffer(aBuf), .data(Data(bData)), .buffer(output),
+          .opaque(
+            (
+              UInt32(count),
+              UInt32(1),
+              UInt32(1),
+              UInt32(1),
+              UInt32(count)
+            )))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return GPUData(backend: self, buffer: output, completion: completion)
+    }
+  }
+
+  override public func bitwiseOp<T: TensorElementBitPattern>(
+    _ a: T, _ b: Tensor.Data, op: BitwiseOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+
+    let opName = Self.bitwiseOpName(op)
+    let functionName = "\(opName)_\(dtype.metalSizeType)"
+
+    let bBuf = try await gpuBuffer(b)
+    let aData = a.bitsForBitwiseOp
+    alwaysAssert(aData.count == dtype.byteSize)
+    let output = try await allocate(length: count * dtype.byteSize)
+
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(label: "bitwiseOp") { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc, .data(Data(aData)), .buffer(bBuf), .buffer(output),
+          .opaque(
+            (
+              UInt32(1),
+              UInt32(1),
+              UInt32(count),
+              UInt32(1),
+              UInt32(count)
+            )))
         dispatch1D(enc, state: state, threadCount: count)
       }
       return GPUData(backend: self, buffer: output, completion: completion)

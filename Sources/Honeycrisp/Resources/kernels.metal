@@ -93,6 +93,38 @@ BINARY_KERNELS(mod, (pythonFmod(x,y)), half, half)
 BINARY_KERNELS(mod, (pythonFmod(x,y)), float, float)
 BINARY_KERNELS(mod, (pythonIntMod(x,y)), long, long)
 
+#define BITWISE_KERNELS(name, expr, type) \
+    struct name##_args_##type { \
+        uint aCount; \
+        uint aDiv; \
+        uint bCount; \
+        uint bDiv; \
+        uint N; \
+    }; \
+    kernel void name##_##type( \
+        device const type* a [[buffer(0)]], \
+        device const type* b [[buffer(1)]], \
+        device type* c [[buffer(2)]], \
+        constant struct name##_args_##type &args [[buffer(3)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < args.N) { \
+            type x = a[(id / args.aDiv) % args.aCount]; \
+            type y = b[(id / args.bDiv) % args.bCount]; \
+            c[id] = expr; \
+        } \
+    }
+
+#define ALL_BITWISE_KERNELS(type) \
+    BITWISE_KERNELS(xor, x^y, type) \
+    BITWISE_KERNELS(or, x|y, type) \
+    BITWISE_KERNELS(and, x&y, type)
+
+ALL_BITWISE_KERNELS(char)
+ALL_BITWISE_KERNELS(short)
+ALL_BITWISE_KERNELS(int)
+ALL_BITWISE_KERNELS(long)
+
 #define DEFINE_FUSED_ADD_MUL(type) \
     kernel void add_mul_##type( \
         device const type* a [[buffer(0)]], \

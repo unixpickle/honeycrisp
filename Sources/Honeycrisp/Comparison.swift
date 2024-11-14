@@ -27,7 +27,8 @@ extension Tensor {
   @recordCaller
   internal static func _compare(lhs: Tensor, rhs: Tensor, op: ComparisonOp) -> Tensor {
     alwaysAssert(
-      lhs.dtype == rhs.dtype, "dtypes for == operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+      lhs.dtype == rhs.dtype,
+      "dtypes for comparison operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
     let (newShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
 

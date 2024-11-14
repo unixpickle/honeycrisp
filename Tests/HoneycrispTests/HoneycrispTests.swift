@@ -315,6 +315,31 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testBitwise() async throws {
+    try await runInBackends {
+      let x = Tensor(data: [Int64(0x12_3456_789f), 0xff00_ff00, 2, 1], shape: [4], dtype: .int64)
+      let y = Tensor(data: [Int64(1), 2, 0x12_3456_789f, 0xff00_ff00], shape: [4], dtype: .int64)
+      let xored = x ^ y
+      let anded = x & y
+      let ored = x | y
+      try await assertDataEqual64(
+        xored, [0x12_3456_789e, 0xff00_ff02, 0x12_3456_789d, 0xff00_ff01])
+      try await assertDataEqual64(
+        anded, [1, 0, 2, 0])
+      try await assertDataEqual64(
+        ored, [0x12_3456_789f, 0xff00_ff02, 0x12_3456_789f, 0xff00_ff01])
+
+      try await assertDataEqual64(x ^ UInt64(2), [0x12_3456_789d, 0xff00_ff02, 0, 3])
+      try await assertDataEqual64(x | UInt64(2), [0x12_3456_789f, 0xff00_ff02, 2, 3])
+      try await assertDataEqual64(x & UInt64(2), [2, 0, 2, 0])
+      try await assertDataEqual64(x & UInt64(0x10_0000_0000), [0x10_0000_0000, 0, 0, 0])
+      try await assertDataEqual64(UInt64(2) ^ x, [0x12_3456_789d, 0xff00_ff02, 0, 3])
+      try await assertDataEqual64(UInt64(2) | x, [0x12_3456_789f, 0xff00_ff02, 2, 3])
+      try await assertDataEqual64(UInt64(2) & x, [2, 0, 2, 0])
+      try await assertDataEqual64(UInt64(0x10_0000_0000) & x, [0x10_0000_0000, 0, 0, 0])
+    }
+  }
+
   func testSum() async throws {
     let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0, 7.0], shape: [1, 2, 3, 1], dtype: .float32)
     var xGrad: Tensor?
@@ -1765,6 +1790,18 @@ func assertDataEqual(
   line: UInt = #line
 ) async throws {
   let data = try await x.floats()
+  if let msg = msg {
+    XCTAssertEqual(data, y, msg, file: file, line: line)
+  } else {
+    XCTAssertEqual(data, y, file: file, line: line)
+  }
+}
+
+func assertDataEqual64(
+  _ x: Tensor, _ y: [Int64], _ msg: String? = nil, file: StaticString = #filePath,
+  line: UInt = #line
+) async throws {
+  let data = try await x.int64s()
   if let msg = msg {
     XCTAssertEqual(data, y, msg, file: file, line: line)
   } else {

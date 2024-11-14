@@ -176,6 +176,33 @@ open class Backend {
     throw BackendError.notImplemented("binaryOp")
   }
 
+  public func bitwiseOp(
+    _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("bitwiseOp")
+  }
+
+  public func bitwiseOp<T: TensorElementBitPattern>(
+    _ a: Tensor.Data, _ b: T, op: BitwiseOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("bitwiseOp")
+  }
+
+  public func bitwiseOp<T: TensorElementBitPattern>(
+    _ a: T, _ b: Tensor.Data, op: BitwiseOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("bitwiseOp")
+  }
+
   public func mulAdd(
     input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, count: Int, dtype: Tensor.DType
   ) async throws -> Tensor.Data {
@@ -814,6 +841,68 @@ open class CPUBackend: Backend {
     } else {
       return try await apply(a.toFloat())
     }
+  }
+
+  override public func bitwiseOp(
+    _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, count: Int, dtype: Tensor.DType
+  ) async throws
+    -> Tensor.Data
+  {
+    let aBuf = try await a.data.cpuBuffer
+    let bBuf = try await b.data.cpuBuffer
+    let buffer = try await allocate(length: count * dtype.byteSize)
+
+    try await serialize {
+      let x = aBuf.contents().bindMemory(to: UInt8.self, capacity: a.dataCount * dtype.byteSize)
+      let y = bBuf.contents().bindMemory(to: UInt8.self, capacity: b.dataCount * dtype.byteSize)
+      let z = buffer.contents().bindMemory(to: UInt8.self, capacity: count)
+      for i in 0..<(count * dtype.byteSize) {
+        let aIdx = a.strides(i / dtype.byteSize) * dtype.byteSize + i % dtype.byteSize
+        let bIdx = b.strides(i / dtype.byteSize) * dtype.byteSize + i % dtype.byteSize
+        z[i] = op.apply(x[aIdx], y[bIdx])
+      }
+    }
+    return CPUData(buffer: buffer)
+  }
+
+  override public func bitwiseOp<T: TensorElementBitPattern>(
+    _ a: Tensor.Data, _ b: T, op: BitwiseOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let aBuf = try await a.cpuBuffer
+    let buffer = try await allocate(length: count * dtype.byteSize)
+    let operandBytes = b.bitsForBitwiseOp
+
+    try await serialize {
+      let inp = aBuf.contents().bindMemory(to: UInt8.self, capacity: count)
+      let out = buffer.contents().bindMemory(to: UInt8.self, capacity: count)
+      for i in 0..<(count * dtype.byteSize) {
+        out[i] = op.apply(inp[i], operandBytes[i % operandBytes.count])
+      }
+    }
+    return CPUData(buffer: buffer)
+  }
+
+  override public func bitwiseOp<T: TensorElementBitPattern>(
+    _ a: T, _ b: Tensor.Data, op: BitwiseOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    let bBuf = try await b.cpuBuffer
+    let buffer = try await allocate(length: count * dtype.byteSize)
+    let operandBytes = a.bitsForBitwiseOp
+
+    try await serialize {
+      let inp = bBuf.contents().bindMemory(to: UInt8.self, capacity: count)
+      let out = buffer.contents().bindMemory(to: UInt8.self, capacity: count)
+      for i in 0..<(count * dtype.byteSize) {
+        out[i] = op.apply(operandBytes[i % operandBytes.count], inp[i])
+      }
+    }
+    return CPUData(buffer: buffer)
   }
 
   override public func mulAdd(
