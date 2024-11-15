@@ -464,6 +464,14 @@ open class Backend {
     throw BackendError.notImplemented("concat")
   }
 
+  public func collection<T: TensorElement>(
+    _ collection: some Collection<T>, reverse: Bool, dtype: Tensor.DType
+  )
+    async throws -> Tensor.Data
+  {
+    throw BackendError.notImplemented("collection")
+  }
+
   public func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data {
     throw BackendError.notImplemented("axisPermutation")
   }
@@ -1992,6 +2000,34 @@ open class CPUBackend: Backend {
     return CPUData(buffer: buffer)
   }
 
+  override public func collection<T: TensorElement>(
+    _ collection: some Collection<T>, reverse: Bool, dtype: Tensor.DType
+  )
+    async throws -> Tensor.Data
+  {
+    let count = collection.count
+    let buffer = try await allocate(length: count * dtype.byteSize)
+    func apply<T1: TensorElement>(_ collection: some Sequence<T1>) async throws -> Tensor.Data {
+      try await serialize {
+        try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in
+          for (i, x) in collection.enumerated() {
+            if reverse {
+              out[count - (i + 1)] = x
+            } else {
+              out[i] = x
+            }
+          }
+        }
+      }
+      return CPUData(buffer: buffer)
+    }
+    if dtype == .int64 {
+      return try await apply(collection.map { $0.toInt64() })
+    } else {
+      return try await apply(collection.map { $0.toFloat() })
+    }
+  }
+
   override public func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data
   {
     let buffer = try await allocate(length: shape.product() * Tensor.DType.int64.byteSize)
@@ -2070,7 +2106,6 @@ func writeBuffer<T, T1: TensorElement>(
     return try fn(&buf)
   }
   var arr = [T1](repeating: T1(0.0), count: count)
-  try pointerToArray(buf.contents(), output: &arr, dtype: dtype)
   let result = try arr.withUnsafeMutableBufferPointer(fn)
   try arrayToPointer(arr, output: buf.contents(), dtype: dtype)
   return result

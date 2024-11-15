@@ -28,8 +28,8 @@ class RoPE {
   let cache: Tensor
 
   init(dim: Int, maxTokens: Int, base: Int = 10000) {
-    let theta = (-log(Float(base)) * Tensor(range: 0..<(dim / 2)).cast(.float32) / dim).exp()
-    let indices = Tensor(range: 0..<maxTokens).cast(.float32).unsqueeze(axis: -1).repeating(
+    let theta = (-log(Float(base)) * Tensor(data: 0..<(dim / 2)).cast(.float32) / dim).exp()
+    let indices = Tensor(data: 0..<maxTokens).cast(.float32).unsqueeze(axis: -1).repeating(
       axis: 1, count: dim / 2)
     let args = indices * theta
     cache = Tensor(stack: [args.cos(), args.sin()], axis: -1)
@@ -338,7 +338,7 @@ struct Main {
         print("sampling...")
         do {
           let firstTokens =
-            (Tensor(range: 0..<(NumLabels * SampleCount)) / SampleCount + (VocabSize - NumLabels))
+            (Tensor(data: 0..<(NumLabels * SampleCount)) / SampleCount + (VocabSize - NumLabels))
             .unsqueeze(axis: -1)
           let samples = try await model.sample(firstTokens: firstTokens)
           let pixelBatch = try await unpackPixelsInTokens(bitmaps: samples, patchSize: PatchSize)

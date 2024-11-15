@@ -285,58 +285,32 @@ public final class Tensor {
   }
 
   convenience public init<T: TensorElement>(
-    data: [T],
-    shape: [Int],
+    data: some Collection<T>,
+    shape: [Int]? = nil,
     dtype: DType? = nil,
+    reverse: Bool = false,
     backwardImpl: ((Tensor) -> Void)? = nil,
     function: StaticString = #function,
     file: StaticString = #file,
     line: UInt = #line
   ) {
+    let shape = shape ?? [data.count]
     let dtype = dtype ?? T.dtype
+    if !dtype.supportsGrad {
+      alwaysAssert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
+    }
+    alwaysAssert(
+      data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
+    alwaysAssert(
+      dtype.canUseScalarType(T.self),
+      "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
     let dataTask = Backtrace.record(function: function, file: file, line: line) {
-      if !dtype.supportsGrad {
-        alwaysAssert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
-      }
-      alwaysAssert(
-        data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
-      alwaysAssert(
-        dtype.canUseScalarType(T.self),
-        "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
       let backend = Backend.current
       return Tensor.createDataTask {
-        let buf = try await backend.allocate(length: dtype.byteSize * shape.product())
-        try arrayToPointer(data, output: buf.contents(), dtype: dtype)
-        return CPUBackend.CPUData(buffer: buf)
+        try await backend.collection(data, reverse: reverse, dtype: dtype)
       }
     }
     self.init(dataTask: dataTask, shape: shape, dtype: dtype, backwardImpl: backwardImpl)
-  }
-
-  public convenience init<T: NumericTensorElement>(
-    range: Range<T>,
-    dtype: DType? = nil,
-    function: StaticString = #function,
-    file: StaticString = #file,
-    line: UInt = #line
-  ) where Range<T>: Collection {
-    let arr = Array(range)
-    self.init(
-      data: arr, shape: [arr.count], dtype: dtype ?? T.dtype, function: function, file: file,
-      line: line)
-  }
-
-  public convenience init<T: NumericTensorElement>(
-    range: ClosedRange<T>,
-    dtype: DType? = nil,
-    function: StaticString = #function,
-    file: StaticString = #file,
-    line: UInt = #line
-  ) where ClosedRange<T>: Collection {
-    let arr = Array(range)
-    self.init(
-      data: arr, shape: [arr.count], dtype: dtype ?? T.dtype, function: function, file: file,
-      line: line)
   }
 
   public convenience init(

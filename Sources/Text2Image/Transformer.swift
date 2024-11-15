@@ -17,8 +17,8 @@ class RoPE {
   let cache: Tensor
 
   init(dim: Int, maxTokens: Int, base: Int = 10000, dtype: Tensor.DType = .float32) {
-    let theta = (-log(Float(base)) * Tensor(range: 0..<(dim / 2)).cast(dtype) / dim).exp()
-    let indices = Tensor(range: 0..<maxTokens).cast(dtype).unsqueeze(axis: -1).repeating(
+    let theta = (-log(Float(base)) * Tensor(data: 0..<(dim / 2)).cast(dtype) / dim).exp()
+    let indices = Tensor(data: 0..<maxTokens).cast(dtype).unsqueeze(axis: -1).repeating(
       axis: 1, count: dim / 2)
     let args = indices * theta
     cache = Tensor(stack: [args.cos(), args.sin()], axis: -1)

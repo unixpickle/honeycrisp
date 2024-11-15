@@ -687,8 +687,8 @@ final class HoneycrispTests: XCTestCase {
       XCTAssertEqual(y[0, ..., 0].shape, [1])
       try await assertDataEqual(y[0, ..., 0], [1])
       XCTAssertEqual(y[..., 0, ...].shape, [3, 4])
-      try await assertDataEqual(y[0, FullRange(dims: 2)], [1, 2, 3, 4])
-      XCTAssertEqual(y[0, FullRange(dims: 2)].shape, [1, 4])
+      try await assertDataEqual(y[0, FullRange(count: 2)], [1, 2, 3, 4])
+      XCTAssertEqual(y[0, FullRange(count: 2)].shape, [1, 4])
       try await assertDataEqual(y[..., 0, ...], y)
       XCTAssertEqual(y[0, 0, 0].shape, [])
       try await assertDataEqual(y[0, 0, 0], [1])
@@ -700,14 +700,15 @@ final class HoneycrispTests: XCTestCase {
       try await assertDataEqual(y[1...2, ..., 2...3], [7, 8, 11, 12])
       try await assertDataEqual(y[0...2, ..., 2...3], [3, 4, 7, 8, 11, 12])
       try await assertDataEqual(y[0...2, 0..<1, 2...3], [3, 4, 7, 8, 11, 12])
-      try await assertDataEqual(y[FullRange(dims: 3), NewAxis()], y)
-      XCTAssertEqual(y[FullRange(dims: 3), NewAxis()].shape, [3, 1, 4, 1])
-      try await assertDataEqual(y[FullRange(dims: 2), NewAxis()], y)
-      XCTAssertEqual(y[FullRange(dims: 2), NewAxis()].shape, [3, 1, 1, 4])
-      try await assertDataEqual(y[FullRange(dims: 1), NewAxis()], y)
-      XCTAssertEqual(y[FullRange(dims: 1), NewAxis()].shape, [3, 1, 1, 4])
+      try await assertDataEqual(y[FullRange(count: 3), NewAxis()], y)
+      XCTAssertEqual(y[FullRange(count: 3), NewAxis()].shape, [3, 1, 4, 1])
+      try await assertDataEqual(y[FullRange(count: 2), NewAxis()], y)
+      XCTAssertEqual(y[FullRange(count: 2), NewAxis()].shape, [3, 1, 1, 4])
+      try await assertDataEqual(y[FullRange(count: 1), NewAxis()], y)
+      XCTAssertEqual(y[FullRange(count: 1), NewAxis()].shape, [3, 1, 1, 4])
       try await assertDataEqual(y[NewAxis()], y)
       XCTAssertEqual(y[NewAxis()].shape, [1, 3, 1, 4])
+      try await assertDataEqual(y[..., ..., FlipAxis()], [4, 3, 2, 1, 8, 7, 6, 5, 12, 11, 10, 9])
 
       XCTAssertEqual(y[..., 0, 3].shape, [3])
 
@@ -741,7 +742,7 @@ final class HoneycrispTests: XCTestCase {
           9, 9, 5, 9, 0, 0, 5, 7, 4, 0, 0, 6, 2, 2, 9, 8, 8, 7, 7, 6, 5, 8, 5, 8, 7, 3, 3, 7, 0, 8,
           1, 3, 5, 8, 1, 9, 9, 4, 6, 0, 3, 7, 3, 7, 6, 0, 7, 4, 1, 3, 4, 3, 6, 9, 1, 4, 6, 3, 3, 5,
         ])
-      let perm2 = bigArr[FullRange(dims: 2), PermuteAxes(2, 1, 0)]
+      let perm2 = bigArr[FullRange(count: 2), PermuteAxes(2, 1, 0)]
       XCTAssertEqual(perm2.shape, [2, 1, 4, 5, 3])
       try await assertDataEqual(
         perm2,
@@ -770,7 +771,7 @@ final class HoneycrispTests: XCTestCase {
         if i % count != 0 {
           continue
         }
-        let input = Tensor(range: 0..<i)
+        let input = Tensor(data: 0..<i)
         let split = input.chunk(axis: 0, count: count)
         XCTAssertEqual(split.count, count)
         if i % count == 0 {
@@ -1611,8 +1612,8 @@ final class HoneycrispTests: XCTestCase {
         let conv = try createConv(false)
         let kernelShape = conv.kernelTensorShape()
         let imageShape = conv.imageTensorShape(batch: 1)
-        let kernel = Tensor(range: 0..<kernelShape.product(), dtype: .float32).reshape(kernelShape)
-        let image = -Tensor(range: 0..<imageShape.product(), dtype: .float32).reshape(imageShape)
+        let kernel = Tensor(data: 0..<kernelShape.product(), dtype: .float32).reshape(kernelShape)
+        let image = -Tensor(data: 0..<imageShape.product(), dtype: .float32).reshape(imageShape)
         var imageGrad: Tensor?
         var kernelGrad: Tensor?
         let output = Tensor.conv2D(
@@ -1621,7 +1622,7 @@ final class HoneycrispTests: XCTestCase {
         XCTAssertEqual(output.shape, testCase.outShape, "\(conv)")
         try await assertDataEqual(output, testCase.output, "\(conv)")
 
-        let outGrad = (Tensor(range: 0..<output.shape.product()) * 4).reshape(output.shape).cast(
+        let outGrad = (Tensor(data: 0..<output.shape.product()) * 4).reshape(output.shape).cast(
           .float32)
         output.backward(outGrad)
         try await assertDataEqual(imageGrad!, testCase.imageGrad, "\(conv)")

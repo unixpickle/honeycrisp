@@ -78,7 +78,7 @@ extension Range<Int>: TensorIndex {
     }
     return TensorIndexResult(
       reshape: inShape,
-      indices: Tensor(range: start..<end, dtype: .int64),
+      indices: Tensor(data: start..<end, dtype: .int64),
       indicesAreUnique: true,
       gatherAxis: 0,
       gatherReshape: nil)
@@ -96,7 +96,7 @@ extension StrideTo<Int>: TensorIndex {
       "stride \(indices) out of bounds for shape \(inShape)")
     return TensorIndexResult(
       reshape: inShape,
-      indices: Tensor(data: indices, shape: [indices.count], dtype: .int64),
+      indices: Tensor(data: indices, dtype: .int64),
       indicesAreUnique: true,
       gatherAxis: 0,
       gatherReshape: nil)
@@ -114,21 +114,21 @@ extension ClosedRange<Int>: TensorIndex {
 }
 
 public struct FullRange: TensorIndex {
-  public let dims: Int
+  public let count: Int
 
-  public init(dims: Int = 1) {
-    self.dims = dims
+  public init(count: Int = 1) {
+    self.count = count
   }
 
-  public var minTensorIndexDims: Int { dims }
+  public var minTensorIndexDims: Int { count }
 
   public func tensorIndex(forShape inShape: [Int]) -> TensorIndexResult {
-    alwaysAssert(inShape.count >= dims)
+    alwaysAssert(inShape.count >= count)
     return TensorIndexResult(
       reshape: inShape,
       indices: nil,
       indicesAreUnique: true,
-      gatherAxis: dims - 1,
+      gatherAxis: count - 1,
       gatherReshape: nil)
   }
 }
@@ -189,6 +189,19 @@ extension PartialRangeThrough<Int>: TensorIndex {
   }
 }
 
+public struct FlipAxis: TensorIndex {
+  public var minTensorIndexDims: Int { 1 }
+
+  public func tensorIndex(forShape inShape: [Int]) -> TensorIndexResult {
+    return TensorIndexResult(
+      reshape: inShape,
+      indices: Tensor(data: 0..<inShape[0], dtype: .int64, reverse: true),
+      indicesAreUnique: true,
+      gatherAxis: 0,
+      gatherReshape: nil)
+  }
+}
+
 public struct PermuteAxes: TensorIndex {
   public let perm: [Int]
 
@@ -215,7 +228,7 @@ public struct PermuteAxes: TensorIndex {
       removed += 1
     }
     if removed > 0 {
-      return [FullRange(dims: removed), PermuteAxes(newPerm)].tensorIndex(forShape: inShape)
+      return [FullRange(count: removed), PermuteAxes(newPerm)].tensorIndex(forShape: inShape)
     }
 
     alwaysAssert(
@@ -264,7 +277,7 @@ extension Array: TensorIndex where Element == any TensorIndex {
           let innerCount = axesShape.product()
           // We must explicitly represent the gather dimension.
           indices = innerCount * indices!.unsqueeze(axis: 1)
-          indices = (indices! + Tensor(range: 0..<innerCount)).flatten()
+          indices = (indices! + Tensor(data: 0..<innerCount)).flatten()
           gatherShape += axesShape
           gatherInSize *= innerCount
         }
@@ -321,7 +334,7 @@ extension Array: TensorIndex where Element == any TensorIndex {
 extension Tensor {
   @recordCaller
   private func _t() -> Tensor {
-    return self[FullRange(dims: shape.count - 2), PermuteAxes(1, 0)]
+    return self[FullRange(count: shape.count - 2), PermuteAxes(1, 0)]
   }
 
   @recordCaller

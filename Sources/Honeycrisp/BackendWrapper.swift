@@ -363,6 +363,14 @@ open class BackendWrapper: Backend {
     try await wrapped.concat(inputs, outerCount: outerCount, innerCounts: innerCounts, dtype: dtype)
   }
 
+  override public func collection<T: TensorElement>(
+    _ collection: some Collection<T>, reverse: Bool, dtype: Tensor.DType
+  )
+    async throws -> Tensor.Data
+  {
+    try await wrapped.collection(collection, reverse: reverse, dtype: dtype)
+  }
+
   override public func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data
   {
     try await wrapped.axisPermutation(permutation: permutation, shape: shape)

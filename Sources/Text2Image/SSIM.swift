@@ -8,7 +8,7 @@ class SSIM {
     assert(kernelSize % 2 == 1)
     self.kernelSize = kernelSize
     let kSize: Int = (kernelSize - 1) / 2
-    let xs = Tensor(range: (-kSize)...kSize).cast(.float32)
+    let xs = Tensor(data: (-kSize)...kSize).cast(.float32)
     let gauss = (-0.5 * (xs / sigma).pow(2)).exp()
     let kernel1D = gauss / gauss.sum().expand(as: gauss)
     let kernel2D = Tensor.outer(kernel1D, kernel1D)

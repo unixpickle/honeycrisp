@@ -91,7 +91,7 @@ extension Tensor {
     var results: [Tensor] = []
     var start = 0
     for count in counts {
-      results.append(self[FullRange(dims: axis), start..<(start + count)])
+      results.append(self[FullRange(count: axis), start..<(start + count)])
       start += count
     }
     return results

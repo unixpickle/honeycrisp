@@ -107,10 +107,10 @@ extension Tensor {
     alwaysAssert(h % kh == 0, "pool height \(kh) does not divide image height \(h)")
     alwaysAssert(w % kw == 0, "pool width \(kw) does not divide image width \(w)")
     if channelsLast {
-      return reshape([b, h / kh, kh, w / kw, kw, c])[FullRange(dims: 2), PermuteAxes(1, 0)]
+      return reshape([b, h / kh, kh, w / kw, kw, c])[FullRange(count: 2), PermuteAxes(1, 0)]
         .reshape([b, h / kh, kh * kw, w / kw, c]).max(axis: 2)
     } else {
-      return reshape([b, c, h / kh, kh, w / kw, kw])[FullRange(dims: 3), PermuteAxes(1, 0)]
+      return reshape([b, c, h / kh, kh, w / kw, kw])[FullRange(count: 3), PermuteAxes(1, 0)]
         .reshape([b, c, h / kh, kh * kw, w / kw]).max(axis: 3)
     }
   }
