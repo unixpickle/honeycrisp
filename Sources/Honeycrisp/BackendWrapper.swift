@@ -386,6 +386,7 @@ open class BackendWrapper: Backend {
 
 }
 
+/// A backend wrapper that counts floating-point operations in an atomic counter.
 open class BackendFLOPCounter: BackendWrapper {
   internal var lock = NSLock()
   internal var counter: Int64 = 0

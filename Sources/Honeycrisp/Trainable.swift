@@ -51,6 +51,10 @@ extension Tensor?: MaybeTensor {
   }
 }
 
+/// A base class which automatically stores and tracks learnable parameters and sub-modules.
+///
+/// Parameters are declared using the `@Param` attribute, and sub-modules are declared
+/// with the `@Child` attribute.
 open class Trainable {
   public enum Mode {
     case training
@@ -287,6 +291,7 @@ open class Trainable {
 
 }
 
+/// A ``Trainable`` which tracks an array of sub-modules.
 public class TrainableArray<T: Trainable>: Trainable {
   public let children: [T]
 
@@ -299,6 +304,7 @@ public class TrainableArray<T: Trainable>: Trainable {
   }
 }
 
+/// A ``Trainable`` module that implements a learned matrix multiplication and optional bias.
 public class Linear: Trainable {
   @Param(name: "weight") public var weight: Tensor
   @Param(name: "bias") public var bias: Tensor?
@@ -340,6 +346,7 @@ public class Linear: Trainable {
   }
 }
 
+/// A ``Trainable`` module that applies a learned 2-dimensional convolution.
 public class Conv2D: Trainable {
   public typealias Dim = Conv2DConfig.Dim
   public typealias Padding = Conv2DConfig.Padding
@@ -457,6 +464,7 @@ public class Conv2D: Trainable {
   }
 }
 
+/// A ``Trainable`` with no parameters which implements random [Dropout](https://arxiv.org/abs/1207.0580).
 public class Dropout: Trainable {
   public let dropProb: Float
 
@@ -474,6 +482,7 @@ public class Dropout: Trainable {
   }
 }
 
+/// A ``Trainable`` that implements [Layer Normalization](https://arxiv.org/abs/1607.06450).
 public class LayerNorm: Trainable {
   public let dtype: Tensor.DType
   public let shape: [Int]
@@ -522,6 +531,7 @@ public class LayerNorm: Trainable {
   }
 }
 
+/// A ``Trainable`` module which implements [Group Normalization](https://arxiv.org/abs/1803.08494).
 public class GroupNorm: Trainable {
   public let groupCount: Int
   public let channelCount: Int

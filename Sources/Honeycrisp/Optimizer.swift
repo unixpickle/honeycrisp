@@ -1,6 +1,7 @@
 import Foundation
 import HCBacktrace
 
+/// A base class for gradient-based optimizers.
 open class Optimizer {
   public typealias Parameter = Trainable.Parameter
 
@@ -10,6 +11,9 @@ open class Optimizer {
     self.parameters = [String: Parameter](uniqueKeysWithValues: parameters)
   }
 
+  /// Reset the gradients of the parameters.
+  ///
+  /// This should be called between steps to avoid accumulating gradients incorrectly.
   public func clearGrads() {
     for var p in self.parameters.values {
       p.grad = nil
@@ -26,6 +30,7 @@ open class Optimizer {
   }
 }
 
+/// An ``Optimizer`` implementation for [Adam: A Method for Stochastic Optimization](https://arxiv.org/abs/1412.6980)
 public class Adam: Optimizer {
   public var lr: Float
   public var beta1: Float
@@ -36,6 +41,9 @@ public class Adam: Optimizer {
   public var moment1: [String: Tensor] = [:]
   public var moment2: [String: Tensor] = [:]
 
+  /// Create an optimizer wrapping the given parameters.
+  ///
+  /// The default arguments match those from the original paper.
   public init(
     _ parameters: [(String, Parameter)], lr: Float, beta1: Float = 0.9, beta2: Float = 0.999,
     eps: Float = 1e-8
@@ -67,6 +75,8 @@ public class Adam: Optimizer {
     }
   }
 
+  /// An encodable object that contains all of the values that this optimizer
+  /// tracks during optimization trajectories.
   public struct State: Codable {
     public var stepIndex: [String: Int] = [:]
     public var moment1: [String: TensorState] = [:]
