@@ -930,27 +930,42 @@ public final class Tensor {
   }
 
   @recordCaller
-  private func _pow<T: NumericTensorElement>(_ exponent: T, outScale: T = 1.0) -> Tensor {
+  private func _pow<T: NumericTensorElement>(_ exponent: T) -> Tensor {
     alwaysAssert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
     let backend = Backend.current
     let newData = createDataTask { t in
       try await backend.pow(
-        try await t.data, exponent, outScale: outScale, count: t.shape.product(), dtype: t.dtype)
+        try await t.data,
+        exponent,
+        scale: T(1.0),
+        scales: nil,
+        count: t.shape.product(),
+        dtype: t.dtype)
     }
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: shape, dtype: dtype)
     } else {
       let lhsHandle = saveForBackward()
       return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
-        lhsHandle.backward(backend) {
-          if exponent == T(2.0) {
-            grad * self.noGrad() * 2
-          } else {
-            grad * self.noGrad().pow(exponent - T(1.0), outScale: exponent)
-          }
-        }
+        lhsHandle.backward(backend) { self.noGrad().powGrad(exponent, grad: grad) }
       }
     }
+  }
+
+  @recordCaller
+  internal func _powGrad<T: NumericTensorElement>(_ exponent: T, grad: Tensor) -> Tensor {
+    alwaysAssert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
+    alwaysAssert(
+      grad.dtype == dtype,
+      "dtype of self \(dtype) does not match dtype of gradient \(grad.dtype)")
+    alwaysAssert(!self.needsGrad && !grad.needsGrad, "second derivatives are not supported")
+    let backend = Backend.current
+    let newData = Tensor.createDataTask(self, grad) { t, grad in
+      try await backend.pow(
+        try await t.data, exponent - T(1.0), scale: exponent, scales: try await grad.data,
+        count: t.shape.product(), dtype: t.dtype)
+    }
+    return Tensor(dataTask: newData, shape: shape, dtype: dtype)
   }
 
   @recordCaller

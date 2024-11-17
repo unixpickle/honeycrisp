@@ -289,7 +289,7 @@ open class Backend {
   }
 
   public func pow<T: NumericTensorElement>(
-    _ a: Tensor.Data, _ b: T, outScale: T, count: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, _ b: T, scale: T, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -454,10 +454,9 @@ open class Backend {
     throw BackendError.notImplemented("conv2DKernelGrad")
   }
 
-  public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
-    async throws
-    -> Tensor.Data
-  {
+  public func elemwise(
+    _ a: Tensor.Data, op: ElemwiseOp, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
+  ) async throws -> Tensor.Data {
     throw BackendError.notImplemented("elemwise")
   }
 

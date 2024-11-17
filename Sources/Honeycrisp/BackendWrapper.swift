@@ -170,12 +170,12 @@ open class BackendWrapper: Backend {
   }
 
   override public func pow<T: NumericTensorElement>(
-    _ a: Tensor.Data, _ b: T, outScale: T, count: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, _ b: T, scale: T, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.pow(a, b, outScale: outScale, count: count, dtype: dtype)
+    try await wrapped.pow(a, b, scale: scale, scales: scales, count: count, dtype: dtype)
   }
 
   override public func clamp<T: NumericTensorElement>(
@@ -347,11 +347,10 @@ open class BackendWrapper: Backend {
       config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
   }
 
-  override public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
-    async throws
-    -> Tensor.Data
-  {
-    try await wrapped.elemwise(a, op: op, count: count, dtype: dtype)
+  override public func elemwise(
+    _ a: Tensor.Data, op: ElemwiseOp, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
+  ) async throws -> Tensor.Data {
+    try await wrapped.elemwise(a, op: op, scales: scales, count: count, dtype: dtype)
   }
 
   override public func concat(

@@ -166,3 +166,22 @@ public func alwaysAssert(
       }
     }, function: function, file: file, line: line)
 }
+
+public func tracedFatalError(
+  _ message: String? = nil, function: StaticString = #function,
+  file: StaticString = #file, line: UInt = #line
+) -> Never {
+  Backtrace.record(
+    {
+      let msg =
+        if let message = message {
+          "\n\nTraceback:\n\n\(Backtrace.format())\n\nFatal error: \(message)"
+        } else {
+          "\n\nTraceback:\n\n\(Backtrace.format())\n\n"
+        }
+      fatalError(msg)
+    }, function: function, file: file, line: line)
+
+  // This will not be reached.
+  fatalError()
+}

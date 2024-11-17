@@ -35,7 +35,7 @@ inline T pythonIntMod(T lhs, T rhs) {
         uint bDiv; \
         uint N; \
     }; \
-    kernel void name##vv_##type( \
+    kernel void name##_vv_##type( \
         device const type* a [[buffer(0)]], \
         device const type* b [[buffer(1)]], \
         device outType* c [[buffer(2)]], \
@@ -48,7 +48,7 @@ inline T pythonIntMod(T lhs, T rhs) {
             c[id] = expr; \
         } \
     } \
-    kernel void name##vs_##type( \
+    kernel void name##_vs_##type( \
         device const type* a [[buffer(0)]], \
         device const float& b [[buffer(1)]], \
         device outType* c [[buffer(2)]], \
@@ -61,7 +61,7 @@ inline T pythonIntMod(T lhs, T rhs) {
             c[id] = expr; \
         } \
     } \
-    kernel void name##sv_##type( \
+    kernel void name##_sv_##type( \
         device const float& a [[buffer(0)]], \
         device const type* b [[buffer(1)]], \
         device outType* c [[buffer(2)]], \
@@ -307,31 +307,36 @@ DEFINE_WHEN(short)
 DEFINE_WHEN(int)
 DEFINE_WHEN(long)
 
-kernel void vector_pow_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant float &exponent [[buffer(2)]],
-    constant float &outScale [[buffer(3)]],
-    constant uint &N [[buffer(4)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = half(outScale * pow(float(input[id]), exponent));
+#define DEFINE_POW(type) \
+    kernel void vector_pow_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant float &exponent [[buffer(2)]], \
+        constant float &outScale [[buffer(3)]], \
+        constant uint &N [[buffer(4)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = (type)(outScale * pow((float)input[id], exponent)); \
+        } \
+    } \
+    kernel void vector_pow_scaled_##type( \
+        device const type* input [[buffer(0)]], \
+        constant type *outScales [[buffer(1)]], \
+        device type* output [[buffer(2)]], \
+        constant float &exponent [[buffer(3)]], \
+        constant float &outScale [[buffer(4)]], \
+        constant uint &N [[buffer(5)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            float sc = outScale * (float)outScales[id]; \
+            output[id] = (type)(sc * pow((float)input[id], exponent)); \
+        } \
     }
-}
 
-kernel void vector_pow_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant float &exponent [[buffer(2)]],
-    constant float &outScale [[buffer(3)]],
-    constant uint &N [[buffer(4)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = outScale * pow(input[id], exponent);
-    }
-}
+DEFINE_POW(half)
+DEFINE_POW(float)
 
 kernel void log_half(
     device const half* input [[buffer(0)]],

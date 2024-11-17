@@ -233,9 +233,9 @@ open class MPSBackend: CPUBackend {
     var names = ["axis_permutation"]
     for type in ["half", "float"] {
       for op in [
-        "vector_pow", "log", "recip", "exp", "sigmoid", "sigmoid_grad", "gelu", "gelu_grad", "sin",
-        "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "rand", "randn", "normalize",
-        "normalize_var_grad", "normalize_x_grad",
+        "vector_pow", "vector_pow_scaled", "log", "recip", "exp", "sigmoid", "sigmoid_grad", "gelu",
+        "gelu_grad", "sin", "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "rand",
+        "randn", "normalize", "normalize_var_grad", "normalize_x_grad",
       ] {
         names.append("\(op)_\(type)")
       }
@@ -257,7 +257,7 @@ open class MPSBackend: CPUBackend {
     for op in ["add", "sub", "mul", "div", "mod", "lt", "gt", "le", "ge", "eq"] {
       for type in ["half", "float", "long"] {
         for args in ["vv", "sv", "vs"] {
-          names.append("\(op)\(args)_\(type)")
+          names.append("\(op)_\(args)_\(type)")
         }
       }
     }
@@ -295,39 +295,62 @@ open class MPSBackend: CPUBackend {
   }
 
   override public func pow<T: NumericTensorElement>(
-    _ a: Tensor.Data, _ b: T, outScale: T, count: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, _ b: T, scale: T, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     if dtype != .float16 && dtype != .float32 {
-      return try await super.pow(a, b, outScale: outScale, count: count, dtype: dtype)
+      return try await super.pow(a, b, scale: scale, scales: scales, count: count, dtype: dtype)
     }
 
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
     let aBuf = try await gpuBuffer(a)
+    let scalesBuf: MTLBuffer? =
+      if let scales = scales {
+        try await gpuBuffer(scales)
+      } else {
+        nil
+      }
     let output = try await allocate(length: count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "pow") { buf, enc in
-        let funcName = "vector_pow_\(MPSBackend.CastTypes[dtype]!)"
+        let funcName =
+          "vector_pow\(scalesBuf == nil ? "" : "_scaled")_\(MPSBackend.CastTypes[dtype]!)"
         let state = try getFunction(name: funcName)
-        try setArguments(
-          enc, .buffer(aBuf), .buffer(output), .float(b.toFloat()), .float(outScale.toFloat()),
-          .uint(UInt32(count)))
+        if let scalesBuf = scalesBuf {
+          try setArguments(
+            enc,
+            .buffer(aBuf),
+            .buffer(scalesBuf),
+            .buffer(output),
+            .float(b.toFloat()),
+            .float(scale.toFloat()),
+            .uint(UInt32(count)))
+        } else {
+          try setArguments(
+            enc,
+            .buffer(aBuf),
+            .buffer(output),
+            .float(b.toFloat()),
+            .float(scale.toFloat()),
+            .uint(UInt32(count)))
+        }
         dispatch1D(enc, state: state, threadCount: count)
       }
       return GPUData(backend: self, buffer: output, completion: completion)
     }
   }
 
-  override public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
-    async throws
-    -> Tensor.Data
-  {
+  override public func elemwise(
+    _ a: Tensor.Data, op: ElemwiseOp, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
+  ) async throws -> Tensor.Data {
     if dtype != .float16 && dtype != .float32 {
-      return try await super.elemwise(a, op: op, count: count, dtype: dtype)
+      return try await super.elemwise(a, op: op, scales: scales, count: count, dtype: dtype)
     }
+
+    let typeName = MPSBackend.CastTypes[dtype]!
 
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
@@ -362,9 +385,15 @@ open class MPSBackend: CPUBackend {
       case .sigmoidGrad:
         "sigmoid_grad"
       }
-    let functionName = "\(namePrefix)_\(MPSBackend.CastTypes[dtype]!)"
+    let functionName = "\(namePrefix)_\(typeName)"
 
     let aBuf = try await gpuBuffer(a)
+    let scalesBuf: MTLBuffer? =
+      if let scales = scales {
+        try await gpuBuffer(scales)
+      } else {
+        nil
+      }
     let output = try await allocate(length: count * dtype.byteSize)
 
     return try await serialize { [self] in
@@ -372,6 +401,23 @@ open class MPSBackend: CPUBackend {
         let state = try getFunction(name: functionName)
         try setArguments(enc, .buffer(aBuf), .buffer(output), .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
+        if let scalesBuf = scalesBuf {
+          let state = try getFunction(name: "mul_vv_\(typeName)")
+          try setArguments(
+            enc,
+            .buffer(output),
+            .buffer(scalesBuf),
+            .buffer(output),
+            .opaque(
+              (
+                UInt32(count),
+                UInt32(1),
+                UInt32(count),
+                UInt32(1),
+                UInt32(count)
+              )))
+          dispatch1D(enc, state: state, threadCount: count)
+        }
       }
       return GPUData(backend: self, buffer: output, completion: completion)
     }
@@ -418,7 +464,7 @@ open class MPSBackend: CPUBackend {
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.binaryOpName(op)
-    let functionName = "\(opName)vv_\(typeName)"
+    let functionName = "\(opName)_vv_\(typeName)"
 
     let aBuf = try await gpuBuffer(a.data)
     let bBuf = try await gpuBuffer(b.data)
@@ -456,7 +502,7 @@ open class MPSBackend: CPUBackend {
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.binaryOpName(op)
-    let functionName = "\(opName)vs_\(typeName)"
+    let functionName = "\(opName)_vs_\(typeName)"
 
     let aBuf = try await gpuBuffer(a)
     let output = try await allocate(length: count * dtype.byteSize)
@@ -485,7 +531,7 @@ open class MPSBackend: CPUBackend {
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.binaryOpName(op)
-    let functionName = "\(opName)sv_\(typeName)"
+    let functionName = "\(opName)_sv_\(typeName)"
 
     let bBuf = try await gpuBuffer(b)
     let output = try await allocate(length: count * dtype.byteSize)
@@ -529,7 +575,7 @@ open class MPSBackend: CPUBackend {
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.comparisonOpName(op)
-    let functionName = "\(opName)vv_\(typeName)"
+    let functionName = "\(opName)_vv_\(typeName)"
 
     let aBuf = try await gpuBuffer(a.data)
     let bBuf = try await gpuBuffer(b.data)
@@ -567,7 +613,7 @@ open class MPSBackend: CPUBackend {
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.comparisonOpName(op)
-    let functionName = "\(opName)vs_\(typeName)"
+    let functionName = "\(opName)_vs_\(typeName)"
 
     let aBuf = try await gpuBuffer(a)
     let output = try await allocate(length: count * Tensor.DType.bool.byteSize)
@@ -596,7 +642,7 @@ open class MPSBackend: CPUBackend {
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.comparisonOpName(op)
-    let functionName = "\(opName)sv_\(typeName)"
+    let functionName = "\(opName)_sv_\(typeName)"
 
     let bBuf = try await gpuBuffer(b)
     let output = try await allocate(length: count * Tensor.DType.bool.byteSize)

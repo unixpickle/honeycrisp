@@ -738,33 +738,53 @@ open class CPUBackend: Backend {
   }
 
   override public func pow<T: NumericTensorElement>(
-    _ a: Tensor.Data, _ b: T, outScale: T, count: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, _ b: T, scale: T, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     let aBuf = try await a.cpuBuffer
+    let scalesBuf: MTLBuffer? =
+      if let scales = scales {
+        try await scales.cpuBuffer
+      } else {
+        nil
+      }
 
-    func apply<T1: NumericTensorElement>(_ b: T1, _ outScale: T1) async throws -> Tensor.Data {
+    func apply<T1: NumericTensorElement>(_ b: T1, _ scale: T1) async throws -> Tensor.Data {
       let buffer = try await allocate(length: count * dtype.byteSize)
       try await serialize {
-        if dtype == .float32 && (b == T1(2.0) || b == T1(-1.0)) && outScale == T1(1.0) {
+        if dtype == .float32 && (b == T1(2.0) || b == T1(-1.0) || b == T1(1.0)) {
           let x = UnsafePointer<Float>(
             aBuf.contents().bindMemory(to: Float.self, capacity: count))
           let z = UnsafeMutablePointer<Float>(
             buffer.contents().bindMemory(to: Float.self, capacity: count))
-          if b == T1(2.0) {
+          var s = scale.toFloat()
+          switch b {
+          case T1(2.0):
             vDSP_vmul(x, 1, x, 1, z, 1, vDSP_Length(count))
-          } else {
-            [Float(1)].withUnsafeBufferPointer { one in
-              vDSP_svdiv(one.baseAddress!, x, 1, z, 1, vDSP_Length(count))
+            if s != 1.0 {
+              vDSP_vsmul(z, 1, &s, z, 1, vDSP_Length(count))
             }
+          case T1(-1.0):
+            vDSP_svdiv(&s, x, 1, z, 1, vDSP_Length(count))
+          case T1(1.0):
+            vDSP_vsmul(x, 1, &s, z, 1, vDSP_Length(count))
+          default:
+            fatalError()
+          }
+          if let scalesBuf = scalesBuf {
+            let scalesPtr = UnsafePointer<Float>(
+              scalesBuf.contents().bindMemory(to: Float.self, capacity: count))
+            vDSP_vmul(z, 1, scalesPtr, 1, z, 1, vDSP_Length(count))
           }
         } else {
           try readBuffer(T1.self, aBuf, count: count, dtype: dtype) { arr in
-            try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in
-              for (i, x) in arr.enumerated() {
-                out[i] = outScale * x.pow(b)
+            try maybeReadBuffer(T1.self, scalesBuf, count: count, dtype: dtype) { scalesArr in
+              try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in
+                for (i, x) in arr.enumerated() {
+                  out[i] = scale * (scalesArr?[i] ?? T1(1.0)) * x.pow(b)
+                }
               }
             }
           }
@@ -773,9 +793,9 @@ open class CPUBackend: Backend {
       return CPUData(buffer: buffer)
     }
     if dtype == .int64 {
-      return try await apply(b.toInt64(), outScale.toInt64())
+      return try await apply(b.toInt64(), scale.toInt64())
     } else {
-      return try await apply(b.toFloat(), outScale.toFloat())
+      return try await apply(b.toFloat(), scale.toFloat())
     }
   }
 
@@ -1470,17 +1490,24 @@ open class CPUBackend: Backend {
     try await convNdKernelGrad(config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
   }
 
-  override public func elemwise(_ a: Tensor.Data, op: ElemwiseOp, count: Int, dtype: Tensor.DType)
-    async throws
-    -> Tensor.Data
-  {
+  override public func elemwise(
+    _ a: Tensor.Data, op: ElemwiseOp, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
+  ) async throws -> Tensor.Data {
     let aBuf = try await a.cpuBuffer
+    let scalesBuf: MTLBuffer? =
+      if let scales = scales {
+        try await scales.cpuBuffer
+      } else {
+        nil
+      }
     let buffer = try await allocate(length: count * dtype.byteSize)
     try await serialize {
       try readBuffer(Float.self, aBuf, count: count, dtype: dtype) { arr in
-        try writeBuffer(Float.self, buffer, count: count, dtype: dtype) { out in
-          for (i, x) in arr.enumerated() {
-            out[i] = op.apply(x)
+        try maybeReadBuffer(Float.self, scalesBuf, count: count, dtype: dtype) { scalesArr in
+          try writeBuffer(Float.self, buffer, count: count, dtype: dtype) { out in
+            for (i, x) in arr.enumerated() {
+              out[i] = op.apply(x) * (scalesArr?[i] ?? Float(1.0))
+            }
           }
         }
       }
@@ -1609,6 +1636,19 @@ func readBuffer<T, T1: TensorElement>(
   var arr = [T1](repeating: T1(0.0), count: count)
   try pointerToArray(buf.contents(), output: &arr, dtype: dtype)
   return try arr.withUnsafeBufferPointer(fn)
+}
+
+func maybeReadBuffer<T, T1: TensorElement>(
+  _: T1.Type, _ buf: MTLBuffer?, count: Int, dtype: Tensor.DType,
+  _ fn: (UnsafeBufferPointer<T1>?) throws -> T
+) throws -> T {
+  if let buf = buf {
+    try readBuffer(T1.self, buf, count: count, dtype: dtype) {
+      try fn($0)
+    }
+  } else {
+    try fn(nil)
+  }
 }
 
 func writeBuffer<T, T1: TensorElement>(

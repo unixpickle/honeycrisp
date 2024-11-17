@@ -77,16 +77,31 @@ extension Tensor {
     let backend = Backend.current
     let newData = createDataTask { t in
       try await backend.elemwise(
-        try await t.data, op: op, count: t.shape.product(), dtype: t.dtype)
+        try await t.data, op: op, scales: nil, count: t.shape.product(), dtype: t.dtype)
     }
-    if let gradOp = gradOp, needsGrad && Tensor.isGradEnabled {
+    if needsGrad && Tensor.isGradEnabled {
+      guard let gradOp = gradOp else {
+        tracedFatalError("no gradient operation was specified")
+      }
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
-        handle.backward(backend) { grad * self.noGrad().elemwise(op: gradOp) }
+        handle.backward(backend) { self.noGrad().elemwiseGrad(op: gradOp, grad: grad) }
       }
     } else {
       return Tensor(dataTask: newData, shape: shape, dtype: dtype)
     }
+  }
+
+  @recordCaller
+  internal func _elemwiseGrad(op: ElemwiseOp, grad: Tensor) -> Tensor {
+    alwaysAssert(!self.needsGrad && !grad.needsGrad, "second derivatives are not supported")
+    let backend = Backend.current
+    let newData = Tensor.createDataTask(self, grad) { t, grad in
+      try await backend.elemwise(
+        try await t.data, op: op, scales: try await grad.data, count: t.shape.product(),
+        dtype: t.dtype)
+    }
+    return Tensor(dataTask: newData, shape: shape, dtype: dtype)
   }
 
   @recordCaller

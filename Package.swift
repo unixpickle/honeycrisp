@@ -40,7 +40,7 @@ let package = Package(
     .target(
       name: "HCBacktrace",
       dependencies: ["HCBacktraceMacros"],
-      path: "Sources/HCBacktrace/Implementation"),
+      path: "Sources/HCBacktrace/Interface"),
     .target(
       name: "Honeycrisp",
       dependencies: [

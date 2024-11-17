@@ -792,16 +792,18 @@ final class HoneycrispTests: XCTestCase {
     {
       try await runInBackends {
         for dtype in [Tensor.DType.float32, Tensor.DType.float16] {
+          let outputGrad = Tensor(rand: [input.count], dtype: dtype) + 1.0
+
           var actualGrad: Tensor?
           let tensorIn = Tensor(data: input, shape: [input.count], dtype: dtype) { g in
-            actualGrad = g
+            actualGrad = g / outputGrad
           }
           assert(tensorIn.needsGrad, "\(tensorIn.dtype) \(tensorIn.needsGrad)")
           let actualOut = op(tensorIn)
           let thisTol = tol * Float(dtype == .float32 ? 1.0 : 100.0)
           try await assertClose(
             actualOut, Tensor(data: output, shape: [output.count]), atol: thisTol, rtol: thisTol)
-          actualOut.backward(Tensor(onesLike: actualOut))
+          actualOut.backward(outputGrad)
           try await assertClose(
             actualGrad!, Tensor(data: grad, shape: [output.count]), atol: thisTol, rtol: thisTol)
         }
