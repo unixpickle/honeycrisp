@@ -469,6 +469,12 @@ open class Backend {
     throw BackendError.notImplemented("concat")
   }
 
+  public func constant<T: TensorElement>(_ value: T, count: Int, dtype: Tensor.DType) async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("constant")
+  }
+
   public func collection<T: TensorElement>(
     _ collection: some Collection<T>, reverse: Bool, dtype: Tensor.DType
   )

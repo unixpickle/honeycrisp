@@ -6,7 +6,7 @@ struct TransformerConfig {
   var VocabSize: Int
   let TokenCount: Int
   var WeightGradBackend: Backend
-  var LayerCount: Int = 12
+  var LayerCount: Int = 24
   var ModelDim: Int = 1024
   var HeadDim: Int = 64
 }

@@ -31,6 +31,7 @@ class CommandTransformer: Command {
 
   let lr: Float = 0.00001
   let bs = 8
+  let microbatch = 4
   let captionBytes: Int = 128
   let saveInterval: Int = 1000
   let cfgProb: Float = 0.1
@@ -162,12 +163,21 @@ class CommandTransformer: Command {
       step += 1
 
       let evalLoss = Tensor.withGrad(enabled: false) { loss(batch.eval.0) }
+      try await evalLoss.wait()
 
       var trainLoss: Tensor?
       var gradNorm: Float?
       while true {
-        trainLoss = loss(batch.train.0)
-        (trainLoss! * gradScale).backward()
+        for i in stride(from: 0, to: bs, by: microbatch) {
+          let smallBatch = min(bs - i, microbatch)
+          trainLoss = loss(batch.train.0[i..<(i + smallBatch)])
+          (trainLoss! * gradScale * Float(smallBatch) / Float(bs)).backward()
+
+          // Ensure that the memory from the step is done being used.
+          for (_, p) in model.parameters {
+            try await p.grad?.wait()
+          }
+        }
         for (_, var p) in model.parameters {
           if let g = p.grad {
             p.grad = g / gradScale
@@ -209,9 +219,11 @@ class CommandTransformer: Command {
 
       let captions = captionTensor(testCaptions)
       let samples = try await model.sample(prefixes: captions, generator: gen, cfgScale: scale)
-      let embs = vqvae.bottleneck.embed(samples.reshape([-1, 16, 16]))
-      images.append(
-        vqvae.decoder(embs.move(axis: -1, to: 1)).move(axis: 1, to: -1).flatten(endAxis: 1))
+      Tensor.withGrad(enabled: false) {
+        let embs = vqvae.bottleneck.embed(samples.reshape([-1, 16, 16]))
+        images.append(
+          vqvae.decoder(embs.move(axis: -1, to: 1)).move(axis: 1, to: -1).flatten(endAxis: 1))
+      }
     }
     let img = try await tensorToImage(tensor: Tensor(concat: images, axis: 1))
     try img.write(to: URL(filePath: filename))

@@ -1543,6 +1543,27 @@ open class CPUBackend: Backend {
     return CPUData(buffer: buffer)
   }
 
+  override public func constant<T: TensorElement>(_ value: T, count: Int, dtype: Tensor.DType)
+    async throws -> Tensor.Data
+  {
+    let buffer = try await allocate(length: count * dtype.byteSize)
+    func apply<T1: TensorElement>(_ value: T1) async throws -> Tensor.Data {
+      try await serialize {
+        try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in
+          for i in 0..<count {
+            out[i] = value
+          }
+        }
+      }
+      return CPUData(buffer: buffer)
+    }
+    if dtype == .int64 {
+      return try await apply(value.toInt64())
+    } else {
+      return try await apply(value.toFloat())
+    }
+  }
+
   override public func collection<T: TensorElement>(
     _ collection: some Collection<T>, reverse: Bool, dtype: Tensor.DType
   )
@@ -1550,6 +1571,15 @@ open class CPUBackend: Backend {
   {
     let count = collection.count
     let buffer = try await allocate(length: count * dtype.byteSize)
+
+    // This is a ~50x speed-up compared to the generic path, even in release mode.
+    if let arr = (collection as? [T]), !reverse {
+      try await serialize {
+        try arrayToPointer(arr, output: buffer.contents(), dtype: dtype)
+      }
+      return CPUData(buffer: buffer)
+    }
+
     func apply<T1: TensorElement>(_ collection: some Sequence<T1>) async throws -> Tensor.Data {
       try await serialize {
         try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in

@@ -362,6 +362,12 @@ open class BackendWrapper: Backend {
     try await wrapped.concat(inputs, outerCount: outerCount, innerCounts: innerCounts, dtype: dtype)
   }
 
+  override public func constant<T: TensorElement>(_ value: T, count: Int, dtype: Tensor.DType)
+    async throws -> Tensor.Data
+  {
+    try await wrapped.constant(value, count: count, dtype: dtype)
+  }
+
   override public func collection<T: TensorElement>(
     _ collection: some Collection<T>, reverse: Bool, dtype: Tensor.DType
   )

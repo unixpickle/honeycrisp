@@ -371,9 +371,17 @@ public final class Tensor {
     file: StaticString = #file,
     line: UInt = #line
   ) {
-    self.init(
-      data: [T](repeating: constant, count: shape.product()), shape: shape, dtype: dtype,
-      function: function, file: file, line: line)
+    let dtype = dtype ?? T.dtype
+    alwaysAssert(
+      dtype.canUseScalarType(T.self),
+      "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
+    let dataTask = Backtrace.record(function: function, file: file, line: line) {
+      let backend = Backend.current
+      return Tensor.createDataTask {
+        try await backend.constant(constant, count: shape.product(), dtype: dtype)
+      }
+    }
+    self.init(dataTask: dataTask, shape: shape, dtype: dtype)
   }
 
   @recordCaller
