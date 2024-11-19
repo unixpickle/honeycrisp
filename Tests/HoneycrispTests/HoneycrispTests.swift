@@ -1120,6 +1120,22 @@ final class HoneycrispTests: XCTestCase {
             0.006856732070446014, -0.645496129989624, -0.17693884670734406, 1.6333123445510864,
             0.5340267419815063, -2.147022247314453, 0.156622052192688,
           ], shape: [3, 5]))
+
+      // Make sure that axis makes no significant difference.
+      for dtype in [Tensor.DType.float16, Tensor.DType.float32] {
+        let tol = Float(dtype == .float16 ? 1e-2 : 1e-4)
+        let input = Tensor(rand: [7, 3, 292], dtype: dtype)
+        let outGrad = Tensor(randLike: input)
+        var grad1: Tensor?
+        var grad2: Tensor?
+        let out1 = input.onGrad { grad1 = $0 }.logSoftmax(axis: -1)
+        let out2 = input.onGrad { grad2 = $0 }.move(axis: -1, to: 1).logSoftmax(axis: 1).move(
+          axis: 1, to: -1)
+        try await assertClose(out1, out2, atol: tol, rtol: tol)
+        out1.backward(outGrad)
+        out2.backward(outGrad)
+        try await assertClose(grad1!, grad2!, atol: tol, rtol: tol)
+      }
     }
   }
 

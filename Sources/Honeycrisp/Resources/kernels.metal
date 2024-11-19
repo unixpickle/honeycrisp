@@ -1057,3 +1057,142 @@ DEFINE_CAST(half, float)
 DEFINE_CAST(half, long)
 DEFINE_CAST(long, float)
 DEFINE_CAST(long, half)
+
+#define DEFINE_LOG_SOFTMAX(type) \
+    kernel void log_softmax_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &numCols [[buffer(2)]], \
+        uint blockIdx [[threadgroup_position_in_grid]], \
+        uint idxInBlock [[thread_position_in_threadgroup]] \
+    ) { \
+        const uint blockSize = 256; \
+        threadgroup float reduceBuffer[256]; \
+    \
+        uint rowOffset = blockIdx * numCols; \
+        float localMax = -INFINITY; \
+        for (uint i = 0; i * blockSize < numCols; i++) { \
+            uint col = i * blockSize + idxInBlock; \
+            if (col < numCols) { \
+                float x = (float)input[rowOffset + col]; \
+                localMax = localMax < x ? x : localMax; \
+            } \
+        } \
+    \
+        for (uint i = 0; i < 8; i++) { \
+            reduceBuffer[idxInBlock] = localMax; \
+            threadgroup_barrier(mem_flags::mem_threadgroup); \
+    \
+            uint otherIdx = idxInBlock ^ (1 << i); \
+            float otherValue = reduceBuffer[otherIdx]; \
+            localMax = localMax < otherValue ? otherValue : localMax; \
+            threadgroup_barrier(mem_flags::mem_threadgroup); \
+        } \
+    \
+        float localSum = 0.0; \
+        for (uint i = 0; i * blockSize < numCols; i++) { \
+            uint col = i * blockSize + idxInBlock; \
+            if (col < numCols) { \
+                localSum += exp((float)input[rowOffset + col] - localMax); \
+            } \
+        } \
+    \
+        for (uint i = 0; i < 8; i++) { \
+            reduceBuffer[idxInBlock] = localSum; \
+            threadgroup_barrier(mem_flags::mem_threadgroup); \
+    \
+            uint otherIdx = idxInBlock ^ (1 << i); \
+            float otherValue = reduceBuffer[otherIdx]; \
+            localSum = localSum + otherValue; \
+            threadgroup_barrier(mem_flags::mem_threadgroup); \
+        } \
+    \
+        float finalLogSum = log(localSum) + localMax; \
+        for (uint i = 0; i * blockSize < numCols; i++) { \
+            uint col = i * blockSize + idxInBlock; \
+            if (col < numCols) { \
+                float x = (float)input[rowOffset + col]; \
+                output[rowOffset + col] = (type)(x - finalLogSum); \
+            } \
+        } \
+    } \
+    kernel void log_softmax_grad_##type( \
+        device const type* input [[buffer(0)]], \
+        device const type* grad [[buffer(1)]], \
+        device type* output [[buffer(2)]], \
+        constant uint &numCols [[buffer(3)]], \
+        uint blockIdx [[threadgroup_position_in_grid]], \
+        uint idxInBlock [[thread_position_in_threadgroup]] \
+    ) { \
+        const uint blockSize = 256; \
+        threadgroup float reduceBuffer[256]; \
+    \
+        uint rowOffset = blockIdx * numCols; \
+        float localMax = -INFINITY; \
+        for (uint i = 0; i * blockSize < numCols; i++) { \
+            uint col = i * blockSize + idxInBlock; \
+            if (col < numCols) { \
+                float x = (float)input[rowOffset + col]; \
+                localMax = localMax < x ? x : localMax; \
+            } \
+        } \
+    \
+        for (uint i = 0; i < 8; i++) { \
+            reduceBuffer[idxInBlock] = localMax; \
+            threadgroup_barrier(mem_flags::mem_threadgroup); \
+    \
+            uint otherIdx = idxInBlock ^ (1 << i); \
+            float otherValue = reduceBuffer[otherIdx]; \
+            localMax = localMax < otherValue ? otherValue : localMax; \
+            threadgroup_barrier(mem_flags::mem_threadgroup); \
+        } \
+    \
+        float localSum = 0.0; \
+        for (uint i = 0; i * blockSize < numCols; i++) { \
+            uint col = i * blockSize + idxInBlock; \
+            if (col < numCols) { \
+                localSum += exp((float)input[rowOffset + col] - localMax); \
+            } \
+        } \
+    \
+        for (uint i = 0; i < 8; i++) { \
+            reduceBuffer[idxInBlock] = localSum; \
+            threadgroup_barrier(mem_flags::mem_threadgroup); \
+    \
+            uint otherIdx = idxInBlock ^ (1 << i); \
+            float otherValue = reduceBuffer[otherIdx]; \
+            localSum = localSum + otherValue; \
+            threadgroup_barrier(mem_flags::mem_threadgroup); \
+        } \
+    \
+        float finalLogSum = log(localSum) + localMax; \
+        float localGradSum = 0.0; \
+        for (uint i = 0; i * blockSize < numCols; i++) { \
+            uint col = i * blockSize + idxInBlock; \
+            if (col < numCols) { \
+                localGradSum += (float)grad[rowOffset + col]; \
+            } \
+        } \
+    \
+        for (uint i = 0; i < 8; i++) { \
+            reduceBuffer[idxInBlock] = localGradSum; \
+            threadgroup_barrier(mem_flags::mem_threadgroup); \
+    \
+            uint otherIdx = idxInBlock ^ (1 << i); \
+            float otherValue = reduceBuffer[otherIdx]; \
+            localGradSum = localGradSum + otherValue; \
+            threadgroup_barrier(mem_flags::mem_threadgroup); \
+        } \
+        for (uint i = 0; i * blockSize < numCols; i++) { \
+            uint col = i * blockSize + idxInBlock; \
+            if (col < numCols) { \
+                float x = (float)input[rowOffset + col]; \
+                float prob = exp(x - finalLogSum); \
+                float g = (float)grad[rowOffset + col]; \
+                output[rowOffset + col] = (type)(g - localGradSum * prob); \
+            } \
+        } \
+    }
+
+DEFINE_LOG_SOFTMAX(half)
+DEFINE_LOG_SOFTMAX(float)

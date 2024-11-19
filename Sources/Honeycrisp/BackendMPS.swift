@@ -235,7 +235,8 @@ open class MPSBackend: CPUBackend {
       for op in [
         "vector_pow", "vector_pow_scaled", "log", "recip", "exp", "sigmoid", "sigmoid_grad", "gelu",
         "gelu_grad", "sin", "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "rand",
-        "randn", "normalize", "normalize_var_grad", "normalize_x_grad",
+        "randn", "normalize", "normalize_var_grad", "normalize_x_grad", "log_softmax",
+        "log_softmax_grad",
       ] {
         names.append("\(op)_\(type)")
       }
@@ -1406,6 +1407,23 @@ open class MPSBackend: CPUBackend {
     let totalCount = outerCount * middleCount * innerCount
     let aBuf = try await gpuBuffer(a)
     let output = try await allocate(length: totalCount * dtype.byteSize)
+
+    if innerCount == 1 && (dtype == .float16 || dtype == .float32) {
+      return try await serialize { [self] in
+        let completion = try completionBufferAndEncoder(label: "logSoftmax") { buf, enc in
+          try setArguments(enc, .buffer(aBuf), .buffer(output), .uint(UInt32(middleCount)))
+
+          let functionName = "log_softmax_\(MPSBackend.CastTypes[dtype]!)"
+          let state = try getFunction(name: functionName)
+          let gridSize = MTLSize(width: outerCount * 256, height: 1, depth: 1)
+          let threadGroupSize = MTLSize(width: 256, height: 1, depth: 1)
+          enc.setComputePipelineState(state)
+          enc.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        }
+        return GPUData(backend: self, buffer: output, completion: completion)
+      }
+    }
+
     return try await serialize { [self] in
       let op = self.createLogSoftmax(
         outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: mpsDType)
@@ -1480,6 +1498,28 @@ open class MPSBackend: CPUBackend {
 
     let totalCount = outerCount * middleCount * innerCount
     let output = try await allocate(length: totalCount * dtype.byteSize)
+
+    if innerCount == 1 && (dtype == .float16 || dtype == .float32) {
+      return try await serialize { [self] in
+        let completion = try completionBufferAndEncoder(label: "logSoftmaxGrad") { buf, enc in
+          try setArguments(
+            enc,
+            .buffer(aBuf),
+            .buffer(outGradBuf),
+            .buffer(output),
+            .uint(UInt32(middleCount))
+          )
+
+          let functionName = "log_softmax_grad_\(MPSBackend.CastTypes[dtype]!)"
+          let state = try getFunction(name: functionName)
+          let gridSize = MTLSize(width: outerCount * 256, height: 1, depth: 1)
+          let threadGroupSize = MTLSize(width: 256, height: 1, depth: 1)
+          enc.setComputePipelineState(state)
+          enc.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        }
+        return GPUData(backend: self, buffer: output, completion: completion)
+      }
+    }
 
     return try await serialize { [self] in
       let op = self.createLogSoftmaxGrad(
