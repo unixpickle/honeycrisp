@@ -284,6 +284,13 @@ public final class Tensor {
     }
   }
 
+  /// Create a `Tensor` with the elements of a collection.
+  ///
+  /// If `shape` is specified, the product of the values within the shape must match
+  /// the count of the collection.
+  /// Otherwise, the default 1-dimensional shape `[data.count]` is used.
+  ///
+  /// The `reverse` argument may be used to flip the order of the data in the collection.
   convenience public init<T: TensorElement>(
     data: some Collection<T>,
     shape: [Int]? = nil,

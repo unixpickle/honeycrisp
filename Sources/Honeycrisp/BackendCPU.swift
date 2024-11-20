@@ -933,36 +933,36 @@ open class CPUBackend: Backend {
   }
 
   override public func logSoftmax(
-    _ a: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     let aBuf = try await a.cpuBuffer
 
-    let totalCount = outerCount * middleCount * innerCount
+    let totalCount = dims.inCount
     let buffer = try await allocate(length: totalCount * dtype.byteSize)
     try await serialize {
       try readBuffer(Float.self, aBuf, count: totalCount, dtype: dtype) { arr in
         try writeBuffer(Float.self, buffer, count: totalCount, dtype: dtype) { arrOut in
-          for i in 0..<outerCount {
-            let outerOffset = i * innerCount * middleCount
-            for j in 0..<innerCount {
+          for i in 0..<dims.outerCount {
+            let outerOffset = i * dims.innerCount * dims.reduceCount
+            for j in 0..<dims.innerCount {
               var max: Float = 0
-              for k in 0..<middleCount {
-                let item = arr[j + k * innerCount + outerOffset]
+              for k in 0..<dims.reduceCount {
+                let item = arr[j + k * dims.innerCount + outerOffset]
                 if k == 0 || item > max {
                   max = item
                 }
               }
               var expSum: Float = 0
-              for k in 0..<middleCount {
-                let item = arr[j + k * innerCount + outerOffset]
+              for k in 0..<dims.reduceCount {
+                let item = arr[j + k * dims.innerCount + outerOffset]
                 expSum += exp(item - max)
               }
               let logSum = log(expSum) + max
-              for k in 0..<middleCount {
-                let idx = j + k * innerCount + outerOffset
+              for k in 0..<dims.reduceCount {
+                let idx = j + k * dims.innerCount + outerOffset
                 let item = arr[idx]
                 arrOut[idx] = item - logSum
               }
@@ -975,8 +975,7 @@ open class CPUBackend: Backend {
   }
 
   override public func logSoftmaxGrad(
-    _ a: Tensor.Data, _ outGrad: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int,
-    dtype: Tensor.DType
+    _ a: Tensor.Data, _ outGrad: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -984,19 +983,19 @@ open class CPUBackend: Backend {
     let aBuf = try await a.cpuBuffer
     let outGradBuf = try await outGrad.cpuBuffer
 
-    let totalCount = outerCount * middleCount * innerCount
+    let totalCount = dims.inCount
     let buffer = try await allocate(length: totalCount * dtype.byteSize)
     try await serialize {
       try readBuffer(Float.self, aBuf, count: totalCount, dtype: dtype) { arr in
         try readBuffer(Float.self, outGradBuf, count: totalCount, dtype: dtype) { arrGrad in
           try writeBuffer(Float.self, buffer, count: totalCount, dtype: dtype) { arrOut in
-            for i in 0..<outerCount {
-              let outerOffset = i * innerCount * middleCount
-              for j in 0..<innerCount {
+            for i in 0..<dims.outerCount {
+              let outerOffset = i * dims.innerCount * dims.reduceCount
+              for j in 0..<dims.innerCount {
                 var max: Float = 0
                 var gradSum: Float = 0
-                for k in 0..<middleCount {
-                  let idx = j + k * innerCount + outerOffset
+                for k in 0..<dims.reduceCount {
+                  let idx = j + k * dims.innerCount + outerOffset
                   let item = arr[idx]
                   gradSum += arrGrad[idx]
                   if k == 0 || item > max {
@@ -1004,13 +1003,13 @@ open class CPUBackend: Backend {
                   }
                 }
                 var expSum: Float = 0
-                for k in 0..<middleCount {
-                  let item = arr[j + k * innerCount + outerOffset]
+                for k in 0..<dims.reduceCount {
+                  let item = arr[j + k * dims.innerCount + outerOffset]
                   expSum += exp(item - max)
                 }
                 let logSum = log(expSum) + max
-                for k in 0..<middleCount {
-                  let idx = j + k * innerCount + outerOffset
+                for k in 0..<dims.reduceCount {
+                  let idx = j + k * dims.innerCount + outerOffset
                   let item = arr[idx]
                   let itemGrad = arrGrad[idx]
                   arrOut[idx] = itemGrad - gradSum * exp(item - logSum)

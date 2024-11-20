@@ -12,9 +12,11 @@ extension Tensor {
     let newData = createDataTask { t in
       try await backend.logSoftmax(
         try await t.data,
-        outerCount: t.shape[..<posAxis].product(),
-        middleCount: t.shape[posAxis],
-        innerCount: t.shape[(posAxis + 1)...].product(),
+        dims: ReduceDims(
+          outerCount: t.shape[..<posAxis].product(),
+          reduceCount: t.shape[posAxis],
+          innerCount: t.shape[(posAxis + 1)...].product()
+        ),
         dtype: t.dtype)
     }
     if !needsGrad || !Tensor.isGradEnabled {
@@ -44,9 +46,11 @@ extension Tensor {
       try await backend.logSoftmaxGrad(
         try await inputs.data,
         try await grads.data,
-        outerCount: inputs.shape[..<posAxis].product(),
-        middleCount: inputs.shape[posAxis],
-        innerCount: inputs.shape[(posAxis + 1)...].product(),
+        dims: ReduceDims(
+          outerCount: inputs.shape[..<posAxis].product(),
+          reduceCount: inputs.shape[posAxis],
+          innerCount: inputs.shape[(posAxis + 1)...].product()
+        ),
         dtype: inputs.dtype)
     }
     if (!inputs.needsGrad && !grads.needsGrad) || !Tensor.isGradEnabled {

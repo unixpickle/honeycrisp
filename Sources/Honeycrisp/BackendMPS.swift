@@ -1394,28 +1394,27 @@ open class MPSBackend: CPUBackend {
   }
 
   override public func logSoftmax(
-    _ a: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     guard let mpsDType = dtype.mpsDType else {
-      return try await super.logSoftmax(
-        a, outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: dtype)
+      return try await super.logSoftmax(a, dims: dims, dtype: dtype)
     }
 
-    let totalCount = outerCount * middleCount * innerCount
+    let totalCount = dims.outerCount * dims.reduceCount * dims.innerCount
     let aBuf = try await gpuBuffer(a)
     let output = try await allocate(length: totalCount * dtype.byteSize)
 
-    if innerCount == 1 && (dtype == .float16 || dtype == .float32) {
+    if dims.innerCount == 1 && (dtype == .float16 || dtype == .float32) {
       return try await serialize { [self] in
         let completion = try completionBufferAndEncoder(label: "logSoftmax") { buf, enc in
-          try setArguments(enc, .buffer(aBuf), .buffer(output), .uint(UInt32(middleCount)))
+          try setArguments(enc, .buffer(aBuf), .buffer(output), .uint(UInt32(dims.reduceCount)))
 
           let functionName = "log_softmax_\(MPSBackend.CastTypes[dtype]!)"
           let state = try getFunction(name: functionName)
-          let gridSize = MTLSize(width: outerCount * 256, height: 1, depth: 1)
+          let gridSize = MTLSize(width: dims.outerCount * 256, height: 1, depth: 1)
           let threadGroupSize = MTLSize(width: 256, height: 1, depth: 1)
           enc.setComputePipelineState(state)
           enc.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
@@ -1426,7 +1425,8 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let op = self.createLogSoftmax(
-        outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: mpsDType)
+        outerCount: dims.outerCount, middleCount: dims.reduceCount, innerCount: dims.innerCount,
+        dtype: mpsDType)
       let completion = completionBuffer(label: "logSoftmax") { buf in
         op.graph.encode(
           to: buf as! MPSCommandBuffer,
@@ -1482,24 +1482,22 @@ open class MPSBackend: CPUBackend {
   }
 
   override public func logSoftmaxGrad(
-    _ a: Tensor.Data, _ outGrad: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int,
-    dtype: Tensor.DType
+    _ a: Tensor.Data, _ outGrad: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     guard let mpsDType = dtype.mpsDType else {
-      return try await super.logSoftmax(
-        a, outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: dtype)
+      return try await super.logSoftmaxGrad(a, outGrad, dims: dims, dtype: dtype)
     }
 
     let aBuf = try await gpuBuffer(a)
     let outGradBuf = try await gpuBuffer(outGrad)
 
-    let totalCount = outerCount * middleCount * innerCount
+    let totalCount = dims.outerCount * dims.reduceCount * dims.innerCount
     let output = try await allocate(length: totalCount * dtype.byteSize)
 
-    if innerCount == 1 && (dtype == .float16 || dtype == .float32) {
+    if dims.innerCount == 1 && (dtype == .float16 || dtype == .float32) {
       return try await serialize { [self] in
         let completion = try completionBufferAndEncoder(label: "logSoftmaxGrad") { buf, enc in
           try setArguments(
@@ -1507,12 +1505,12 @@ open class MPSBackend: CPUBackend {
             .buffer(aBuf),
             .buffer(outGradBuf),
             .buffer(output),
-            .uint(UInt32(middleCount))
+            .uint(UInt32(dims.reduceCount))
           )
 
           let functionName = "log_softmax_grad_\(MPSBackend.CastTypes[dtype]!)"
           let state = try getFunction(name: functionName)
-          let gridSize = MTLSize(width: outerCount * 256, height: 1, depth: 1)
+          let gridSize = MTLSize(width: dims.outerCount * 256, height: 1, depth: 1)
           let threadGroupSize = MTLSize(width: 256, height: 1, depth: 1)
           enc.setComputePipelineState(state)
           enc.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
@@ -1523,7 +1521,8 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let op = self.createLogSoftmaxGrad(
-        outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: mpsDType)
+        outerCount: dims.outerCount, middleCount: dims.reduceCount, innerCount: dims.innerCount,
+        dtype: mpsDType)
       let completion = completionBuffer(label: "logSoftmaxGrad") { buf in
         op.graph.encode(
           to: buf as! MPSCommandBuffer,

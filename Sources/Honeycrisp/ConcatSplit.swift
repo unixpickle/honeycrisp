@@ -1,6 +1,10 @@
 import HCBacktrace
 
 extension Tensor {
+  /// Concatenate tensors along the given axis.
+  ///
+  /// All `Tensor`s must have the same ``Tensor/dtype`` and number of dimensions.
+  /// The shape of the `Tensor`s must match except along the given axis.
   public convenience init(
     concat tensors: [Tensor],
     axis: Int = 0,

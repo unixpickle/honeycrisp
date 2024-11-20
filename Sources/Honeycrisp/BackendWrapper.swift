@@ -197,25 +197,21 @@ open class BackendWrapper: Backend {
   }
 
   override public func logSoftmax(
-    _ a: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int, dtype: Tensor.DType
+    _ a: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.logSoftmax(
-      a, outerCount: outerCount, middleCount: middleCount, innerCount: innerCount, dtype: dtype)
+    try await wrapped.logSoftmax(a, dims: dims, dtype: dtype)
   }
 
   override public func logSoftmaxGrad(
-    _ a: Tensor.Data, _ outGrad: Tensor.Data, outerCount: Int, middleCount: Int, innerCount: Int,
-    dtype: Tensor.DType
+    _ a: Tensor.Data, _ outGrad: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.logSoftmaxGrad(
-      a, outGrad, outerCount: outerCount, middleCount: middleCount, innerCount: innerCount,
-      dtype: dtype)
+    try await wrapped.logSoftmaxGrad(a, outGrad, dims: dims, dtype: dtype)
 
   }
 
