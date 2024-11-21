@@ -1412,33 +1412,11 @@ open class CPUBackend: Backend {
   )
     async throws -> Tensor.Data
   {
-    let count = collection.count
+    let arr = (reverse ? collection.reversed() : Array(collection))
+    let count = arr.count
     return try await withBuffers(count * dtype.byteSize) { buffer in
-      // This is a ~50x speed-up compared to the generic path, even in release mode.
-      if let arr = (collection as? [T]), !reverse {
-        try await serialize {
-          try arrayToPointer(arr, output: buffer, dtype: dtype)
-        }
-        return
-      }
-
-      func apply<T1: TensorElement>(_ collection: some Sequence<T1>) async throws {
-        try await serialize {
-          try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in
-            for (i, x) in collection.enumerated() {
-              if reverse {
-                out[count - (i + 1)] = x
-              } else {
-                out[i] = x
-              }
-            }
-          }
-        }
-      }
-      if dtype == .int64 {
-        try await apply(collection.map { $0.toInt64() })
-      } else {
-        try await apply(collection.map { $0.toFloat() })
+      try await serialize {
+        try arrayToPointer(arr, output: buffer, dtype: dtype)
       }
     }
   }

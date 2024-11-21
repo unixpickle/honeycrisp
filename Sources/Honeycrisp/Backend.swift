@@ -6,6 +6,7 @@ import HCBacktrace
 public enum BackendError: Error {
   case notImplemented(String)
   case failedToCreateMTLDevice
+  case failedToCreateMTLBuffer
   case failedToCreateCommandQueue
   case allocationFailed(Int)
   case kernelFailed(String)

@@ -414,13 +414,29 @@ open class MPSBackend: CPUBackend {
     if let data = data as? GPUData, data.backend === self {
       return data.buffer
     }
-    let gpuBuf = try await allocateBuf(data.byteCount)
-    try await data.onCPU { src in
-      try await serialize {
-        gpuBuf.contents().copyMemory(from: src, byteCount: data.byteCount)
+    // Create an MPSBuffer which, while in use, maintains a background Task
+    // inside of an onCPU call on the original data.
+    return try await withCheckedThrowingContinuation { outerContinuation in
+      Task.detached {
+        try await data.onCPU { cpuBuffer in
+          try await withCheckedThrowingContinuation { innerContinuation in
+            guard
+              let buffer = self.device.makeBuffer(
+                bytesNoCopy: UnsafeMutableRawPointer(mutating: cpuBuffer),
+                length: data.byteCount,
+                options: .init(arrayLiteral: [.storageModeShared]),
+                deallocator: { _, _ in innerContinuation.resume() }
+              )
+            else {
+              outerContinuation.resume(throwing: BackendError.failedToCreateMTLBuffer)
+              innerContinuation.resume(throwing: BackendError.failedToCreateMTLBuffer)
+              return
+            }
+            outerContinuation.resume(returning: buffer)
+          }
+        }
       }
     }
-    return gpuBuf
   }
 
   internal func getFunction(name: String) throws -> MTLComputePipelineState {
