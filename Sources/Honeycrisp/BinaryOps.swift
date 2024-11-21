@@ -1,3 +1,4 @@
+/// A binary operator which can be performed on numeric ``Tensor``s.
 public enum NumericBinaryOp {
   case add
   case mul

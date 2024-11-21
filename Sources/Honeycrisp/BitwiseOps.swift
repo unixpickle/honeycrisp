@@ -1,5 +1,6 @@
 import HCBacktrace
 
+/// A value which can be used as a bit pattern for bitwise operators on a ``Tensor``.
 public protocol TensorElementBitPattern {
   init(_: Int)
 }
@@ -33,6 +34,7 @@ extension TensorElementBitPattern {
   }
 }
 
+/// A bitwise operator which can be performed on a pair of ``Tensor``s.
 public enum BitwiseOp {
   case or
   case and

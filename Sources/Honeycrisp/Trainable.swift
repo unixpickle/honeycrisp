@@ -1,6 +1,7 @@
 import Foundation
 import HCBacktrace
 
+/// A protocol for representing both `Tensor?` and `Tensor`.
 public protocol MaybeTensor {
   var isNil: Bool { get }
 

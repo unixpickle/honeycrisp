@@ -1,5 +1,6 @@
 import HCBacktrace
 
+/// An error produced when creating an invalid ``ConvConfig``.
 public enum ConvConfigError: Error {
   case invalidGroups(String)
 }
@@ -177,6 +178,8 @@ public struct SpatialDim2D: SpatialDim {
   }
 }
 
+/// A description of an N-dimensional convolution operator.
+/// See ``Conv1DConfig`` and ``Conv2DConfig`` for concrete aliases.
 public struct ConvConfig<Dim: SpatialDim>: Hashable {
   public typealias Dim = Dim
 

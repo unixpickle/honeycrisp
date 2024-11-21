@@ -3,6 +3,7 @@ import Foundation
 import HCBacktrace
 import Metal
 
+/// An error produced by a ``Backend`` implementation.
 public enum BackendError: Error {
   case notImplemented(String)
   case failedToCreateMTLDevice

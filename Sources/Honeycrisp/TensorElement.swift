@@ -7,20 +7,33 @@ enum ConversionError: Error {
   case vImageError(String)
 }
 
+/// A native numeric or boolean value which can represent a single element of a ``Tensor``.
 public protocol TensorElement: Comparable {
+  /// If true, then ``TensorElement/toFloat()`` may lose information.
   static var isFloatLossy: Bool { get }
+
+  /// If true, then ``TensorElement/toInt64()`` may lose information.
   static var isInt64Lossy: Bool { get }
+
+  /// If false, then ``TensorElement/toInt64()`` will return `0` or `1`.
   static var isBoolLossy: Bool { get }
+
+  /// Get the default tensor datatype for this scalar type.
   static var dtype: Tensor.DType { get }
 
   init(_ value: Float)
   init(_ value: Int64)
+
+  /// Obtain a floating-point representation of this value.
   func toFloat() -> Float
+
+  /// Obtain an integer representation of this value, possibly rounding.
   func toInt64() -> Int64
 
   static func == (lhs: Self, rhs: Self) -> Bool
 }
 
+/// A ``TensorElement`` which supports numerical operations.
 public protocol NumericTensorElement: TensorElement, Strideable {
   func pow<T: TensorElement>(_ exponent: T) -> Self
 

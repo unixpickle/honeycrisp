@@ -1,6 +1,7 @@
 import Foundation
 import HCBacktrace
 
+/// A probability distribution over continuous values.
 public enum RandomDist {
   case uniform
   case normal

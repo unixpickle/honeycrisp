@@ -1,6 +1,7 @@
 import Foundation
 import HCBacktrace
 
+/// An element-wise operation which can be applied to a numeric ``Tensor``.
 public enum ElemwiseOp {
   case sin
   case cos

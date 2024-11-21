@@ -1,15 +1,34 @@
 import HCBacktrace
 
+/// A low-level description of indexing for a gather or scatter operation.
 public struct ScatterGatherIndices {
+  /// If true, then the indices are broadcasted along all non-indexed dimensions.
+  /// Otherwise, there is a unique index for every output position in the tensor.
   public let broadcasted: Bool
+
+  /// The int64 tensor data containing the indices.
   public let indices: Tensor.Data
+
+  /// If `true`, then no index is repeated inside of ``ScatterGatherIndices/indices``.
+  ///
+  /// This is used to determine if reduction is necessary during a scatter.
   public let indicesAreUnique: Bool
+
+  /// The new size of the gathered dimension.
   public let outCount: Int
 
+  /// The product of all leading dimensions before the affected axis.
   public let outerCount: Int
+
+  /// The size of the gathered dimension before the gather.
   public let middleCount: Int
+
+  /// The product of all trailing dimensions after the affected axis.
   public let innerCount: Int
 
+  /// The number of indices in the ``ScatterGatherIndices/indices`` data.
+  ///
+  /// This depends on whether this operation is broadcasted.
   public var indicesCount: Int {
     if broadcasted {
       outCount
@@ -18,10 +37,12 @@ public struct ScatterGatherIndices {
     }
   }
 
+  /// The number of input elements for a gather, or output elements for a scatter.
   public var gatherInCount: Int {
     outerCount * middleCount * innerCount
   }
 
+  /// The number of output elements for a gather, or input elements for a scatter.
   public var gatherOutCount: Int {
     outerCount * outCount * innerCount
   }

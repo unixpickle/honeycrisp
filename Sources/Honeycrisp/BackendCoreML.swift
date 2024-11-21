@@ -1,7 +1,7 @@
 import CoreML
 import CoreMLBuilder
 
-/// A backend which replaces certain operations with CoreML programs,
+/// A ``Backend`` which replaces certain operations with CoreML programs,
 /// possibly allowing the use of the Apple Neural Engine (ANE).
 open class CoreMLBackend: BackendWrapper {
 

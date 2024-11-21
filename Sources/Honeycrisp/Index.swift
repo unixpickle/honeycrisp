@@ -33,6 +33,7 @@ public struct TensorIndexResult {
   public let gatherReshape: [Int]?
 }
 
+/// A type which can be used within a subscript of a ``Tensor``.
 public protocol TensorIndex {
   /// The minimum number of dimensions in a Tensor shape that supports this index.
   var minTensorIndexDims: Int { get }
@@ -113,6 +114,7 @@ extension ClosedRange<Int>: TensorIndex {
   }
 }
 
+/// A ``TensorIndex`` which leaves one or more axes unchanged during indexing.
 public struct FullRange: TensorIndex {
   public let count: Int
 
@@ -133,6 +135,13 @@ public struct FullRange: TensorIndex {
   }
 }
 
+/// A ``TensorIndex`` which creates a new axis at this position.
+///
+/// For example, if `tensor` has shape `[3, 4, 5]`, then you can create a new tensor
+/// of shape `[3, 1, 4, 5]` using:
+///
+///     tensor[..., NewAxis()]
+///
 public struct NewAxis: TensorIndex {
   public let count: Int
 
@@ -189,6 +198,7 @@ extension PartialRangeThrough<Int>: TensorIndex {
   }
 }
 
+/// A ``TensorIndex`` which reverses the order of an axis.
 public struct FlipAxis: TensorIndex {
   public var minTensorIndexDims: Int { 1 }
 
@@ -202,6 +212,9 @@ public struct FlipAxis: TensorIndex {
   }
 }
 
+/// A ``TensorIndex`` which permutes axes in a ``Tensor``.
+///
+/// For example, `tensor[PermuteAxes(0, 2, 1)]` will swap the second and third axes of `tensor`.
 public struct PermuteAxes: TensorIndex {
   public let perm: [Int]
 

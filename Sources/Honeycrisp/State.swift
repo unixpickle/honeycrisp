@@ -1,6 +1,10 @@
 import Foundation
 import HCBacktrace
 
+/// A concrete, CPU-accessible description of the state of a ``Tensor``.
+///
+/// This is intended to be used with ``Tensor/init(state:)`` and obtained via
+/// ``Tensor/state(function:file:line:)``.
 public struct TensorState: Codable {
   public enum TensorData {
     case floats([Float])

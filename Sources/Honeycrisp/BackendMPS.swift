@@ -5,6 +5,8 @@ import Metal
 import MetalPerformanceShaders
 import MetalPerformanceShadersGraph
 
+/// A ``Backend`` which uses Metal Performance Shaders and custom kernels to
+/// implement operations on the GPU.
 open class MPSBackend: CPUBackend {
 
   internal struct GPUData: Tensor.Data {

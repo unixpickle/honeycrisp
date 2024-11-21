@@ -4,6 +4,8 @@ import Metal
 import MetalPerformanceShaders
 import MetalPerformanceShadersGraph
 
+/// A ``Backend`` which wraps another `Backend`, intended to be sub-classed to override
+/// a selection of methods from a wrapped implementation.
 open class BackendWrapper: Backend {
 
   public class WrappedRandomGenerator<B: BackendWrapper>: RandomGenerator {

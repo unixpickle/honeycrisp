@@ -1,5 +1,9 @@
 import Foundation
 
+/// Iterate through a synchronous iterator in a background thread and push
+/// the results to an asynchronous stream.
+///
+/// Buffers `bufferSize` elements in memory.
 public func loadDataInBackground<T, S: Sequence<Result<T, Error>>>(_ it: S, bufferSize: Int = 2)
   -> AsyncThrowingStream<T, Error>
 where T: Sendable, S: Sendable {

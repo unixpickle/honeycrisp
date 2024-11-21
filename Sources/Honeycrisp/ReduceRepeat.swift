@@ -1,6 +1,14 @@
 import Foundation
 import HCBacktrace
 
+/// Description of the axis along which to perform a reduction operation.
+///
+/// The `outerCount` is the product of the leading dimensions before the reduction.
+/// The `innerCount` is the product of the trailing dimensions after the reduction.
+/// Suppose we would like to reduce axis 2 of a tensor of shape `[3, 5, 7, 1, 9]`.
+/// The `reduceCount` would be `shape[2]`, i.e. `7`.
+/// The `outerCount` would be `3 * 5`, i.e. `15`.
+/// The `innerCount` would be `1 * 9`, i.e. `9`.
 public struct ReduceDims: Hashable {
   let outerCount: Int
   let reduceCount: Int
@@ -23,6 +31,7 @@ public struct ReduceDims: Hashable {
   }
 }
 
+/// A structure representing the inverse of a ``ReduceDims``.
 public struct RepeatDims: Hashable {
   public let outerCount: Int
   public let repeatCount: Int
@@ -41,6 +50,7 @@ public struct RepeatDims: Hashable {
   }
 }
 
+/// A reduction operation which can be applied to a ``Tensor``.
 public enum ReduceOp {
   case sum
   case argmax

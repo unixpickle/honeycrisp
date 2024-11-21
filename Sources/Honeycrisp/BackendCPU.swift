@@ -2,6 +2,10 @@ import Accelerate
 import Foundation
 import HCBacktrace
 
+/// A ``Backend`` with CPU-only implementations of every operation.
+///
+/// This may use accelerated APIs to speed up computation, but all computations will still
+/// be done on the CPU (rather than the GPU or the ANE).
 open class CPUBackend: Backend {
 
   public struct CPUData: Tensor.Data {

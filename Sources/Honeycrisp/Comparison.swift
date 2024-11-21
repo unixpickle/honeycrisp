@@ -1,5 +1,6 @@
 import HCBacktrace
 
+/// A comparison operator which can be performed between ``Tensor``s.
 public enum ComparisonOp {
   case equal
   case less
