@@ -1,7 +1,6 @@
 import Accelerate
 import Foundation
 import HCBacktrace
-import Metal
 
 /// An error produced by a ``Backend`` implementation.
 public enum BackendError: Error {
@@ -35,19 +34,6 @@ open class Backend {
         t.strides
       case .scalar(_, let s):
         BroadcastStrides(dataCount: 1, outerRepeats: s, innerRepeats: 1)
-      }
-    }
-
-    internal func makeOrGetBuffer(_ b: Backend, _ dtype: Tensor.DType) async throws -> MTLBuffer {
-      switch self {
-      case .tensor(let t):
-        try await t.data.cpuBuffer
-      case .scalar(let s, _):
-        try await {
-          let buf = try await b.allocate(length: dtype.byteSize)
-          try arrayToPointer([s], output: buf.contents(), dtype: dtype)
-          return buf
-        }()
       }
     }
   }
@@ -164,11 +150,6 @@ open class Backend {
     public func schedule(_ job: @escaping Job) {
       queue.put(job)
     }
-  }
-
-  /// Create a buffer of the given byte length.
-  public func allocate(length: Int) async throws -> MTLBuffer {
-    throw BackendError.notImplemented("allocate")
   }
 
   /// Perform a broadcasted binary operator between two tensors.

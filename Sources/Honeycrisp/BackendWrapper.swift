@@ -50,10 +50,6 @@ open class BackendWrapper: Backend {
     wrapped = wrapping
   }
 
-  override public func allocate(length: Int) async throws -> MTLBuffer {
-    try await wrapped.allocate(length: length)
-  }
-
   override public func binaryOp(
     _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int,
     dtype: Tensor.DType

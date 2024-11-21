@@ -255,7 +255,7 @@ func convertFloatToHalf(
 }
 
 func pointerToArray<T: TensorElement>(
-  _ input: UnsafeMutableRawPointer, output: inout [T], dtype: Tensor.DType
+  _ input: UnsafeRawPointer, output: inout [T], dtype: Tensor.DType
 ) throws {
   switch dtype {
   case .bool:
@@ -268,7 +268,8 @@ func pointerToArray<T: TensorElement>(
     var resultFloats = [Float](repeating: 0, count: output.count)
     try resultFloats.withUnsafeMutableBufferPointer { buffer in
       try convertHalfToFloat(
-        input, UnsafeMutableRawPointer(OpaquePointer(buffer.baseAddress!)), count: output.count)
+        UnsafeMutableRawPointer(mutating: input),
+        UnsafeMutableRawPointer(OpaquePointer(buffer.baseAddress!)), count: output.count)
     }
     for (i, x) in resultFloats.enumerated() {
       output[i] = T(x)

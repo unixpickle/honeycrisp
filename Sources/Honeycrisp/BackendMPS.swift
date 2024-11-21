@@ -14,14 +14,29 @@ open class MPSBackend: CPUBackend {
     public let buffer: MTLBuffer
     public let completion: Task<Void, Error>?
 
-    public var cpuBuffer: MTLBuffer {
-      get async throws {
-        if let completion = completion {
-          let _ = try await completion.value
-        }
-        return buffer
+    public var byteCount: Int { buffer.allocatedSize }
+
+    public func onCPU<T>(_ fn: (_: UnsafeRawPointer) async throws -> T) async throws -> T {
+      if let completion = completion {
+        let _ = try await completion.value
       }
+      return try await fn(buffer.contents())
     }
+
+    public func mutateOnCPU<T>(_ fn: (_: UnsafeMutableRawPointer) async throws -> T) async throws
+      -> T
+    {
+      if let completion = completion {
+        let _ = try await completion.value
+      }
+      return try await fn(buffer.contents())
+    }
+  }
+
+  public enum Allocator {
+    case device
+    case bucket
+    case heap(Int)
   }
 
   private struct MatmulKey: Hashable {
@@ -136,7 +151,7 @@ open class MPSBackend: CPUBackend {
 
       let functionName =
         "\(dist == .normal ? "randn" : "rand")_\(MPSBackend.CastTypes[dtype]!)"
-      let output = try await mpsBackend.allocate(length: count * dtype.byteSize)
+      let output = try await mpsBackend.allocateBuf(count * dtype.byteSize)
 
       return try await mpsBackend.serialize { [self] in
         let completion = try mpsBackend.completionBufferAndEncoder(label: "sample") { buf, enc in
@@ -158,7 +173,7 @@ open class MPSBackend: CPUBackend {
     {
       alwaysAssert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
 
-      let output = try await mpsBackend.allocate(length: count * Tensor.DType.int64.byteSize)
+      let output = try await mpsBackend.allocateBuf(count * Tensor.DType.int64.byteSize)
 
       return try await mpsBackend.serialize { [self] in
         let completion = try mpsBackend.completionBufferAndEncoder(label: "sampleInt") { buf, enc in
@@ -185,6 +200,8 @@ open class MPSBackend: CPUBackend {
     .float16: "half", .float32: "float", .int64: "long",
   ]
 
+  public let device: MTLDevice
+
   private var queue = DispatchQueue(label: "mps-backend-worker")
   private var commandQueue: MTLCommandQueue? = nil
   private var matmuls: [MatmulKey: TwoToOneGraph] = [:]
@@ -196,12 +213,16 @@ open class MPSBackend: CPUBackend {
   private var defaultRNG: MPSRandomGenerator? = nil
   private var functions: [String: MTLComputePipelineState] = [:]
 
+  // Allocator state.
+  internal var allocBucketsLock = NSLock()
+  internal var allocBuckets: [Int: [MTLBuffer]]? = nil
+  internal var heap: MTLHeap? = nil
+
   public init(
     device: MTLDevice? = nil, commandQueue: MTLCommandQueue? = nil, allocator: Allocator = .device
   ) throws {
-    super.init()
     if let device = device {
-      self._device = device
+      self.device = device
       if let commandQueue = commandQueue {
         self.commandQueue = commandQueue
       } else {
@@ -215,21 +236,25 @@ open class MPSBackend: CPUBackend {
       guard let d = MTLCreateSystemDefaultDevice() else {
         throw BackendError.failedToCreateMTLDevice
       }
-      self._device = d
+      self.device = d
       guard let q = d.makeCommandQueue() else {
         throw BackendError.failedToCreateCommandQueue
       }
       self.commandQueue = q
     }
+    super.init()
     try self.initAllocator(allocator)
+    try self.initFunctions()
+  }
 
+  internal func initFunctions() throws {
     guard let fileURL = Bundle.module.url(forResource: "kernels", withExtension: "metal") else {
       throw BackendError.failedToLoadKernels("kernels.metal could not be found")
     }
     guard let sourceStr = String(data: try Data(contentsOf: fileURL), encoding: .utf8) else {
       throw BackendError.failedToLoadKernels("kernels source code was not a utf-8 string")
     }
-    let library = try (self._device!).makeLibrary(source: sourceStr, options: MTLCompileOptions())
+    let library = try device.makeLibrary(source: sourceStr, options: MTLCompileOptions())
 
     // Lookup all functions in the library.
     var names = ["axis_permutation"]
@@ -279,15 +304,123 @@ open class MPSBackend: CPUBackend {
       guard let f = library.makeFunction(name: name) else {
         throw BackendError.kernelFailed("could not create kernel with name '\(name)'")
       }
-      functions[name] = try (self._device!).makeComputePipelineState(function: f)
+      functions[name] = try device.makeComputePipelineState(function: f)
     }
+  }
+
+  internal func initAllocator(_ allocator: Allocator) throws {
+    switch allocator {
+    case .device:
+      ()
+    case .bucket:
+      allocBuckets = [:]
+    case .heap(let size):
+      let desc = MTLHeapDescriptor()
+      desc.size = size
+      desc.hazardTrackingMode = .tracked
+      desc.storageMode = .shared
+      guard let h = device.makeHeap(descriptor: desc) else {
+        throw BackendError.allocationFailed(size)
+      }
+      heap = h
+    }
+  }
+
+  override internal func allocate(_ byteCount: Int) async throws -> Tensor.Data {
+    return GPUData(backend: self, buffer: try await allocateBuf(byteCount), completion: nil)
+  }
+
+  internal func allocateBuf(_ byteCount: Int) async throws -> MTLBuffer {
+    if allocBuckets != nil {
+      let bucket = nextAllocatorBucket(byteCount)
+      let rawResult =
+        if let item = allocBucketsLock.withLock({ allocBuckets![bucket]?.popLast() }) {
+          item
+        } else {
+          try await allocRaw(bucket)
+        }
+      return try bucketBuffer(rawResult, bucket: bucket, byteCount: byteCount)
+    }
+    return try await allocRaw(byteCount)
+  }
+
+  internal func allocateSync(_ byteCount: Int) throws -> MTLBuffer {
+    if allocBuckets != nil {
+      let bucket = nextAllocatorBucket(byteCount)
+      let rawResult =
+        if let item = allocBucketsLock.withLock({ allocBuckets![bucket]?.popLast() }) {
+          item
+        } else {
+          try allocRawSync(bucket)
+        }
+      return try bucketBuffer(rawResult, bucket: bucket, byteCount: byteCount)
+    }
+    return try allocRawSync(byteCount)
+  }
+
+  private func allocRaw(_ byteCount: Int) async throws -> MTLBuffer {
+    return try await serialize { [self] in
+      try allocRawSync(byteCount)
+    }
+  }
+
+  private func allocRawSync(_ byteCount: Int) throws -> MTLBuffer {
+    let maybeBuffer =
+      if let heap = heap {
+        heap.makeBuffer(length: max(1, byteCount), options: [.storageModeShared])
+      } else {
+        device.makeBuffer(length: max(1, byteCount), options: [.storageModeShared])
+      }
+
+    guard let result = maybeBuffer else {
+      throw BackendError.allocationFailed(byteCount)
+    }
+    #if DEBUG
+      // Fill the data with garbage to catch methods that assume
+      // zero initialization.
+      let bound = result.contents().bindMemory(to: UInt8.self, capacity: byteCount)
+      let noise = (0..<3).map({ _ in UInt8.random(in: 0...255) })
+      for i in 0..<byteCount {
+        bound[i] = noise[i % 3]
+      }
+    #endif
+    return result
+  }
+
+  internal func bucketBuffer(_ rawBuffer: MTLBuffer, bucket: Int, byteCount: Int) throws
+    -> MTLBuffer
+  {
+    let maybeResult = device.makeBuffer(
+      bytesNoCopy: rawBuffer.contents(), length: max(byteCount, 1), options: [.storageModeShared],
+      deallocator: { [weak self] _, _ in
+        if let self = self {
+          self.allocBucketsLock.withLock {
+            if self.allocBuckets![bucket] == nil {
+              self.allocBuckets![bucket] = [rawBuffer]
+            } else {
+              self.allocBuckets![bucket]!.append(rawBuffer)
+            }
+          }
+        }
+      }
+    )
+    guard let result = maybeResult else {
+      throw BackendError.allocationFailed(byteCount)
+    }
+    return result
   }
 
   internal func gpuBuffer(_ data: Tensor.Data) async throws -> MTLBuffer {
     if let data = data as? GPUData, data.backend === self {
       return data.buffer
     }
-    return try await data.cpuBuffer
+    let gpuBuf = try await allocateBuf(data.byteCount)
+    try await data.onCPU { src in
+      try await serialize {
+        gpuBuf.contents().copyMemory(from: src, byteCount: data.byteCount)
+      }
+    }
+    return gpuBuf
   }
 
   internal func getFunction(name: String) throws -> MTLComputePipelineState {
@@ -315,7 +448,7 @@ open class MPSBackend: CPUBackend {
       } else {
         nil
       }
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "pow") { buf, enc in
@@ -397,7 +530,7 @@ open class MPSBackend: CPUBackend {
       } else {
         nil
       }
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "elemwise") { buf, enc in
@@ -471,7 +604,7 @@ open class MPSBackend: CPUBackend {
 
     let aBuf = try await gpuBuffer(a.data)
     let bBuf = try await gpuBuffer(b.data)
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "binaryOp") { buf, enc in
@@ -508,7 +641,7 @@ open class MPSBackend: CPUBackend {
     let functionName = "\(opName)_vs_\(typeName)"
 
     let aBuf = try await gpuBuffer(a)
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "binaryOp") { buf, enc in
@@ -537,7 +670,7 @@ open class MPSBackend: CPUBackend {
     let functionName = "\(opName)_sv_\(typeName)"
 
     let bBuf = try await gpuBuffer(b)
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "binaryOp") { buf, enc in
@@ -582,7 +715,7 @@ open class MPSBackend: CPUBackend {
 
     let aBuf = try await gpuBuffer(a.data)
     let bBuf = try await gpuBuffer(b.data)
-    let output = try await allocate(length: count * Tensor.DType.bool.byteSize)
+    let output = try await allocateBuf(count * Tensor.DType.bool.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "compare") { buf, enc in
@@ -619,7 +752,7 @@ open class MPSBackend: CPUBackend {
     let functionName = "\(opName)_vs_\(typeName)"
 
     let aBuf = try await gpuBuffer(a)
-    let output = try await allocate(length: count * Tensor.DType.bool.byteSize)
+    let output = try await allocateBuf(count * Tensor.DType.bool.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "compare") { buf, enc in
@@ -648,7 +781,7 @@ open class MPSBackend: CPUBackend {
     let functionName = "\(opName)_sv_\(typeName)"
 
     let bBuf = try await gpuBuffer(b)
-    let output = try await allocate(length: count * Tensor.DType.bool.byteSize)
+    let output = try await allocateBuf(count * Tensor.DType.bool.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "compare") { buf, enc in
@@ -685,7 +818,7 @@ open class MPSBackend: CPUBackend {
 
     let aBuf = try await gpuBuffer(a.data)
     let bBuf = try await gpuBuffer(b.data)
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "bitwiseOp") { buf, enc in
@@ -720,7 +853,7 @@ open class MPSBackend: CPUBackend {
     let aBuf = try await gpuBuffer(a)
     let bData = b.bitsForBitwiseOp
     alwaysAssert(bData.count == dtype.byteSize)
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "bitwiseOp") { buf, enc in
@@ -755,7 +888,7 @@ open class MPSBackend: CPUBackend {
     let bBuf = try await gpuBuffer(b)
     let aData = a.bitsForBitwiseOp
     alwaysAssert(aData.count == dtype.byteSize)
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "bitwiseOp") { buf, enc in
@@ -816,7 +949,7 @@ open class MPSBackend: CPUBackend {
     let inBuf = try await gpuBuffer(input.data)
     let aBuf = try await gpuBuffer(a.data)
     let bBuf = try await gpuBuffer(b.data)
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "addMulOrMulAdd") { buf, enc in
@@ -851,7 +984,7 @@ open class MPSBackend: CPUBackend {
     let inBuf = try await gpuBuffer(input.data)
     let meanBuf = try await gpuBuffer(mean.data)
     let varianceBuf = try await gpuBuffer(variance.data)
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "normalize") { buf, enc in
@@ -895,7 +1028,7 @@ open class MPSBackend: CPUBackend {
 
     let varianceBuf = try await gpuBuffer(variance.data)
     let outGradBuf = try await gpuBuffer(outGrad.data)
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "normalizeXGrad") { buf, enc in
@@ -938,7 +1071,7 @@ open class MPSBackend: CPUBackend {
     let meanBuf = try await gpuBuffer(mean.data)
     let varianceBuf = try await gpuBuffer(variance.data)
     let outGradBuf = try await gpuBuffer(outGrad.data)
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "normalizeVarianceGrad") { buf, enc in
@@ -981,7 +1114,7 @@ open class MPSBackend: CPUBackend {
     let functionName = "cast_\(inTypeName)_\(outTypeName)"
 
     let aBuf = try await gpuBuffer(a)
-    let output = try await allocate(length: count * outType.byteSize)
+    let output = try await allocateBuf(count * outType.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "cast") { buf, enc in
@@ -1007,7 +1140,7 @@ open class MPSBackend: CPUBackend {
     let functionName = "clamp_\(typeName)"
 
     let aBuf = try await gpuBuffer(a)
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "clamp") { buf, enc in
@@ -1039,7 +1172,7 @@ open class MPSBackend: CPUBackend {
       try await gpuBuffer(t.data)
     case .scalar(let s, _):
       try await {
-        let buf = try await allocate(length: dtype.byteSize)
+        let buf = try await allocateBuf(dtype.byteSize)
         try arrayToPointer([s], output: buf.contents(), dtype: dtype)
         return buf
       }()
@@ -1062,7 +1195,7 @@ open class MPSBackend: CPUBackend {
     let aStrides = a.strides
     let bStrides = b.strides
 
-    let output = try await allocate(length: count * dtype.byteSize)
+    let output = try await allocateBuf(count * dtype.byteSize)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "when") { buf, enc in
         let typeName = dtype.metalSizeType
@@ -1105,7 +1238,7 @@ open class MPSBackend: CPUBackend {
     let typeName = dtype.metalSizeType
 
     let aBuf = try await gpuBuffer(a)
-    let output = try await allocate(length: outCount * dtype.byteSize)
+    let output = try await allocateBuf(outCount * dtype.byteSize)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "repeated") { buf, enc in
@@ -1134,7 +1267,7 @@ open class MPSBackend: CPUBackend {
       inBufs.append(try await gpuBuffer(input))
     }
     let totalInner = innerCounts.sum()
-    let buffer = try await allocate(length: outerCount * totalInner * dtype.byteSize)
+    let buffer = try await allocateBuf(outerCount * totalInner * dtype.byteSize)
 
     let typeName = dtype.metalSizeType
 
@@ -1164,7 +1297,7 @@ open class MPSBackend: CPUBackend {
   {
     let aBuf = try await gpuBuffer(a)
     let idxBuf = try await gpuBuffer(s.indices)
-    let output = try await allocate(length: s.gatherOutCount * dtype.byteSize)
+    let output = try await allocateBuf(s.gatherOutCount * dtype.byteSize)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(label: "gather") { buf, enc in
         let typeName = dtype.metalSizeType
@@ -1196,7 +1329,7 @@ open class MPSBackend: CPUBackend {
     let idxBuf = try await gpuBuffer(s.indices)
 
     let outBytes = s.gatherInCount * dtype.byteSize
-    let output = try await allocate(length: outBytes)
+    let output = try await allocateBuf(outBytes)
 
     if !s.indicesAreUnique, let mpsDType = dtype.mpsDType {
       return try await serialize { [self] in
@@ -1301,7 +1434,7 @@ open class MPSBackend: CPUBackend {
     let outputCount = shape.product()
     alwaysAssert(outputCount <= Int(UInt32.max), "cannot apply kernel to this many values")
 
-    let buffer = try await allocate(length: outputCount * Tensor.DType.int64.byteSize)
+    let buffer = try await allocateBuf(outputCount * Tensor.DType.int64.byteSize)
     return try await serialize { [self] in
       let oldStrides = stridesForShape(shape)
       let permutedStrides = permutation.map { oldStrides[$0] }
@@ -1337,8 +1470,8 @@ open class MPSBackend: CPUBackend {
     }
 
     let aBuf = try await gpuBuffer(a)
-    let output = try await allocate(
-      length: dims.outCount * (op == .sum ? dtype : Tensor.DType.int64).byteSize)
+    let output = try await allocateBuf(
+      dims.outCount * (op == .sum ? dtype : Tensor.DType.int64).byteSize)
     return try await serialize { [self] in
       let red = self.createReduction(op: op, dims: dims, dtype: mpsDType)
       let completion = completionBuffer(label: "reduce") { buf in
@@ -1407,7 +1540,7 @@ open class MPSBackend: CPUBackend {
 
     let totalCount = dims.outerCount * dims.reduceCount * dims.innerCount
     let aBuf = try await gpuBuffer(a)
-    let output = try await allocate(length: totalCount * dtype.byteSize)
+    let output = try await allocateBuf(totalCount * dtype.byteSize)
 
     if dims.innerCount == 1 && (dtype == .float16 || dtype == .float32) {
       return try await serialize { [self] in
@@ -1497,7 +1630,7 @@ open class MPSBackend: CPUBackend {
     let outGradBuf = try await gpuBuffer(outGrad)
 
     let totalCount = dims.outerCount * dims.reduceCount * dims.innerCount
-    let output = try await allocate(length: totalCount * dtype.byteSize)
+    let output = try await allocateBuf(totalCount * dtype.byteSize)
 
     if dims.innerCount == 1 && (dtype == .float16 || dtype == .float32) {
       return try await serialize { [self] in
@@ -1621,7 +1754,7 @@ open class MPSBackend: CPUBackend {
 
     let aBuf = try await gpuBuffer(a)
     let bBuf = try await gpuBuffer(b)
-    let output = try await allocate(length: matrixCount * rows * cols * dtype.byteSize)
+    let output = try await allocateBuf(matrixCount * rows * cols * dtype.byteSize)
 
     return try await serialize { [self] in
       let mm = self.createMatmul(
@@ -1734,7 +1867,7 @@ open class MPSBackend: CPUBackend {
       transpose ? config.imageTensorShape(batch: batch) : config.outputTensorShape(batch: batch)
     let imageBuf = try await gpuBuffer(image)
     let kernelBuf = try await gpuBuffer(kernel)
-    let output = try await allocate(length: outShape.product() * dtype.byteSize)
+    let output = try await allocateBuf(outShape.product() * dtype.byteSize)
 
     return try await serialize { [self] in
       let op = try self.createConv2D(
@@ -1849,7 +1982,7 @@ open class MPSBackend: CPUBackend {
     let outShape = config.outputTensorShape(batch: batch)
     let imageBuf = try await gpuBuffer(image)
     let outGradBuf = try await gpuBuffer(outGrad)
-    let output = try await allocate(length: kernelShape.product() * dtype.byteSize)
+    let output = try await allocateBuf(kernelShape.product() * dtype.byteSize)
     return try await serialize { [self] in
       let op = try self.createConv2D(config, batch: batch, kind: .kernelGrad, dtype: mpsDType)
       let completion = completionBuffer(label: "conv2DKernelGrad") { buf in
@@ -2040,7 +2173,7 @@ open class MPSBackend: CPUBackend {
 
   internal func makeUIntBuffer(_ x: [UInt32]) throws -> MTLBuffer {
     return try x.withUnsafeBytes { bytes in
-      let result = try allocateSync(length: 4 * x.count)
+      let result = try allocateSync(4 * x.count)
       result.contents().copyMemory(from: bytes.baseAddress!, byteCount: 4 * x.count)
       return result
     }
@@ -2048,27 +2181,27 @@ open class MPSBackend: CPUBackend {
 
   internal func makeFloatBuffer(_ x: Float) throws -> MTLBuffer {
     var x = x
-    let result = try allocateSync(length: 4)
+    let result = try allocateSync(4)
     result.contents().copyMemory(from: &x, byteCount: 4)
     return result
   }
 
   internal func makeInt64Buffer(_ x: Int64) throws -> MTLBuffer {
     var x = x
-    let result = try allocateSync(length: 8)
+    let result = try allocateSync(8)
     result.contents().copyMemory(from: &x, byteCount: 8)
     return result
   }
 
   internal func makeUInt64Buffer(_ x: UInt64) throws -> MTLBuffer {
     var x = x
-    let result = try allocateSync(length: 8)
+    let result = try allocateSync(8)
     result.contents().copyMemory(from: &x, byteCount: 8)
     return result
   }
 
   internal func makeDataBuffer(_ x: Data) throws -> MTLBuffer {
-    let result = try allocateSync(length: x.count)
+    let result = try allocateSync(x.count)
     x.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
       result.contents().copyMemory(from: bytes.baseAddress!, byteCount: x.count)
     }
@@ -2185,5 +2318,18 @@ extension Tensor.DType {
     case .int64:
       "long"
     }
+  }
+}
+
+func nextAllocatorBucket(_ length: Int) -> Int {
+  if length < 4096 {
+    return 4096
+  } else {
+    var i = 4096
+    while i < length && i >= 4096 {
+      i *= 2
+    }
+    alwaysAssert(i >= 4096, "allocation size overflow: \(length)")
+    return i
   }
 }

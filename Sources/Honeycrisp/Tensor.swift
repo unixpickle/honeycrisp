@@ -1,5 +1,5 @@
+import Foundation
 import HCBacktrace
-import Metal
 
 /// An asynchronous, multi-dimensional array of integral, floating point, or boolean values.
 ///
@@ -67,8 +67,16 @@ public final class Tensor {
   /// An abstract protocol representing a glob of tensor data that may be stored anywhere and/or
   /// computed lazily.
   public protocol Data {
+    /// Get the amount of allocated bytes. Note that the actual amount of data which is used
+    /// by a tensor might be less than the size of the data.
+    var byteCount: Int { get }
+
     /// Get the data as a concrete, CPU-mapped buffer.
-    var cpuBuffer: MTLBuffer { get async throws }
+    func onCPU<T>(_ fn: (_: UnsafeRawPointer) async throws -> T) async throws -> T
+
+    /// Modify the data on the CPU.
+    /// This should only be used by ``Backend`` implementations when creating an output.
+    func mutateOnCPU<T>(_ fn: (_: UnsafeMutableRawPointer) async throws -> T) async throws -> T
   }
 
   /// A single-use reference to a ``Tensor`` that is stored in the forward pass and used in the
@@ -188,7 +196,7 @@ public final class Tensor {
     let task = Task {
       let data = try await t.data
       if waitForCPU {
-        let _ = try await data.cpuBuffer
+        try await data.onCPU { _ in () }
       }
     }
 
@@ -261,7 +269,7 @@ public final class Tensor {
       self.dataTask = Tensor.createDataTask(
         {
           let result = try await dataTask.value
-          let allocSize = try await result.cpuBuffer.allocatedSize
+          let allocSize = result.byteCount
           let minSize = shape.product() * dtype.byteSize
           alwaysAssert(
             allocSize >= minSize, "buffer of size \(allocSize) underflows shape \(shape)")
@@ -394,8 +402,9 @@ public final class Tensor {
   @recordCaller
   private func _copyToArray<T: TensorElement>(_ out: inout [T]) async throws {
     alwaysAssert(out.count == shape.product(), "out size must match our size")
-    let buf = try await data.cpuBuffer
-    try pointerToArray(buf.contents(), output: &out, dtype: dtype)
+    try await data.onCPU { buf in
+      try pointerToArray(buf, output: &out, dtype: dtype)
+    }
   }
 
   @recordCaller
@@ -435,7 +444,7 @@ public final class Tensor {
 
   @recordCaller
   private func _wait() async throws {
-    let _ = try await (try await data).cpuBuffer
+    let _ = try await (try await data).onCPU { _ in () }
   }
 
   public func noGrad() -> Tensor {

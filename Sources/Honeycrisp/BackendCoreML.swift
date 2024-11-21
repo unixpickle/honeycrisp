@@ -7,15 +7,24 @@ open class CoreMLBackend: BackendWrapper {
 
   internal struct AsyncData: Tensor.Data {
     public let tasks: [Task<Void, Error>]
-    public let buffer: MTLBuffer
+    public let inner: Tensor.Data
 
-    public var cpuBuffer: MTLBuffer {
-      get async throws {
-        for task in tasks {
-          let _ = try await task.value
-        }
-        return buffer
+    public var byteCount: Int { inner.byteCount }
+
+    public func onCPU<T>(_ fn: (_: UnsafeRawPointer) async throws -> T) async throws -> T {
+      for task in tasks {
+        let _ = try await task.value
       }
+      return try await inner.onCPU(fn)
+    }
+
+    public func mutateOnCPU<T>(_ fn: (_: UnsafeMutableRawPointer) async throws -> T) async throws
+      -> T
+    {
+      for task in tasks {
+        let _ = try await task.value
+      }
+      return try await inner.mutateOnCPU(fn)
     }
   }
 
@@ -148,13 +157,10 @@ open class CoreMLBackend: BackendWrapper {
         cols: rows, dtype: dtype)
     }
 
-    let aBuf = try await a.cpuBuffer
-    let bBuf = try await b.cpuBuffer
-
     let aCount = rows * inner
     let bCount = inner * cols
     let outCount = rows * cols
-    let buffer = try await wrapped.allocate(length: matrixCount * outCount * dtype.byteSize)
+    let buffer = try CPUBackend.CPUData(byteCount: matrixCount * outCount * dtype.byteSize)
 
     let matmulKey = MatmulKey(
       sizeA0: (transA ? inner : rows), sizeA1: (transA ? rows : inner),
@@ -171,48 +177,51 @@ open class CoreMLBackend: BackendWrapper {
         let aSize = min(matmulKey.sizeA0 - aIdx, aChunk)
         tasks.append(
           Task.detached { [self] in
-            let mmKey = MatmulKey(
-              sizeA0: aSize, sizeA1: (transA ? rows : inner),
-              sizeB0: transB ? cols : inner, sizeB1: transB ? inner : cols, transA: transA,
-              transB: transB, isFloat32: dtype == .float32)
-            try await runModel(buildModel: { mc in try await mc.matmul(mmKey) }) { model in
-              let x = try MLMultiArray(
-                dataPointer: aBuf.contents().advanced(
-                  by: (i * aCount + aIdx * matmulKey.sizeA1) * dtype.byteSize),
-                shape: mpsShape([aSize, matmulKey.sizeA1]),
-                dataType: matmulKey.isFloat32 ? .float32 : .float16,
-                strides: mpsShape([matmulKey.sizeA1, 1]),
-                deallocator: { [a = aBuf] _ in _ = a }
-              )
-              let y = try MLMultiArray(
-                dataPointer: bBuf.contents().advanced(by: i * bCount * dtype.byteSize),
-                shape: mpsShape([matmulKey.sizeB0, matmulKey.sizeB1]),
-                dataType: x.dataType,
-                strides: mpsShape([matmulKey.sizeB1, 1]),
-                deallocator: { [b = bBuf] _ in _ = b }
-              )
-              let featureProvider: MLFeatureProvider = try MLDictionaryFeatureProvider(
-                dictionary: [
-                  "x": MLFeatureValue(multiArray: x),
-                  "y": MLFeatureValue(multiArray: y),
-                ])
-              let options = MLPredictionOptions()
-              options.outputBackings = [
-                "output": try MLMultiArray(
-                  dataPointer: buffer.contents().advanced(
-                    by: (i * outCount + aIdx * cols) * dtype.byteSize),
-                  shape: mpsShape([transA ? rows : min(aChunk, rows - aIdx), cols]),
-                  dataType: x.dataType,
-                  strides: mpsShape([cols, 1]),
-                  deallocator: { [b = buffer] _ in _ = b }
-                )
-              ]
-              try model.prediction(from: featureProvider, options: options)
+            try await a.onCPU { aBuf in
+              try await b.onCPU { bBuf in
+                let mmKey = MatmulKey(
+                  sizeA0: aSize, sizeA1: (transA ? rows : inner),
+                  sizeB0: transB ? cols : inner, sizeB1: transB ? inner : cols, transA: transA,
+                  transB: transB, isFloat32: dtype == .float32)
+                try await runModel(buildModel: { mc in try await mc.matmul(mmKey) }) { model in
+                  let x = try MLMultiArray(
+                    dataPointer: UnsafeMutableRawPointer(mutating: aBuf).advanced(
+                      by: (i * aCount + aIdx * matmulKey.sizeA1) * dtype.byteSize),
+                    shape: mpsShape([aSize, matmulKey.sizeA1]),
+                    dataType: matmulKey.isFloat32 ? .float32 : .float16,
+                    strides: mpsShape([matmulKey.sizeA1, 1])
+                  )
+                  let y = try MLMultiArray(
+                    dataPointer: UnsafeMutableRawPointer(mutating: bBuf).advanced(
+                      by: i * bCount * dtype.byteSize),
+                    shape: mpsShape([matmulKey.sizeB0, matmulKey.sizeB1]),
+                    dataType: x.dataType,
+                    strides: mpsShape([matmulKey.sizeB1, 1])
+                  )
+                  let featureProvider: MLFeatureProvider = try MLDictionaryFeatureProvider(
+                    dictionary: [
+                      "x": MLFeatureValue(multiArray: x),
+                      "y": MLFeatureValue(multiArray: y),
+                    ])
+                  let options = MLPredictionOptions()
+                  options.outputBackings = [
+                    "output": try MLMultiArray(
+                      dataPointer: buffer.data.advanced(
+                        by: (i * outCount + aIdx * cols) * dtype.byteSize),
+                      shape: mpsShape([transA ? rows : min(aChunk, rows - aIdx), cols]),
+                      dataType: x.dataType,
+                      strides: mpsShape([cols, 1]),
+                      deallocator: { [b = buffer] _ in _ = b }
+                    )
+                  ]
+                  try model.prediction(from: featureProvider, options: options)
+                }
+              }
             }
           })
       }
     }
-    return AsyncData(tasks: tasks, buffer: buffer)
+    return AsyncData(tasks: tasks, inner: buffer)
   }
 
 }
