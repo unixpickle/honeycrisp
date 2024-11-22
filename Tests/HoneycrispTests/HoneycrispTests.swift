@@ -531,8 +531,8 @@ final class HoneycrispTests: XCTestCase {
             1, 5, 9, 2, 6, 10, 3, 7, 11, 4, 8, 12, -1, -5, -9, -2, -6, -10, -3, -7, -11, -4, -8,
             -12,
           ])
-        let buf = try await transposeMe.t().data.cpuBuffer
-        XCTAssert(buf.allocatedSize >= transposeMe.dtype.byteSize * transposeMe.shape.product())
+        let buf = try await transposeMe.t().data
+        XCTAssert(buf.byteCount >= transposeMe.dtype.byteSize * transposeMe.shape.product())
 
         // Subtle test for boolean gather
         try await assertDataEqual(transposeMe.t() == 0, (transposeMe == 0).t())
