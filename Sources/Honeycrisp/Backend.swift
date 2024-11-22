@@ -153,6 +153,9 @@ open class Backend {
     }
   }
 
+  public init() {
+  }
+
   /// Perform a broadcasted binary operator between two tensors.
   ///
   /// Both inputs and the output should be of type `dtype`.
