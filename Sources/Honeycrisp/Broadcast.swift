@@ -285,13 +285,13 @@ extension Tensor {
         if x == y {
           return x
         } else if x == 0 || y == 0 {
-          fatalError("shapes \(s[0]) and \(s[1]) do not support broadcasting")
+          tracedFatalError("shapes \(s[0]) and \(s[1]) do not support broadcasting")
         } else if x == 1 {
           return y
         } else if y == 1 {
           return x
         } else {
-          fatalError("shapes \(s[0]) and \(s[1]) do not support broadcasting")
+          tracedFatalError("shapes \(s[0]) and \(s[1]) do not support broadcasting")
         }
       }
     } else {

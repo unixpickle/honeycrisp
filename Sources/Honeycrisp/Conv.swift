@@ -529,7 +529,7 @@ extension Tensor {
           kernel: try await kernel.data,
           dtype: image.dtype)
       default:
-        fatalError()
+        tracedFatalError()
       }
     }
     if !Tensor.isGradEnabled || (!image.needsGrad && !kernel.needsGrad) {
@@ -583,7 +583,7 @@ extension Tensor {
           kernel: try await kernel.data,
           dtype: image.dtype)
       default:
-        fatalError()
+        tracedFatalError()
       }
     }
     if !Tensor.isGradEnabled || (!image.needsGrad && !kernel.needsGrad) {
@@ -633,13 +633,13 @@ extension Tensor {
           conv as! Conv2DConfig, batch: image.shape[0], image: try await image.data,
           outGrad: try await outGrad.data, dtype: image.dtype)
       default:
-        fatalError()
+        tracedFatalError()
       }
     }
     if !Tensor.isGradEnabled || (!image.needsGrad && !outGrad.needsGrad) {
       return Tensor(dataTask: newData, shape: kernelShape, dtype: image.dtype)
     } else {
-      fatalError("convNDKernelGrad gradient is not yet implemented")
+      tracedFatalError("convNDKernelGrad gradient is not yet implemented")
     }
   }
 }

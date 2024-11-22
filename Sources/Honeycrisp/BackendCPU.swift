@@ -156,7 +156,7 @@ open class CPUBackend: Backend {
             case .sub:
               vDSP_vsub(y, 1, x, 1, z, 1, vDSP_Length(count))
             case .mod:
-              fatalError()
+              tracedFatalError()
             }
           } else {
             try readBuffer(T.self, aBuf, count: a.dataCount, dtype: dtype) { aData in
@@ -196,7 +196,7 @@ open class CPUBackend: Backend {
               case .add, .mul: b.toFloat()
               case .div: 1 / b.toFloat()
               case .sub: -b.toFloat()
-              case .mod: fatalError()
+              case .mod: tracedFatalError()
               }
             let z = buffer.bindMemory(to: Float.self, capacity: count)
             switch op {
@@ -205,7 +205,7 @@ open class CPUBackend: Backend {
             case .mul, .div:
               vDSP_vsmul(x, 1, &bScalar, z, 1, vDSP_Length(count))
             case .mod:
-              fatalError()
+              tracedFatalError()
             }
           } else {
             try readBuffer(T1.self, aBuf, count: count, dtype: dtype) { aData in
@@ -250,7 +250,7 @@ open class CPUBackend: Backend {
             case .sub:
               vDSP_vsmsa(x, 1, &neg1, &aFloat, z, 1, vDSP_Length(count))
             case .mod:
-              fatalError()
+              tracedFatalError()
             }
           } else {
             try readBuffer(T1.self, bBuf, count: count, dtype: dtype) { bData in
@@ -646,7 +646,7 @@ open class CPUBackend: Backend {
               case T1(1.0):
                 vDSP_vsmul(x, 1, &s, z, 1, vDSP_Length(count))
               default:
-                fatalError()
+                tracedFatalError()
               }
               if let scalesBuf = scalesBuf {
                 let scalesPtr = UnsafePointer<Float>(

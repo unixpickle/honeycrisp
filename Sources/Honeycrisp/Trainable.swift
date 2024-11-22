@@ -52,11 +52,29 @@ extension Tensor?: MaybeTensor {
   }
 }
 
+/// A protocol for representing both `Trainable?` and `Trainable`.
+public protocol MaybeTrainable {
+  var isNil: Bool { get }
+
+  func maybeTrainable() -> Trainable?
+}
+
+extension Optional: MaybeTrainable where Wrapped: Trainable {
+  public var isNil: Bool {
+    self == nil
+  }
+
+  public func maybeTrainable() -> Trainable? {
+    self
+  }
+}
+
 /// A base class which automatically stores and tracks learnable parameters and sub-modules.
 ///
 /// Parameters are declared using the `@Param` attribute, and sub-modules are declared
 /// with the `@Child` attribute.
-open class Trainable {
+open class Trainable: MaybeTrainable {
+
   public enum Mode {
     case training
     case inference
@@ -77,7 +95,10 @@ open class Trainable {
     ) -> TensorType {
       get {
         let param = instance[keyPath: storageKeyPath]
-        return instance[keyPath: storageKeyPath].maybeData!.maybeOnGrad { g in
+        guard let data = param.maybeData else {
+          fatalError("@Param attribute \(storageKeyPath) was accessed before assignment")
+        }
+        return data.maybeOnGrad { g in
           if let existingGrad = param.grad {
             param.grad = existingGrad + g
           } else {
@@ -103,7 +124,8 @@ open class Trainable {
 
     @available(
       *, unavailable,
-      message: "@Parameter can only be applied to classes"
+      message:
+        "This usage of @Param is incorrect. Make sure you are inside of a subclass of Trainable, and ensure that this property is a Tensor or Tensor? with no initial value."
     )
     public var wrappedValue: TensorType {
       get { fatalError() }
@@ -139,14 +161,17 @@ open class Trainable {
   }
 
   @propertyWrapper
-  public final class Child<Value: Trainable> {
+  public final class Child<Value: MaybeTrainable> {
     public static subscript<T: Trainable>(
       _enclosingInstance instance: T,
       wrapped wrappedKeyPath: ReferenceWritableKeyPath<T, Value>,
       storage storageKeyPath: ReferenceWritableKeyPath<T, Child>
     ) -> Value {
       get {
-        instance[keyPath: storageKeyPath].value!
+        guard let value = instance[keyPath: storageKeyPath].value else {
+          fatalError("@Child attribute \(storageKeyPath) was accessed before assignment")
+        }
+        return value
       }
       set {
         let child = instance[keyPath: storageKeyPath]
@@ -154,13 +179,18 @@ open class Trainable {
           child.name = String("\(storageKeyPath)".split(separator: ".").last!)
         }
         child.value = newValue
-        instance.registeredChildren[child.name!] = newValue
+        if let x = newValue.maybeTrainable() {
+          instance.registeredChildren[child.name!] = x
+        } else {
+          instance.registeredChildren.removeValue(forKey: child.name!)
+        }
       }
     }
 
     @available(
       *, unavailable,
-      message: "@Child can only be applied to classes"
+      message:
+        "This usage of @Child is incorrect. Make sure you are inside of a subclass of Trainable, and ensure that this property is of type T or T? where T: Trainable and has no initial value."
     )
     public var wrappedValue: Value {
       get { fatalError() }
@@ -173,6 +203,16 @@ open class Trainable {
     public init(name: String? = nil) {
       self.name = name
     }
+  }
+
+  /// Implementation of ``MaybeTrainable/isNil``
+  public var isNil: Bool {
+    false
+  }
+
+  /// Implementation of ``MaybeTrainable/maybeTrainable()``
+  public func maybeTrainable() -> Trainable? {
+    self
   }
 
   internal var registeredParams = [String: Parameter]()

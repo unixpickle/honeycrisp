@@ -1330,6 +1330,7 @@ final class HoneycrispTests: XCTestCase {
     class Network: Trainable {
       @Child(name: "layer0") var layer0: Linear
       @Child(name: "layer1") var layer1: Linear
+      @Child(name: "layer2") var layer2: Linear?
 
       override init() {
         super.init()
@@ -1360,16 +1361,27 @@ final class HoneycrispTests: XCTestCase {
     }
 
     let net = Network()
-    let netParams = net.parameters
-    XCTAssertEqual(netParams.count, 4)
-    XCTAssertEqual(netParams[0].0, "layer0.bias")
-    XCTAssertEqual(netParams[0].1.data!.shape, [5])
-    XCTAssertEqual(netParams[1].0, "layer0.weight")
-    XCTAssertEqual(netParams[1].1.data!.shape, [3, 5])
-    XCTAssertEqual(netParams[2].0, "layer1.bias")
-    XCTAssertEqual(netParams[2].1.data!.shape, [7])
-    XCTAssertEqual(netParams[3].0, "layer1.weight")
-    XCTAssertEqual(netParams[3].1.data!.shape, [5, 7])
+    for _ in 0..<2 {
+      var netParams = net.parameters
+      XCTAssertEqual(netParams.count, 4)
+      XCTAssertEqual(netParams[0].0, "layer0.bias")
+      XCTAssertEqual(netParams[0].1.data!.shape, [5])
+      XCTAssertEqual(netParams[1].0, "layer0.weight")
+      XCTAssertEqual(netParams[1].1.data!.shape, [3, 5])
+      XCTAssertEqual(netParams[2].0, "layer1.bias")
+      XCTAssertEqual(netParams[2].1.data!.shape, [7])
+      XCTAssertEqual(netParams[3].0, "layer1.weight")
+      XCTAssertEqual(netParams[3].1.data!.shape, [5, 7])
+
+      net.layer2 = Linear(inSize: 3, outSize: 3)
+      netParams = net.parameters
+      XCTAssertEqual(netParams.count, 6)
+      XCTAssertEqual(netParams[4].0, "layer2.bias")
+      XCTAssertEqual(netParams[4].1.data!.shape, [3])
+      XCTAssertEqual(netParams[5].0, "layer2.weight")
+      XCTAssertEqual(netParams[5].1.data!.shape, [3, 3])
+      net.layer2 = nil
+    }
 
     let net1 = Network()
     try net1.loadState(try await net.state())
