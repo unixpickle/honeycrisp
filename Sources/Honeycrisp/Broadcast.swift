@@ -62,6 +62,12 @@ public struct BroadcastData {
   /// If true, the data is actually not broadcasted and the raw array is
   /// equal to the virtual array.
   public var isSimple: Bool { strides.isNoOp }
+
+  /// Wrap an unbroadcasted tensor in a ``BroadcastData``.
+  public static func simple(data: Tensor.Data, count: Int) -> BroadcastData {
+    BroadcastData(
+      strides: BroadcastStrides(dataCount: count, outerRepeats: 1, innerRepeats: 1), data: data)
+  }
 }
 
 /// An ordered sequence of `RepeatDims` which, when applied, expands the

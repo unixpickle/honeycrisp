@@ -296,7 +296,7 @@ open class MPSBackend: CPUBackend {
         "vector_pow", "vector_pow_scaled", "log", "recip", "exp", "sigmoid", "sigmoid_grad", "gelu",
         "gelu_grad", "sin", "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "rand",
         "randn", "normalize", "normalize_var_grad", "normalize_x_grad", "log_softmax",
-        "log_softmax_grad",
+        "log_softmax_grad", "adamw",
       ] {
         names.append("\(op)_\(type)")
       }
@@ -1068,6 +1068,74 @@ open class MPSBackend: CPUBackend {
         dispatch1D(enc, state: state, threadCount: count)
       }
       return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
+    }
+  }
+
+  /// Perform an AdamW update.
+  override public func adamW(
+    param: Tensor.Data,
+    grad: Tensor.Data,
+    moment1: Tensor.Data,
+    moment2: Tensor.Data,
+    beta1: Float,
+    beta2: Float,
+    eps: Float,
+    weightDecay: Float,
+    lr: Float,
+    step: Float,
+    count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> (param: Tensor.Data, moment1: Tensor.Data, moment2: Tensor.Data)
+  {
+    alwaysAssert(count <= UInt32.max, "normalize cannot operate on as many as \(count) values")
+    guard let typeName = MPSBackend.CastTypes[dtype] else {
+      return try await super.adamW(
+        param: param,
+        grad: grad,
+        moment1: moment1,
+        moment2: moment2,
+        beta1: beta1,
+        beta2: beta2,
+        eps: eps,
+        weightDecay: weightDecay,
+        lr: lr,
+        step: step,
+        count: count,
+        dtype: dtype
+      )
+    }
+    let functionName = "adamw_\(typeName)"
+
+    let (paramBuf, paramCb) = try await gpuBuffer(param)
+    let (gradBuf, gradCb) = try await gpuBuffer(grad)
+    let (moment1Buf, moment1Cb) = try await gpuBuffer(moment1)
+    let (moment2Buf, moment2Cb) = try await gpuBuffer(moment2)
+    let (paramOutBuf, paramOutCb) = try await allocateBuf(count * dtype.byteSize)
+    let (moment1OutBuf, moment1OutCb) = try await allocateBuf(count * dtype.byteSize)
+    let (moment2OutBuf, moment2OutCb) = try await allocateBuf(count * dtype.byteSize)
+
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(
+        label: "adamw", callbacks: [paramCb, gradCb, moment1Cb, moment2Cb]
+      ) { buf, enc in
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc, .buffer(paramBuf), .buffer(gradBuf), .buffer(moment1Buf), .buffer(moment2Buf),
+          .buffer(paramOutBuf), .buffer(moment1OutBuf), .buffer(moment2OutBuf),
+          .float(beta1), .float(beta2), .float(eps), .float(weightDecay), .float(lr),
+          .float(step), .uint(UInt32(count)))
+        dispatch1D(enc, state: state, threadCount: count)
+      }
+      return (
+        param: GPUData(
+          backend: self, buffer: paramOutBuf, completion: completion, deallocator: paramOutCb),
+        moment1: GPUData(
+          backend: self, buffer: moment1OutBuf, completion: completion, deallocator: moment1OutCb),
+        moment2: GPUData(
+          backend: self, buffer: moment2OutBuf, completion: completion, deallocator: moment2OutCb)
+      )
     }
   }
 

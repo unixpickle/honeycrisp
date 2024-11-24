@@ -248,6 +248,44 @@ DEFINE_FUSED_ADD_MUL(half)
 DEFINE_NORMALIZE(half)
 DEFINE_NORMALIZE(float)
 
+#define DEFINE_ADAMW(type) \
+    kernel void adamw_##type( \
+        device const type* param [[buffer(0)]], \
+        device const type* grad [[buffer(1)]], \
+        device const type* moment1 [[buffer(2)]], \
+        device const type* moment2 [[buffer(3)]], \
+        device type* newParam [[buffer(4)]], \
+        device type* newMoment1 [[buffer(5)]], \
+        device type* newMoment2 [[buffer(6)]], \
+        constant float& beta1 [[buffer(7)]], \
+        constant float& beta2 [[buffer(8)]], \
+        constant float& eps [[buffer(9)]], \
+        constant float& weightDecay [[buffer(10)]], \
+        constant float& lr [[buffer(11)]], \
+        constant float& step [[buffer(12)]], \
+        constant uint& N [[buffer(13)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            type x = (float)param[id]; \
+            type g = (float)grad[id]; \
+            type mt = (float)moment1[id]; \
+            type vt = (float)moment2[id]; \
+            mt = beta1 * mt + (1 - beta1) * g; \
+            vt = beta2 * vt + (1 - beta2) * g * g; \
+            newMoment1[id] = (type)mt; \
+            newMoment2[id] = (type)vt; \
+            mt = mt / (1 - pow(beta1, step)); \
+            vt = vt / (1 - pow(beta2, step)); \
+            x = (1 - lr * weightDecay) * x; \
+            x = x - lr * mt / (sqrt(vt) + eps); \
+            newParam[id] = (type)x; \
+        } \
+    }
+
+DEFINE_ADAMW(half)
+DEFINE_ADAMW(float)
+
 #define DEFINE_CLAMP(type, minMaxType) \
     kernel void clamp_##type( \
         device const type* a [[buffer(0)]], \

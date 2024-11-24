@@ -457,12 +457,12 @@ public final class Tensor {
     Tensor.createDataTask(self, fn)
   }
 
-  static internal func createDataTask(
-    _ fn: @escaping () async throws -> Data,
+  static internal func createDataTask<T>(
+    _ fn: @escaping () async throws -> T,
     function: StaticString = #function,
     file: StaticString = #file,
     line: UInt = #line
-  ) -> Task<Data, Error> {
+  ) -> Task<T, Error> {
     let callers = Backtrace.current + [CodeLocation(function: function, file: file, line: line)]
     return if let deps = Thread.current.threadDictionary[Tensor.DataDependenciesKey] {
       Task {

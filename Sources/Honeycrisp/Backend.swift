@@ -587,4 +587,83 @@ open class Backend {
     throw BackendError.notImplemented("createRandom")
   }
 
+  /// Perform an AdamW update.
+  public func adamW(
+    param: Tensor.Data,
+    grad: Tensor.Data,
+    moment1: Tensor.Data,
+    moment2: Tensor.Data,
+    beta1: Float,
+    beta2: Float,
+    eps: Float,
+    weightDecay: Float,
+    lr: Float,
+    step: Float,
+    count: Int,
+    dtype: Tensor.DType
+  )
+    async throws
+    -> (param: Tensor.Data, moment1: Tensor.Data, moment2: Tensor.Data)
+  {
+    func bd(_ data: Tensor.Data) -> BroadcastData {
+      BroadcastData.simple(data: data, count: count)
+    }
+
+    let newMt = try await binaryOp(
+      bd(try await binaryOp(beta1, moment1, op: .mul, count: count, dtype: dtype)),
+      bd(try await binaryOp(1 - beta1, grad, op: .mul, count: count, dtype: dtype)),
+      op: .add,
+      count: count,
+      dtype: dtype
+    )
+    let gradSq = try await pow(grad, 2, scale: 1 - beta2, scales: nil, count: count, dtype: dtype)
+    let newVt = try await binaryOp(
+      bd(try await binaryOp(beta2, moment2, op: .mul, count: count, dtype: dtype)),
+      bd(gradSq),
+      op: .add,
+      count: count,
+      dtype: dtype
+    )
+    let scaledMt = try await binaryOp(
+      newMt, 1.0 / (1 - Foundation.pow(beta1, Float(step))), op: .mul, count: count, dtype: dtype)
+    let scaledVt = try await binaryOp(
+      newVt, 1.0 / (1 - Foundation.pow(beta2, Float(step))), op: .mul, count: count, dtype: dtype)
+    let stepDir = try await binaryOp(
+      try await binaryOp(
+        bd(scaledMt),
+        bd(
+          try await binaryOp(
+            try await pow(scaledVt, 0.5, scale: 1.0, scales: nil, count: count, dtype: dtype),
+            eps,
+            op: .add,
+            count: count,
+            dtype: dtype
+          )
+        ),
+        op: .div,
+        count: count,
+        dtype: dtype
+      ),
+      lr,
+      op: .mul,
+      count: count,
+      dtype: dtype
+    )
+    let decayed = try await binaryOp(
+      param,
+      (1 - lr * weightDecay),
+      op: .mul,
+      count: count,
+      dtype: dtype
+    )
+    let newParam = try await binaryOp(
+      bd(decayed),
+      bd(stepDir),
+      op: .sub,
+      count: count,
+      dtype: dtype
+    )
+    return (param: newParam, moment1: newMt, moment2: newVt)
+  }
+
 }
