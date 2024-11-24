@@ -1423,6 +1423,27 @@ final class HoneycrispTests: XCTestCase {
     let bErr = abs(bData - 2.718)
     XCTAssert(wErr < 0.05, "model.weight.data[0]=\(wData)")
     XCTAssert(bErr < 0.05, "model.bias.data[0]=\(bData)")
+
+    try await runInBackends {
+      for dtype: Tensor.DType in [.float16, .float32] {
+        let tol: Float = dtype == .float16 ? 0.01 : 0.0001
+        let param = Trainable.Param<Tensor>(name: "param")
+        param.data = Tensor(data: [1.0, 2.0, 3.0], dtype: dtype)
+        let newOpt = Adam([("param", param)], lr: 1.0, beta1: 0.25, beta2: 0.5, weightDecay: 0.1)
+        let expected = [
+          [-0.10000002384185791, 2.799999952316284, 1.6999998092651367],
+          [-0.9385281205177307, 3.559230327606201, 0.9680482149124146],
+          [0.02871572971343994, 4.272789001464844, 1.5448764562606812],
+        ]
+        for (grad, out) in zip(
+          [[0.5, -0.5, 3.0], [0.25, -1.0, 0.5], [-1.0, -3.0, -2.0]], expected)
+        {
+          param.grad = Tensor(data: grad, dtype: dtype)
+          newOpt.step()
+          try await assertClose(param.data!, Tensor(data: out, dtype: dtype), atol: tol, rtol: tol)
+        }
+      }
+    }
   }
 
   func testRandom() async throws {
