@@ -125,105 +125,97 @@ open class MPSBackend: CPUBackend {
     let dtype: MPSDataType
   }
 
-  public class MPSRandomGenerator: NativeRandomGenerator {
+  public class MPSRandomGenerator: RandomGenerator {
     public let mpsBackend: MPSBackend
-    private var seed: UInt64
-    private var offset: UInt64
+
+    override internal var stateCount: Int {
+      2
+    }
+
+    override internal var stateDType: Tensor.DType {
+      .int64
+    }
 
     init(mpsBackend: MPSBackend, seed: Int) {
       self.mpsBackend = mpsBackend
-      self.seed = UInt64(seed)
-      self.offset = 0
-      super.init(cpuBackend: mpsBackend)
+      super.init(
+        backend: mpsBackend,
+        state: mpsBackend.use { Tensor(data: [seed, 0], dtype: .int64) }
+      )
     }
 
-    override public func save() async throws -> Data {
-      let info = try await mpsBackend.serialize {
-        return [self.seed, self.offset]
-      }
-      return Data(info.flatMap { x in (0..<8).map { UInt8((x >> (8 * $0)) & 0xff) } })
+    override internal func _seed(_ x: Int) async throws -> Tensor.Data {
+      try await mpsBackend.collection([x, 0], reverse: false, dtype: .int64)
     }
 
-    override public func restore(_ x: Data) async throws {
-      var seed: UInt64 = 0
-      var offset: UInt64 = 0
-      for (i, x) in x.enumerated() {
-        if i < 8 {
-          seed |= UInt64(x) << (8 * i)
-        } else {
-          offset |= UInt64(x) << (8 * (i - 8))
-        }
-      }
-      try await mpsBackend.serialize {
-        self.seed = seed
-        self.offset = offset
-      }
-    }
-
-    override public func seed(_ seed: Int) async throws {
-      try await mpsBackend.serialize {
-        self.seed = UInt64(seed)
-        self.offset = 0
-      }
-    }
-
-    override public func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) async throws
-      -> Tensor.Data
+    override internal func _sample(
+      state: Tensor.Data, count: Int, dist: RandomDist, dtype: Tensor.DType
+    )
+      async throws -> (
+        sample: Tensor.Data, state: Tensor.Data
+      )
     {
-      if dtype != .float16 && dtype != .float32 {
-        return try await super.sample(count: count, dist: dist, dtype: dtype)
-      }
       alwaysAssert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
 
       let functionName =
         "\(dist == .normal ? "randn" : "rand")_\(MPSBackend.CastTypes[dtype]!)"
+      let (inState, inStateCb) = try await mpsBackend.gpuBuffer(state)
       let (output, outputCb) = try await mpsBackend.allocateBuf(count * dtype.byteSize)
+      let (outState, outStateCb) = try await mpsBackend.allocateBuf(16)
 
       return try await mpsBackend.serialize { [self] in
         let completion = try mpsBackend.completionBufferAndEncoder(
-          label: "sample", callbacks: []
+          label: "sample", callbacks: [inStateCb]
         ) { buf, enc in
           let state = try mpsBackend.getFunction(name: functionName)
           try mpsBackend.setArguments(
-            enc, .buffer(output), .uint(UInt32(seed)), .uint(UInt32(seed >> 32)),
-            .uint(UInt32(offset)), .uint(UInt32(count)))
+            enc, .buffer(inState), .buffer(outState), .buffer(output), .uint(UInt32(count)))
           let chunkSize = dist == .normal ? 2 : 4
           let totalThreads = (count + chunkSize - 1) / chunkSize
           mpsBackend.dispatch1D(enc, state: state, threadCount: totalThreads)
-          offset += UInt64(totalThreads)
         }
-        return GPUData(
-          backend: mpsBackend, buffer: output, completion: completion, deallocator: outputCb)
+        return (
+          sample: GPUData(
+            backend: mpsBackend, buffer: output, completion: completion, deallocator: outputCb),
+          state: GPUData(
+            backend: mpsBackend, buffer: outState, completion: completion, deallocator: outStateCb)
+        )
       }
     }
 
-    override public func sample(count: Int, in range: Range<Int64>) async throws
-      -> Tensor.Data
+    override internal func _sample(state: Tensor.Data, count: Int, in range: Range<Int64>)
+      async throws -> (
+        sample: Tensor.Data, state: Tensor.Data
+      )
     {
       alwaysAssert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
 
+      let (inState, inStateCb) = try await mpsBackend.gpuBuffer(state)
       let (output, outputCb) = try await mpsBackend.allocateBuf(count * Tensor.DType.int64.byteSize)
+      let (outState, outStateCb) = try await mpsBackend.allocateBuf(16)
 
       return try await mpsBackend.serialize { [self] in
         let completion = try mpsBackend.completionBufferAndEncoder(
-          label: "sampleInt", callbacks: []
+          label: "sampleInt", callbacks: [inStateCb]
         ) { buf, enc in
           let state = try mpsBackend.getFunction(name: "rand_long")
           try mpsBackend.setArguments(
             enc,
+            .buffer(inState),
+            .buffer(outState),
             .buffer(output),
-            .uint(UInt32(seed)),
-            .uint(UInt32(seed >> 32)),
-            .uint(UInt32(offset)),
-            .uint(UInt32(count)),
             .int64(range.lowerBound),
-            .int64(range.upperBound &- range.lowerBound)
+            .int64(range.upperBound &- range.lowerBound),
+            .uint(UInt32(count))
           )
           mpsBackend.dispatch1D(enc, state: state, threadCount: count)
-          offset += UInt64(count) * 32
         }
-        return GPUData(
-          backend: mpsBackend, buffer: output, completion: completion, deallocator: outputCb)
+        return (
+          sample: GPUData(
+            backend: mpsBackend, buffer: output, completion: completion, deallocator: outputCb),
+          state: GPUData(
+            backend: mpsBackend, buffer: outState, completion: completion, deallocator: outStateCb)
+        )
       }
     }
   }
@@ -242,7 +234,7 @@ open class MPSBackend: CPUBackend {
   private var reductions: [ReduceKey: OneToOneGraph] = [:]
   private var logSoftmaxes: [SoftmaxKey: OneToOneGraph] = [:]
   private var logSoftmaxGrads: [SoftmaxKey: TwoToOneGraph] = [:]
-  private var defaultRNG: MPSRandomGenerator? = nil
+  private var _defaultRandomMPS: MPSRandomGenerator? = nil
   private var functions: [String: MTLComputePipelineState] = [:]
 
   // Allocator state.
@@ -278,6 +270,8 @@ open class MPSBackend: CPUBackend {
     super.init()
     try self.initAllocator(allocator)
     try self.initFunctions()
+    self._defaultRandomMPS = MPSRandomGenerator(
+      mpsBackend: self, seed: Int.random(in: 0..<1_000_000_000))
   }
 
   internal func initFunctions() throws {
@@ -2299,21 +2293,12 @@ open class MPSBackend: CPUBackend {
     }
   }
 
-  override public func defaultRandom() async throws -> RandomGenerator {
-    try await serialize { [self] in
-      if let d = defaultRNG {
-        return d
-      } else {
-        defaultRNG = MPSRandomGenerator(mpsBackend: self, seed: Int.random(in: 0..<1_000_000_000))
-        return defaultRNG!
-      }
-    }
+  override public func defaultRandom() -> RandomGenerator {
+    _defaultRandomMPS!
   }
 
-  override public func createRandom() async throws -> RandomGenerator {
-    try await serialize {
-      MPSRandomGenerator(mpsBackend: self, seed: Int.random(in: 0..<1_000_000_000))
-    }
+  override public func createRandom() -> RandomGenerator {
+    MPSRandomGenerator(mpsBackend: self, seed: Int.random(in: 0..<1_000_000_000))
   }
 
   internal enum KernelArgument {

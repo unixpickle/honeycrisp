@@ -12,35 +12,44 @@ open class BackendWrapper: Backend {
     public let wrappedBackend: B
     public let wrapped: RandomGenerator
 
-    public var backend: Backend {
-      wrappedBackend
+    override internal var stateCount: Int {
+      wrapped.stateCount
+    }
+
+    override internal var stateDType: Tensor.DType {
+      wrapped.stateDType
     }
 
     internal init(wrappedBackend: B, wrapped: RandomGenerator) {
       self.wrappedBackend = wrappedBackend
       self.wrapped = wrapped
+      super.init(backend: wrappedBackend, state: wrapped.state)
     }
 
-    public func save() async throws -> Data {
-      try await wrapped.save()
+    override public var state: Tensor {
+      get {
+        wrapped.state
+      }
+      set {
+        wrapped.state = newValue
+      }
     }
 
-    public func restore(_ x: Data) async throws {
-      try await wrapped.restore(x)
+    /// Update the state of the generator given the seed.
+    override public func seed(_ x: Int) {
+      wrapped.seed(x)
     }
 
-    public func seed(_ x: Int) async throws {
-      try await wrapped.seed(x)
+    /// Sample a numeric tensor from a given continuous distribution.
+    override public func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) -> Task<
+      Tensor.Data, Error
+    > {
+      wrapped.sample(count: count, dist: dist, dtype: dtype)
     }
 
-    public func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) async throws
-      -> Tensor.Data
-    {
-      try await wrapped.sample(count: count, dist: dist, dtype: dtype)
-    }
-
-    public func sample(count: Int, in range: Range<Int64>) async throws -> Tensor.Data {
-      try await wrapped.sample(count: count, in: range)
+    /// Sample a tensor of int64 values uniformly in the given range.
+    override public func sample(count: Int, in range: Range<Int64>) -> Task<Tensor.Data, Error> {
+      wrapped.sample(count: count, in: range)
     }
   }
 
@@ -375,12 +384,12 @@ open class BackendWrapper: Backend {
     try await wrapped.axisPermutation(permutation: permutation, shape: shape)
   }
 
-  override public func defaultRandom() async throws -> RandomGenerator {
-    WrappedRandomGenerator(wrappedBackend: self, wrapped: try await wrapped.defaultRandom())
+  override public func defaultRandom() -> RandomGenerator {
+    WrappedRandomGenerator(wrappedBackend: self, wrapped: wrapped.defaultRandom())
   }
 
-  override public func createRandom() async throws -> RandomGenerator {
-    WrappedRandomGenerator(wrappedBackend: self, wrapped: try await wrapped.createRandom())
+  override public func createRandom() -> RandomGenerator {
+    WrappedRandomGenerator(wrappedBackend: self, wrapped: wrapped.createRandom())
   }
 
 }

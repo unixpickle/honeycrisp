@@ -757,13 +757,13 @@ inline uint umulhi(uint x, uint y) {
     return (uint)(prod >> 32);
 }
 
-inline void philox(uint seed0, uint seed1, uint offset, thread uint* c) {
-    c[0] = offset;
-    c[1] = 0;
+inline void philox(ulong seed, ulong offset, thread uint* c) {
+    c[0] = (uint)(offset & 0xffffffff);
+    c[1] = (uint)(offset >> 32);
     c[2] = 0;
     c[3] = 0;
-    uint k0 = seed0;
-    uint k1 = seed1;
+    uint k0 = (uint)(seed & 0xffffffff);
+    uint k1 = (uint)(seed >> 32);
   
     for (int i = 0; i < 10; i++) {
         uint prev_c0 = c[0];
@@ -799,13 +799,12 @@ ulong next_pow_of_two(ulong x) {
 }
 
 kernel void rand_long(
-    device ulong* output [[buffer(0)]],
-    constant uint &seed0 [[buffer(1)]],
-    constant uint &seed1 [[buffer(2)]],
-    constant uint &offset [[buffer(3)]],
-    constant uint &size [[buffer(4)]],
-    constant ulong &minVal [[buffer(5)]],
-    constant ulong &count [[buffer(6)]],
+    const device ulong* state [[buffer(0)]],
+    device ulong* outState [[buffer(1)]],
+    device ulong* output [[buffer(2)]],
+    constant ulong &minVal [[buffer(3)]],
+    constant ulong &count [[buffer(4)]],
+    constant uint &size [[buffer(5)]],
     uint id [[thread_position_in_grid]]
 ) {
     ulong sample = 0;
@@ -814,8 +813,13 @@ kernel void rand_long(
 
     ulong bound = next_pow_of_two(count);
 
+    if (id == 0) {
+        outState[0] = state[0];
+        outState[1] = state[1] + ((ulong)size) * 32;
+    }
+
     for (int i = 0; i < 32; i++) {
-        philox(seed0, seed1, offset + i + id*32, c);
+        philox(state[0], state[1] + i + id*32, c);
         ulong v1 = (((ulong)c[0]) | (((ulong)c[1]) << 32)) % bound;
         ulong v2 = (((ulong)c[2]) | (((ulong)c[3]) << 32)) % bound;
         if (v1 < count && !found) {
@@ -832,99 +836,60 @@ kernel void rand_long(
     }
 }
 
-kernel void rand_float(
-    device float* output [[buffer(0)]],
-    constant uint &seed0 [[buffer(1)]],
-    constant uint &seed1 [[buffer(2)]],
-    constant uint &offset [[buffer(3)]],
-    constant uint &size [[buffer(4)]],
-    uint id [[thread_position_in_grid]]
-) {
-    uint c[4];
-    philox(seed0, seed1, offset + id, c);
-    for (int i = 0; i < 4; i++) {
-        uint outIdx = id * 4 + i;
-        if (outIdx < size) {
-            output[outIdx] = float(c[i]) / float(0xffffffff);
-        }
+#define DEFINE_RAND(type) \
+    kernel void rand_##type( \
+        const device ulong* state [[buffer(0)]], \
+        device ulong* outState [[buffer(1)]], \
+        device type* output [[buffer(2)]], \
+        constant uint &size [[buffer(3)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        uint c[4]; \
+        philox(state[0], state[1] + id, c); \
+        if (id == 0) { \
+            outState[0] = state[0]; \
+            outState[1] = state[1] + ((ulong)size + 3) / 4; \
+        } \
+        for (int i = 0; i < 4; i++) { \
+            uint outIdx = id * 4 + i; \
+            if (outIdx < size) { \
+                output[outIdx] = (type)(float(c[i]) / float(0xffffffff)); \
+            } \
+        } \
+    } \
+    kernel void randn_##type( \
+        const device ulong* state [[buffer(0)]], \
+        device ulong* outState [[buffer(1)]], \
+        device type* output [[buffer(2)]], \
+        constant uint &size [[buffer(3)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id == 0) { \
+            outState[0] = state[0]; \
+            outState[1] = state[1] + ((ulong)size + 1) / 2; \
+        } \
+        uint c[4]; \
+        philox(state[0], state[1] + id, c); \
+        float u1 = float(c[0]) / float(0xffffffff); \
+        if (u1 < 1e-5) { \
+            u1 = 1e-5; \
+        } \
+        float u2 = float(c[1]) / float(0xffffffff); \
+        float r = sqrt(-2 * log(u1)); \
+        float phi = 2 * M_PI * u2; \
+        float z[2]; \
+        z[0] = r * cos(phi); \
+        z[1] = r * sin(phi); \
+        for (int i = 0; i < 2; i++) { \
+            uint outIdx = id * 2 + i; \
+            if (outIdx < size) { \
+                output[outIdx] = (type)z[i]; \
+            } \
+        } \
     }
-}
 
-kernel void rand_half(
-    device half* output [[buffer(0)]],
-    constant uint &seed0 [[buffer(1)]],
-    constant uint &seed1 [[buffer(2)]],
-    constant uint &offset [[buffer(3)]],
-    constant uint &size [[buffer(4)]],
-    uint id [[thread_position_in_grid]]
-) {
-    uint c[4];
-    philox(seed0, seed1, offset + id, c);
-    for (int i = 0; i < 4; i++) {
-        uint outIdx = id * 4 + i;
-        if (outIdx < size) {
-            output[outIdx] = half(float(c[i]) / float(0xffffffff));
-        }
-    }
-}
-
-kernel void randn_float(
-    device float* output [[buffer(0)]],
-    constant uint &seed0 [[buffer(1)]],
-    constant uint &seed1 [[buffer(2)]],
-    constant uint &offset [[buffer(3)]],
-    constant uint &size [[buffer(4)]],
-    uint id [[thread_position_in_grid]]
-) {
-    uint c[4];
-    philox(seed0, seed1, offset + id, c);
-    float u1 = float(c[0]) / float(0xffffffff);
-    if (u1 < 1e-5) {
-        u1 = 1e-5;
-    }
-    float u2 = float(c[1]) / float(0xffffffff);
-    float r = sqrt(-2 * log(u1));
-    float phi = 2 * M_PI * u2;
-    float z[2];
-    z[0] = r * cos(phi);
-    z[1] = r * sin(phi);
-
-    for (int i = 0; i < 2; i++) {
-        uint outIdx = id * 2 + i;
-        if (outIdx < size) {
-            output[outIdx] = z[i];
-        }
-    }
-}
-
-kernel void randn_half(
-    device half* output [[buffer(0)]],
-    constant uint &seed0 [[buffer(1)]],
-    constant uint &seed1 [[buffer(2)]],
-    constant uint &offset [[buffer(3)]],
-    constant uint &size [[buffer(4)]],
-    uint id [[thread_position_in_grid]]
-) {
-    uint c[4];
-    philox(seed0, seed1, offset + id, c);
-    float u1 = float(c[0]) / float(0xffffffff);
-    if (u1 < 1e-5) {
-        u1 = 1e-5;
-    }
-    float u2 = float(c[1]) / float(0xffffffff);
-    float r = sqrt(-2 * log(u1));
-    float phi = 2 * M_PI * u2;
-    float z[2];
-    z[0] = r * cos(phi);
-    z[1] = r * sin(phi);
-
-    for (int i = 0; i < 2; i++) {
-        uint outIdx = id * 2 + i;
-        if (outIdx < size) {
-            output[outIdx] = half(z[i]);
-        }
-    }
-}
+DEFINE_RAND(float)
+DEFINE_RAND(half)
 
 template <typename T>
 void gather_bcast_impl(

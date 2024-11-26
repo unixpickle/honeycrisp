@@ -44,65 +44,169 @@ open class CPUBackend: Backend {
     }
   }
 
-  public class NativeRandomGenerator: RandomGenerator {
+  public class CPURandomGenerator: RandomGenerator {
+
+    private let PHILOX_ROUND_A: UInt32 = 0xD251_1F53
+    private let PHILOX_ROUND_B: UInt32 = 0xCD9E_8D57
+    private let PHILOX_KEY_A: UInt32 = 0x9E37_79B9
+    private let PHILOX_KEY_B: UInt32 = 0xBB67_AE85
+
     public let cpuBackend: CPUBackend
 
-    public var backend: Backend {
-      cpuBackend
+    override internal var stateCount: Int {
+      2
     }
 
-    init(cpuBackend: CPUBackend) {
+    override internal var stateDType: Tensor.DType {
+      .int64
+    }
+
+    init(cpuBackend: CPUBackend, seed: Int) {
       self.cpuBackend = cpuBackend
+      super.init(
+        backend: cpuBackend,
+        state: cpuBackend.use { Tensor(data: [seed, 0], dtype: .int64) })
     }
 
-    public func save() async throws -> Data {
-      throw BackendError.notImplemented("save")
+    override internal func _seed(_ x: Int) async throws -> Tensor.Data {
+      try await cpuBackend.collection([x, 0], reverse: false, dtype: .int64)
     }
 
-    public func restore(_ x: Data) async throws {
-      throw BackendError.notImplemented("restore")
-    }
-
-    public func seed(_ x: Int) async throws {
-      throw BackendError.notImplemented("seed")
-    }
-
-    public func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) async throws
-      -> any Tensor.Data
+    override internal func _sample(
+      state: Tensor.Data, count: Int, dist: RandomDist, dtype: Tensor.DType
+    )
+      async throws -> (
+        sample: Tensor.Data, state: Tensor.Data
+      )
     {
-      try await cpuBackend.withBuffers(count * dtype.byteSize) { buffer in
-        try await cpuBackend.serialize {
-          switch dist {
-          case .uniform:
-            let arr = (0..<count).map { _ in Float.random(in: 0..<1.0) }
-            try arrayToPointer(arr, output: buffer, dtype: dtype)
-          case .normal:
-            let elCount = count / 2 + (count % 2)
-            var results = [Float]()
-            for _ in 0..<elCount {
-              let u1 = Float.random(in: 1e-5..<1.0)
-              let u2 = Float.random(in: 0..<1.0)
-              let r = sqrt(-2 * log(u1))
-              let phi = 2 * Float.pi * u2
-              let z1 = r * cos(phi)
-              let z2 = r * sin(phi)
-              results.append(z1)
-              if results.count < count {
-                results.append(z2)
+      let cpuBackend = cpuBackend
+      return try await philox(state) { philoxFn in
+        try await cpuBackend.withBuffers(count * dtype.byteSize) { outBuf in
+          try await cpuBackend.serialize {
+            try writeBuffer(Float.self, outBuf, count: count, dtype: dtype) { outArr in
+              switch dist {
+              case .uniform:
+                for i in stride(from: 0, through: count, by: 4) {
+                  let c = philoxFn()
+                  for (j, x) in c.enumerated() {
+                    if i + j < count {
+                      outArr[i + j] = Float(Double(x) / Double(0xffff_ffff))
+                    }
+                  }
+                }
+              case .normal:
+                for i in stride(from: 0, through: count, by: 2) {
+                  let c = philoxFn()
+                  for (j, (c1, c2)) in [(c[0], c[1]), (c[2], c[3])].enumerated() {
+                    let u1 = max(1e-5, Float(c1) / Float(0xffff_ffff))
+                    let u2 = Float(c2) / Float(0xffff_ffff)
+                    let r = sqrt(-2 * log(u1))
+                    let phi = 2 * Float.pi * u2
+                    let z1 = r * cos(phi)
+                    let z2 = r * sin(phi)
+                    if i + j * 2 < count {
+                      outArr[i + j * 2] = z1
+                    }
+                    if i + j * 2 + 1 < count {
+                      outArr[i + j * 2 + 1] = z2
+                    }
+                  }
+                }
               }
             }
-            try arrayToPointer(results, output: buffer, dtype: dtype)
           }
         }
       }
     }
 
-    public func sample(count: Int, in range: Range<Int64>) async throws -> any Tensor.Data {
-      try await cpuBackend.withBuffers(count * Tensor.DType.int64.byteSize) { buffer in
-        try await cpuBackend.serialize {
-          let ints = (0..<count).map { _ in Int64.random(in: range) }
-          try arrayToPointer(ints, output: buffer, dtype: .int64)
+    override internal func _sample(state: Tensor.Data, count: Int, in range: Range<Int64>)
+      async throws -> (
+        sample: Tensor.Data, state: Tensor.Data
+      )
+    {
+      func nextPowOf2(_ x: UInt64) -> UInt64 {
+        var x = x
+
+        if x == 0 {
+          return 1
         }
+
+        if x >= (UInt64.max >> 1) {
+          return UInt64.max
+        }
+
+        x -= 1
+        x |= x >> 1
+        x |= x >> 2
+        x |= x >> 4
+        x |= x >> 8
+        x |= x >> 16
+        x |= x >> 32
+        return x + 1
+      }
+
+      let bound = (UInt64(bitPattern: range.upperBound) &- UInt64(bitPattern: range.lowerBound))
+      let pow2 = nextPowOf2(bound)
+      let cpuBackend = cpuBackend
+      return try await philox(state) { philoxFn in
+        try await cpuBackend.withBuffers(count * 8) { outBuf in
+          try await cpuBackend.serialize {
+            try writeBuffer(Int64.self, outBuf, count: count, dtype: .int64) { outArr in
+              for i in 0..<count {
+                var result: UInt64 = 0
+                for _ in 0..<32 {
+                  let c = philoxFn()
+                  for i in [0, 2] {
+                    let x = (UInt64(c[i]) | ((UInt64(c[i + 1]) << 32))) % pow2
+                    if x < bound {
+                      result = x
+                    }
+                  }
+                }
+                outArr[i] = range.lowerBound &+ Int64(bitPattern: result)
+              }
+            }
+          }
+        }
+      }
+    }
+
+    internal func philox(
+      _ state: Tensor.Data, f: @escaping (@escaping () -> [UInt32]) async throws -> Tensor.Data
+    )
+      async throws -> (sample: Tensor.Data, state: Tensor.Data)
+    {
+      func philoxInner(seed: UInt64, offset: inout UInt64) -> [UInt32] {
+        var c = [UInt32(offset & 0xffff_ffff), UInt32(offset >> 32), 0, 0]
+        var k0 = UInt32(seed & 0xffff_ffff)
+        var k1 = UInt32(seed >> 32)
+        for _ in 0..<10 {
+          let prevC0 = c[0]
+          let prevC2 = c[2]
+          c[0] = UInt32((UInt64(PHILOX_ROUND_B) * UInt64(c[2])) >> 32) ^ c[1] ^ k0
+          c[2] = UInt32((UInt64(PHILOX_ROUND_A) * UInt64(prevC0)) >> 32) ^ c[3] ^ k1
+          c[1] = PHILOX_ROUND_B &* prevC2
+          c[3] = PHILOX_ROUND_A &* prevC0
+          k0 = (k0 &+ PHILOX_KEY_A)
+          k1 = (k1 &+ PHILOX_KEY_B)
+        }
+        offset += 1
+        return c
+      }
+      return try await state.onCPU { stateIn in
+        let states = stateIn.bindMemory(to: UInt64.self, capacity: 2)
+        let resultState = try await cpuBackend.allocate(16)
+        let sample: Tensor.Data = try await resultState.mutateOnCPU { stateOut in
+          var offset: UInt64 = states[1]
+          let sample: Tensor.Data = try await f {
+            philoxInner(seed: states[0], offset: &offset)
+          }
+          let outArr = stateOut.bindMemory(to: UInt64.self, capacity: 2)
+          outArr[0] = states[0]
+          outArr[1] = offset
+          return sample
+        }
+        return (sample: sample, state: resultState)
       }
     }
   }
@@ -111,6 +215,13 @@ open class CPUBackend: Backend {
   public static var global: CPUBackend { CPUBackend._global }
 
   internal var worker = Backend.WorkerThread()
+  internal var _defaultRandom: CPURandomGenerator? = nil
+
+  override public init() {
+    super.init()
+    self._defaultRandom = CPURandomGenerator(
+      cpuBackend: self, seed: Int.random(in: 0..<1_000_000_000))
+  }
 
   internal func serialize<T>(_ work: @escaping () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { continuation in
@@ -1442,12 +1553,12 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func defaultRandom() async throws -> RandomGenerator {
-    NativeRandomGenerator(cpuBackend: self)
+  override public func defaultRandom() -> RandomGenerator {
+    _defaultRandom!
   }
 
-  override public func createRandom() async throws -> RandomGenerator {
-    NativeRandomGenerator(cpuBackend: self)
+  override public func createRandom() -> RandomGenerator {
+    CPURandomGenerator(cpuBackend: self, seed: Int.random(in: 0..<1_000_000_000))
   }
 
   func withMaybeBuffer<T>(

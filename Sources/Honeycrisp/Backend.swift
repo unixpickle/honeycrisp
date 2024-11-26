@@ -578,13 +578,13 @@ open class Backend {
   }
 
   /// Get the default random number generator for this backend.
-  public func defaultRandom() async throws -> RandomGenerator {
-    throw BackendError.notImplemented("defaultRandom")
+  public func defaultRandom() -> RandomGenerator {
+    tracedFatalError("defaultRandom() not implemented")
   }
 
   /// Create a new random number generator for this backend.
-  public func createRandom() async throws -> RandomGenerator {
-    throw BackendError.notImplemented("createRandom")
+  public func createRandom() -> RandomGenerator {
+    tracedFatalError("createRandom() not implemented")
   }
 
   /// Perform an AdamW update.

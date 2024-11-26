@@ -1460,19 +1460,19 @@ final class HoneycrispTests: XCTestCase {
       XCTAssert(abs(zMean - 0.5) < 0.03, "unexpected mean of uniform: \(zMean)")
       XCTAssert(abs(zStd - 0.288675135) < 0.03, "unexpected standard deviation of uniform: \(zStd)")
 
-      do {
-        let rng = try await Backend.current.defaultRandom()
-        let state = try await rng.save()
-        let a = Tensor(randn: [1234])
-        let _ = try await a.data  // avoid a race condition
-        try await rng.restore(state)
-        let b = Tensor(randn: [1234])
-        try await assertDataEqual(a, b)
-      } catch BackendError.notImplemented(_) {
-      }
+      let rng = Backend.current.defaultRandom()
+      let state = rng.state
+      let a = Tensor(randn: [1234])
+      let b = Tensor(randn: [1234])
+      rng.state = state
+      let c = Tensor(randn: [1234])
+      let d = Tensor(randn: [1234])
+      try await assertDataEqual(a, c)
+      try await assertDataEqual(b, d)
 
       // Check some edge cases of integer generation.
       var bits = Tensor(randInt: [20000], in: 0..<(10_000_000_403 * 2)) / 10_000_000_403
+
       var mean = try await bits.cast(.float32).mean().item()
       XCTAssert(abs(mean - 0.5) < 1e-2, "highest bit was incorrect, mean is \(mean)")
 

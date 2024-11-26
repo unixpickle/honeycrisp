@@ -20,24 +20,99 @@ public enum RandomDist {
 /// To ensure that these use cases are serialized with methods like ``RandomGenerator/seed(_:)``,
 /// you can call ``Tensor/wait(function:file:line:)`` on the random `Tensor`s before calling further
 /// methods that use the ``RandomGenerator``.
-public protocol RandomGenerator {
-  /// The ``Backend`` which created this generator.
-  var backend: Backend { get }
+public class RandomGenerator {
+  public let backend: Backend
+  private var _state: Tensor
+  private let _opLock: NSLock = NSLock()
 
-  /// Encode the current state of the generator.
-  func save() async throws -> Data
+  internal var stateCount: Int {
+    tracedFatalError("must override stateCount")
+  }
 
-  /// Restore the state of the generator from a previous ``RandomGenerator/save()`` call.
-  func restore(_ x: Data) async throws
+  internal var stateDType: Tensor.DType {
+    tracedFatalError("must override stateDType")
+  }
 
-  /// Seed the generator with the integer.
-  func seed(_ x: Int) async throws
+  public var state: Tensor {
+    get {
+      _opLock.withLock { _state }
+    }
+    set {
+      _opLock.withLock {
+        alwaysAssert(newValue.shape == [stateCount])
+        alwaysAssert(newValue.dtype == stateDType)
+        _state = newValue
+      }
+    }
+  }
 
-  /// Sample a tensor of numeric values from the continuous distribution.
-  func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) async throws -> Tensor.Data
+  public init(backend: Backend, state: Tensor) {
+    self.backend = backend
+    self._state = state
+  }
+
+  /// Update the state of the generator given the seed.
+  public func seed(_ x: Int) {
+    _opLock.withLock {
+      _state = Tensor(
+        dataTask: Tensor.createDataTask {
+          try await self._seed(x)
+        }, shape: [stateCount], dtype: stateDType)
+    }
+  }
+
+  internal func _seed(_ x: Int) async throws -> Tensor.Data {
+    tracedFatalError("_seed() is not implemented")
+  }
+
+  /// Sample a numeric tensor from a given continuous distribution.
+  public func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) -> Task<Tensor.Data, Error>
+  {
+    _opLock.withLock {
+      let s = _state
+      let task = Tensor.createDataTask {
+        try await self._sample(state: try await s.data, count: count, dist: dist, dtype: dtype)
+      }
+      _state = Tensor(
+        dataTask: Task {
+          try await task.value.state
+        }, shape: [stateCount], dtype: stateDType)
+      return Task {
+        try await task.value.sample
+      }
+    }
+  }
+
+  internal func _sample(state: Tensor.Data, count: Int, dist: RandomDist, dtype: Tensor.DType)
+    async throws -> (
+      sample: Tensor.Data, state: Tensor.Data
+    )
+  {
+    tracedFatalError("_sample(state:count:dist:dtype:) is not implemented")
+  }
 
   /// Sample a tensor of int64 values uniformly in the given range.
-  func sample(count: Int, in range: Range<Int64>) async throws -> Tensor.Data
+  public func sample(count: Int, in range: Range<Int64>) -> Task<Tensor.Data, Error> {
+    _opLock.withLock {
+      let s = _state
+      let task = Tensor.createDataTask {
+        try await self._sample(state: try await s.data, count: count, in: range)
+      }
+      _state = Tensor(
+        dataTask: Task {
+          try await task.value.state
+        }, shape: [stateCount], dtype: stateDType)
+      return Task {
+        try await task.value.sample
+      }
+    }
+  }
+
+  internal func _sample(state: Tensor.Data, count: Int, in range: Range<Int64>) async throws -> (
+    sample: Tensor.Data, state: Tensor.Data
+  ) {
+    tracedFatalError("_sample(state:count:in:) is not implemented")
+  }
 }
 
 extension Tensor {
@@ -83,15 +158,8 @@ extension Tensor {
       alwaysAssert(
         generator == nil || generator!.backend === backend,
         "backend for provided generator is not the current backend")
-      return Tensor.createDataTask {
-        let generator =
-          if let generator = generator {
-            generator
-          } else {
-            try await backend.defaultRandom()
-          }
-        return try await generator.sample(count: shape.product(), dist: dist, dtype: dtype)
-      }
+      let generator = generator ?? backend.defaultRandom()
+      return generator.sample(count: shape.product(), dist: dist, dtype: dtype)
     }
     self.init(dataTask: dataTask, shape: shape, dtype: dtype)
   }
@@ -136,15 +204,8 @@ extension Tensor {
       alwaysAssert(
         generator == nil || generator!.backend === backend,
         "backend for provided generator is not the current backend")
-      return Tensor.createDataTask {
-        let generator =
-          if let generator = generator {
-            generator
-          } else {
-            try await backend.defaultRandom()
-          }
-        return try await generator.sample(count: shape.product(), in: range)
-      }
+      let generator = generator ?? backend.defaultRandom()
+      return generator.sample(count: shape.product(), in: range)
     }
     self.init(
       dataTask: dataTask, shape: shape, dtype: .int64, function: function, file: file, line: line)
