@@ -148,35 +148,52 @@ public final class Tensor {
     }
   }
 
-  private static let GradEnabledThreadKey = "HONEYCRISP_GRAD_ENABLED"
+  @TaskLocal
+  private static var taskGradEnabled: Bool? = nil
 
   public static var isGradEnabled: Bool {
-    if let enabled = Thread.current.threadDictionary[GradEnabledThreadKey] {
-      enabled as! Bool
-    } else {
-      true
-    }
+    taskGradEnabled ?? true
+  }
+
+  @recordCaller
+  private static func _withGrad<T>(enabled flag: Bool, _ fn: () async throws -> T) async rethrows -> T {
+    try await $taskGradEnabled.withValue(flag) { try await fn() }
   }
 
   @recordCaller
   private static func _withGrad<T>(enabled flag: Bool, _ fn: () throws -> T) rethrows -> T {
-    if let enabled = Thread.current.threadDictionary[GradEnabledThreadKey] {
-      let old = enabled as! Bool
-      defer {
-        Thread.current.threadDictionary[GradEnabledThreadKey] = old
-      }
-      Thread.current.threadDictionary[GradEnabledThreadKey] = flag
-      return try fn()
-    } else {
-      defer {
-        Thread.current.threadDictionary.removeObject(forKey: GradEnabledThreadKey)
-      }
-      Thread.current.threadDictionary[GradEnabledThreadKey] = flag
-      return try fn()
-    }
+    try $taskGradEnabled.withValue(flag) { try fn() }
   }
 
-  private static let DataDependenciesKey = "HONEYCRISP_DATA_DEPENDENCIES"
+  @TaskLocal
+  private static var taskDataDependencies: [Task<(), Error>]? = nil
+
+  /// Run a block such that all of the `Tensor`s created within the block will
+  /// wait for the current `Tensor`'s data to be available before beginning
+  /// execution of any backend routines.
+  ///
+  /// Note that, if the backward pass is not performed within the block, then
+  /// tensors in the backward pass may, in theory, not wait for the data. This
+  /// is unlikely, however, since gradients typically depend on results from
+  /// the forward pass, which will correctly wait for the data.
+  ///
+  /// This has no effect on `Tensor`s explicitly created with the `dataTask:`
+  /// initializer. It only affects data tasks created with the `createDataTask`
+  /// helpers, which should be used internally whenever a backend method is
+  /// called.
+  public func asDependency<T>(waitForCPU: Bool = true, _ fn: () async throws -> T) async rethrows -> T {
+    let t = self.noGrad()
+    let task = Task {
+      let data = try await t.data
+      if waitForCPU {
+        try await data.onCPU { _ in () }
+      }
+    }
+
+    return try await Tensor.$taskDataDependencies.withValue((Tensor.taskDataDependencies ?? []) + [task]) {
+      try await fn()
+    }
+  }
 
   /// Run a block such that all of the `Tensor`s created within the block will
   /// wait for the current `Tensor`'s data to be available before beginning
@@ -200,20 +217,8 @@ public final class Tensor {
       }
     }
 
-    let key = Tensor.DataDependenciesKey
-    if let deps = Thread.current.threadDictionary[key] {
-      let old = deps as! [Task<Void, Error>]
-      defer {
-        Thread.current.threadDictionary[key] = old
-      }
-      Thread.current.threadDictionary[key] = old + [task]
-      return try fn()
-    } else {
-      defer {
-        Thread.current.threadDictionary.removeObject(forKey: key)
-      }
-      Thread.current.threadDictionary[key] = [task]
-      return try fn()
+    return try Tensor.$taskDataDependencies.withValue((Tensor.taskDataDependencies ?? []) + [task]) {
+      try fn()
     }
   }
 
@@ -464,10 +469,10 @@ public final class Tensor {
     line: UInt = #line
   ) -> Task<T, Error> {
     let callers = Backtrace.current + [CodeLocation(function: function, file: file, line: line)]
-    return if let deps = Thread.current.threadDictionary[Tensor.DataDependenciesKey] {
+    return if let deps = taskDataDependencies {
       Task {
         try await Backtrace.override(callers) {
-          for dep in deps as! [Task<Void, Error>] {
+          for dep in deps {
             let _ = try await dep.value
           }
           return try await fn()

@@ -39,7 +39,8 @@ open class Backend {
     }
   }
 
-  private static let ThreadKey = "HONEYCRISP_CURRENT_BACKEND"
+  @TaskLocal
+  private static var taskCurrentBackend: Backend? = nil
 
   /// The ``Backend`` that is used by default but can be overriden on a
   /// per-thread basis by ``Backend/use(_:)``.
@@ -49,11 +50,7 @@ open class Backend {
   ///
   /// See ``Backend/use(_:)`` and ``Backend/defaultBackend``.
   public static var current: Backend {
-    if let backend = Thread.current.threadDictionary[ThreadKey] {
-      (backend as? Backend)!
-    } else {
-      defaultBackend
-    }
+    return taskCurrentBackend ?? defaultBackend
   }
 
   /// Call the function with the current backend set as the thread-local default
@@ -62,19 +59,19 @@ open class Backend {
   /// Inside of this function, ``Backend/current`` will be `self`, unless the backend
   /// is overridden again by a nested call to this method.
   public func use<T>(_ fn: () throws -> T) rethrows -> T {
-    if let backend = Thread.current.threadDictionary[Backend.ThreadKey] {
-      let old = (backend as? Backend)!
-      defer {
-        Thread.current.threadDictionary[Backend.ThreadKey] = old
-      }
-      Thread.current.threadDictionary[Backend.ThreadKey] = self
-      return try fn()
-    } else {
-      defer {
-        Thread.current.threadDictionary.removeObject(forKey: Backend.ThreadKey)
-      }
-      Thread.current.threadDictionary[Backend.ThreadKey] = self
-      return try fn()
+    try Backend.$taskCurrentBackend.withValue(self) {
+      try fn()
+    }
+  }
+
+  /// Call the function with the current backend set as the thread-local default
+  /// backend.
+  ///
+  /// Inside of this function, ``Backend/current`` will be `self`, unless the backend
+  /// is overridden again by a nested call to this method.
+  public func use<T>(_ fn: () async throws -> T) async rethrows -> T {
+    try await Backend.$taskCurrentBackend.withValue(self) {
+      try await fn()
     }
   }
 

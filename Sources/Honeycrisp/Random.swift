@@ -69,7 +69,7 @@ public class RandomGenerator {
   public func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) -> Task<Tensor.Data, Error>
   {
     _opLock.withLock {
-      let s = _state
+      let s = _state.noGrad()
       let task = Tensor.createDataTask {
         try await self._sample(state: try await s.data, count: count, dist: dist, dtype: dtype)
       }
@@ -94,7 +94,7 @@ public class RandomGenerator {
   /// Sample a tensor of int64 values uniformly in the given range.
   public func sample(count: Int, in range: Range<Int64>) -> Task<Tensor.Data, Error> {
     _opLock.withLock {
-      let s = _state
+      let s = _state.noGrad()
       let task = Tensor.createDataTask {
         try await self._sample(state: try await s.data, count: count, in: range)
       }
