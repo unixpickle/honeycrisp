@@ -1,5 +1,6 @@
 import Foundation
 
+/// A location in compiled code, which represents part of a backtrace.
 public struct CodeLocation: CustomStringConvertible {
   public let function: StaticString
   public let file: StaticString
@@ -16,6 +17,7 @@ public struct CodeLocation: CustomStringConvertible {
   }
 }
 
+/// An error with a recorded backtrace.
 public struct TracedError: Error, CustomStringConvertible {
   public let wrapped: Error
   public let trace: [CodeLocation]
@@ -30,7 +32,21 @@ public struct TracedError: Error, CustomStringConvertible {
   }
 }
 
+/// The interface for manually recording and accessing the currently recorded call stack.
+///
+/// A `Task`-local backtrace is recorded by using ``Backtrace/record(_:function:file:line:)-1mlbd``
+/// or similar methods.
+///
+/// Typically, methods on `Backtrace` do not need to be called explicitly.
+/// Rather, ``recordCaller()`` can be used on class methods to automatically record callers
+/// and wrap errors with traces.
+///
+/// Functions like ``tracedFatalError(_:function:file:line:)`` can handle printing stack traces
+/// for fatal errors.
 final public class Backtrace {
+  /// The current, `Task`-local backtrace.
+  ///
+  /// Recorded calls are appended to the end of this list.
   @TaskLocal public static var current: [CodeLocation] = []
 
   internal static func wrapErrors<T>(_ fn: () throws -> T) rethrows -> T {
@@ -57,6 +73,8 @@ final public class Backtrace {
     }
   }
 
+  /// Record the provided function, file, and line, followed by the caller, in the backtrace
+  /// during the provided block.
   public static func record<T>(
     function: StaticString,
     file: StaticString,
@@ -78,6 +96,8 @@ final public class Backtrace {
     }
   }
 
+  /// Record the provided function, file, and line, followed by the caller, in the backtrace
+  /// during the provided block.
   public static func record<T>(
     function: StaticString,
     file: StaticString,
@@ -99,6 +119,7 @@ final public class Backtrace {
     }
   }
 
+  /// Record the caller in the backtrace during the provided block.
   public static func record<T>(
     _ fn: () throws -> T,
     function: StaticString = #function, file: StaticString = #file, line: UInt = #line
@@ -110,6 +131,7 @@ final public class Backtrace {
     }
   }
 
+  /// Record the caller in the backtrace during the provided block.
   public static func record<T>(
     _ fn: () async throws -> T, function: StaticString = #function, file: StaticString = #file,
     line: UInt = #line
@@ -123,6 +145,7 @@ final public class Backtrace {
     }
   }
 
+  /// Override the `Task`-local backtrace within the block.
   public static func override<T>(_ callers: [CodeLocation], _ fn: () async throws -> T)
     async rethrows -> T
   {
@@ -133,10 +156,12 @@ final public class Backtrace {
     }
   }
 
+  /// Equivalent to ``Backtrace/current``.
   public static func trace() -> [CodeLocation] {
     current
   }
 
+  /// Format the current (or provided) backtrace as a string.
   public static func format(_ trace: [CodeLocation]? = nil) -> String {
     formatCalls(trace ?? current)
   }
@@ -149,6 +174,8 @@ private func formatCalls(_ locs: [CodeLocation]) -> String {
   }.joined(separator: "\n")
 }
 
+/// If a condition is false, abort program execution and print the current backtrace with an
+/// optional error message.
 public func alwaysAssert(
   _ condition: Bool, _ message: String? = nil, function: StaticString = #function,
   file: StaticString = #file, line: UInt = #line
@@ -167,6 +194,7 @@ public func alwaysAssert(
     }, function: function, file: file, line: line)
 }
 
+/// Abort program execution and print the current backtrace with an optional error message.
 public func tracedFatalError(
   _ message: String? = nil, function: StaticString = #function,
   file: StaticString = #file, line: UInt = #line

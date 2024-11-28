@@ -1464,6 +1464,9 @@ final class HoneycrispTests: XCTestCase {
       let state = rng.state
       let a = Tensor(randn: [1234])
       let b = Tensor(randn: [1234])
+      let aData = try await a.floats()
+      let bData = try await b.floats()
+      XCTAssertNotEqual(aData, bData)
       rng.state = state
       let c = Tensor(randn: [1234])
       let d = Tensor(randn: [1234])

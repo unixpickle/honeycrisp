@@ -21,7 +21,7 @@ public enum BackendError: Error {
 /// backend implementation.
 ///
 /// On a given thread, there is a current default backend, accessible via ``Backend/current``.
-/// You can call ``Backend/use(_:)`` to override the backend on the current thread, or else
+/// You can call ``Backend/use(_:)-79uzk`` to override the backend on the current thread, or else
 /// the global ``Backend/defaultBackend`` will be used.
 open class Backend {
 
@@ -43,12 +43,12 @@ open class Backend {
   private static var taskCurrentBackend: Backend? = nil
 
   /// The ``Backend`` that is used by default but can be overriden on a
-  /// per-thread basis by ``Backend/use(_:)``.
+  /// per-thread basis by ``Backend/use(_:)-79uzk``.
   public static var defaultBackend: Backend = CPUBackend()
 
   /// The current backend in use on this thread.
   ///
-  /// See ``Backend/use(_:)`` and ``Backend/defaultBackend``.
+  /// See ``Backend/use(_:)-79uzk`` and ``Backend/defaultBackend``.
   public static var current: Backend {
     return taskCurrentBackend ?? defaultBackend
   }

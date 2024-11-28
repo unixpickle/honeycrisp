@@ -17,7 +17,7 @@ import HCBacktrace
 /// asynchronous ``Tensor/data`` attribute. The data itself might not exist on the CPU, and
 /// may instead be stored in a place specific to the ``Backend`` which produced it. However,
 /// all implementations of ``Tensor/Data`` must provide the ability to access the data on the
-/// CPU via the ``Tensor/Data/cpuBuffer`` attribute.
+/// CPU via the ``Tensor/Data/onCPU(_:)`` and ``Tensor/Data/mutateOnCPU(_:)`` methods.
 public final class Tensor {
 
   /// A type of numeric or boolean data stored in a ``Tensor`` object.
@@ -156,7 +156,9 @@ public final class Tensor {
   }
 
   @recordCaller
-  private static func _withGrad<T>(enabled flag: Bool, _ fn: () async throws -> T) async rethrows -> T {
+  private static func _withGrad<T>(enabled flag: Bool, _ fn: () async throws -> T) async rethrows
+    -> T
+  {
     try await $taskGradEnabled.withValue(flag) { try await fn() }
   }
 
@@ -181,7 +183,9 @@ public final class Tensor {
   /// initializer. It only affects data tasks created with the `createDataTask`
   /// helpers, which should be used internally whenever a backend method is
   /// called.
-  public func asDependency<T>(waitForCPU: Bool = true, _ fn: () async throws -> T) async rethrows -> T {
+  public func asDependency<T>(waitForCPU: Bool = true, _ fn: () async throws -> T) async rethrows
+    -> T
+  {
     let t = self.noGrad()
     let task = Task {
       let data = try await t.data
@@ -190,7 +194,9 @@ public final class Tensor {
       }
     }
 
-    return try await Tensor.$taskDataDependencies.withValue((Tensor.taskDataDependencies ?? []) + [task]) {
+    return try await Tensor.$taskDataDependencies.withValue(
+      (Tensor.taskDataDependencies ?? []) + [task]
+    ) {
       try await fn()
     }
   }
@@ -217,7 +223,8 @@ public final class Tensor {
       }
     }
 
-    return try Tensor.$taskDataDependencies.withValue((Tensor.taskDataDependencies ?? []) + [task]) {
+    return try Tensor.$taskDataDependencies.withValue((Tensor.taskDataDependencies ?? []) + [task])
+    {
       try fn()
     }
   }
@@ -252,11 +259,70 @@ public final class Tensor {
     }
   }
 
-  private var backwardImpl: (((Tensor) -> Void))?
+  private class BackwardState {
+    public var backwardImpl: (((Tensor) -> Void))?
+    public var shape: [Int]
+    public var dtype: DType
 
-  // State used during backward pass to accumulate gradients.
-  private var curGrad: Tensor? = nil
-  private var numBackwardHandles: Int = 0
+    // State used during backward pass to accumulate gradients.
+    public var curGrad: Tensor? = nil
+
+    // Incremented when references are created, and decremented when
+    // references are destroyed.
+    public var numBackwardHandles: Int = 0
+
+    public init(backwardImpl: (((Tensor) -> Void))?, shape: [Int], dtype: DType) {
+      self.backwardImpl = backwardImpl
+      self.shape = shape
+      self.dtype = dtype
+    }
+
+    @recordCaller
+    private func _createHandle() -> BackwardHandle {
+      numBackwardHandles += 1
+
+      let backend = Backend.current
+
+      let creationTrace = Backtrace.trace()
+
+      return BackwardHandle(
+        addGrad: { [self] grad in addGrad(backend, grad) },
+        cancel: { [self] in
+          numBackwardHandles -= 1
+          if curGrad != nil && numBackwardHandles == 0 {
+            alwaysAssert(
+              false,
+              "backward pass was incompleted due to an unused reference.\n\nTraceback of reference creation:\n\n\(Backtrace.format(creationTrace))"
+            )
+          }
+        })
+    }
+
+    @recordCaller
+    internal func _addGrad(_ backend: Backend, _ grad: Tensor) {
+      alwaysAssert(numBackwardHandles > 0)
+      alwaysAssert(
+        grad.shape == shape,
+        "gradient shape \(grad.shape) must match tensor shape \(shape)"
+      )
+      alwaysAssert(
+        grad.dtype == dtype, "gradient dtype \(grad.dtype) must match tensor dtype \(dtype)")
+      if let cg = curGrad {
+        curGrad = backend.use { cg + grad }
+      } else {
+        curGrad = grad
+      }
+      numBackwardHandles -= 1
+      if let grad = curGrad, numBackwardHandles == 0 {
+        let bwd = backwardImpl!
+        backwardImpl = nil
+        bwd(grad)
+        curGrad = nil
+      }
+    }
+  }
+
+  private let backwardState: BackwardState
 
   public init(
     dataTask: Task<Data, Error>,
@@ -286,7 +352,7 @@ public final class Tensor {
     self.shape = shape
     self.dtype = dtype
     if Tensor.isGradEnabled {
-      self.backwardImpl = backwardImpl
+      self.backwardState = BackwardState(backwardImpl: backwardImpl, shape: shape, dtype: dtype)
       self.needsGrad = backwardImpl != nil
     } else {
       Backtrace.record(function: function, file: file, line: line) {
@@ -294,6 +360,7 @@ public final class Tensor {
           backwardImpl == nil, "cannot provide a backward function if !Tensor.isGradEnabled")
       }
       self.needsGrad = false
+      self.backwardState = BackwardState(backwardImpl: nil, shape: shape, dtype: dtype)
     }
   }
 
@@ -1027,7 +1094,9 @@ public final class Tensor {
         Tensor(onesLike: self)
       }
 
-    alwaysAssert(numBackwardHandles == 0, "cannot call backward() on tensor that is used elsewhere")
+    alwaysAssert(
+      backwardState.numBackwardHandles == 0,
+      "cannot call backward() on tensor that is used elsewhere")
     Tensor.withGrad(enabled: true) { self.saveForBackward() }.backward(Backend.current) { grad }
   }
 
@@ -1036,47 +1105,11 @@ public final class Tensor {
     alwaysAssert(Tensor.isGradEnabled, "backward handle cannot be saved while grads are disabled")
     if !self.needsGrad {
       return BackwardHandle()
-    } else if self.backwardImpl == nil {
+    } else if backwardState.backwardImpl == nil {
       return BackwardHandle(
         addGrad: { _ in alwaysAssert(false, "cannot backward a second time") }, cancel: {})
     }
-
-    numBackwardHandles += 1
-    let backend = Backend.current
-
-    let creationTrace = Backtrace.trace()
-
-    return BackwardHandle(
-      addGrad: { [self] grad in
-        alwaysAssert(numBackwardHandles > 0)
-        alwaysAssert(
-          grad.shape == shape,
-          "gradient shape \(grad.shape) must match tensor shape \(shape)"
-        )
-        alwaysAssert(
-          grad.dtype == dtype, "gradient dtype \(grad.dtype) must match tensor dtype \(dtype)")
-        if let cg = curGrad {
-          curGrad = backend.use { cg + grad }
-        } else {
-          curGrad = grad
-        }
-        numBackwardHandles -= 1
-        if let grad = curGrad, numBackwardHandles == 0 {
-          let bwd = backwardImpl!
-          backwardImpl = nil
-          bwd(grad)
-          curGrad = nil
-        }
-      },
-      cancel: { [self] in
-        numBackwardHandles -= 1
-        if self.curGrad != nil && numBackwardHandles == 0 {
-          alwaysAssert(
-            false,
-            "backward pass was incompleted due to an unused reference.\n\nTraceback of reference creation:\n\n\(Backtrace.format(creationTrace))"
-          )
-        }
-      })
+    return backwardState.createHandle()
   }
 
   @recordCaller

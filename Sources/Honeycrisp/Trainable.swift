@@ -96,7 +96,7 @@ open class Trainable: MaybeTrainable {
       get {
         let param = instance[keyPath: storageKeyPath]
         guard let data = param.maybeData else {
-          fatalError("@Param attribute \(storageKeyPath) was accessed before assignment")
+          tracedFatalError("@Param attribute \(storageKeyPath) was accessed before assignment")
         }
         return data.maybeOnGrad { g in
           if let existingGrad = param.grad {
@@ -169,7 +169,7 @@ open class Trainable: MaybeTrainable {
     ) -> Value {
       get {
         guard let value = instance[keyPath: storageKeyPath].value else {
-          fatalError("@Child attribute \(storageKeyPath) was accessed before assignment")
+          tracedFatalError("@Child attribute \(storageKeyPath) was accessed before assignment")
         }
         return value
       }
@@ -490,7 +490,7 @@ public class Conv2D: Trainable {
         imageSize: Dim(x: width, y: height), stride: stride, dilation: dilation, padding: padding,
         groups: groups, channelsLast: channelsLast)
     } catch {
-      fatalError("failed to instantiate Conv2DConfig: \(error)")
+      tracedFatalError("failed to instantiate Conv2DConfig: \(error)")
     }
 
     var h = Tensor.conv2D(convDesc, image: x, kernel: weight)

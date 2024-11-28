@@ -17,9 +17,8 @@ public enum RandomDist {
 ///
 /// Often times, generation methods will be called indirectly and asynchronously via ``Tensor``
 /// initializers like ``Tensor/init(rand:dtype:generator:function:file:line:)``.
-/// To ensure that these use cases are serialized with methods like ``RandomGenerator/seed(_:)``,
-/// you can call ``Tensor/wait(function:file:line:)`` on the random `Tensor`s before calling further
-/// methods that use the ``RandomGenerator``.
+/// These calls with synchronously update ``RandomGenerator/state``, ensuring that the generator
+/// is used in a deterministic order.
 public class RandomGenerator {
   public let backend: Backend
   private var _state: Tensor
@@ -33,6 +32,10 @@ public class RandomGenerator {
     tracedFatalError("must override stateDType")
   }
 
+  /// All the information necessary to determine how the generator will behave.
+  ///
+  /// This can be accessed and restored to ensure deterministic reproducibility of a random
+  /// operation or sequence of random operations.
   public var state: Tensor {
     get {
       _opLock.withLock { _state }
@@ -66,6 +69,8 @@ public class RandomGenerator {
   }
 
   /// Sample a numeric tensor from a given continuous distribution.
+  ///
+  /// This will synchronously update ``state`` to the state after the operation.
   public func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) -> Task<Tensor.Data, Error>
   {
     _opLock.withLock {
@@ -92,6 +97,8 @@ public class RandomGenerator {
   }
 
   /// Sample a tensor of int64 values uniformly in the given range.
+  ///
+  /// This will synchronously update ``state`` to the state after the operation.
   public func sample(count: Int, in range: Range<Int64>) -> Task<Tensor.Data, Error> {
     _opLock.withLock {
       let s = _state.noGrad()
