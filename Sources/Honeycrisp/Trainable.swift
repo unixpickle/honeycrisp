@@ -80,7 +80,78 @@ open class Trainable: MaybeTrainable {
     case inference
   }
 
-  public protocol Parameter {
+  public protocol Buffer {
+    var name: String? { get }
+    var data: Tensor? { get set }
+  }
+
+  @propertyWrapper
+  public final class Buf<TensorType: MaybeTensor>: Buffer {
+    public static subscript<T: Trainable>(
+      _enclosingInstance instance: T,
+      wrapped wrappedKeyPath: ReferenceWritableKeyPath<T, TensorType>,
+      storage storageKeyPath: ReferenceWritableKeyPath<T, Buf>
+    ) -> TensorType {
+      get {
+        let buf = instance[keyPath: storageKeyPath]
+        guard let data = buf.maybeData else {
+          tracedFatalError("@Buf attribute \(storageKeyPath) was accessed before assignment")
+        }
+        return data
+      }
+      set {
+        let buf = instance[keyPath: storageKeyPath]
+        if buf.maybeName == nil {
+          buf.maybeName = String("\(storageKeyPath)".split(separator: ".").last!)
+        }
+        alwaysAssert(
+          !(newValue.maybeTensor()?.needsGrad ?? false), "buffer value cannot need grad")
+        buf.maybeData = newValue
+        if newValue.isNil {
+          instance.registeredBuffers.removeValue(forKey: buf.name!)
+        } else {
+          instance.registeredBuffers[buf.name!] = (buf as Buffer)
+        }
+      }
+    }
+
+    @available(
+      *, unavailable,
+      message:
+        "This usage of @Buf is incorrect. Make sure you are inside of a subclass of Trainable, and ensure that this property is a Tensor or Tensor? with no initial value."
+    )
+    public var wrappedValue: TensorType {
+      get { fatalError() }
+      set { fatalError() }
+    }
+
+    private var maybeName: String? = nil
+    public var name: String? {
+      maybeName
+    }
+    private var maybeData: TensorType?
+    public var data: Tensor? {
+      get {
+        maybeData?.maybeTensor()
+      }
+      set {
+        if let t = newValue {
+          maybeData = TensorType.fromTensor(t)
+        } else {
+          alwaysAssert(
+            false, "Cannot unset parameter data. Consider setting the property itself to nil.")
+        }
+      }
+    }
+
+    public var projectedValue: Buf<TensorType> { self }
+
+    public init(name: String? = nil) {
+      maybeName = name
+    }
+  }
+
+  public protocol Parameter: Buffer {
     var name: String? { get }
     var data: Tensor? { get set }
     var grad: Tensor? { get set }
@@ -216,6 +287,7 @@ open class Trainable: MaybeTrainable {
   }
 
   internal var registeredParams = [String: Parameter]()
+  internal var registeredBuffers = [String: Buffer]()
   internal var registeredChildren = [String: Trainable]()
 
   internal var _mode: Mode = .training
@@ -224,6 +296,26 @@ open class Trainable: MaybeTrainable {
     var results = Array(registeredParams)
     for (name, child) in registeredChildren {
       results += child.parameters.map { (subName, param) in
+        ("\(name).\(subName)", param)
+      }
+    }
+    return results.sorted(by: { $0.0 < $1.0 })
+  }
+
+  public var buffers: [(String, Buffer)] {
+    var results = Array(registeredBuffers)
+    for (name, child) in registeredChildren {
+      results += child.buffers.map { (subName, param) in
+        ("\(name).\(subName)", param)
+      }
+    }
+    return results.sorted(by: { $0.0 < $1.0 })
+  }
+
+  public var buffersAndParameters: [(String, Buffer)] {
+    var results = Array(registeredBuffers) + Array(registeredParams)
+    for (name, child) in registeredChildren {
+      results += child.buffersAndParameters.map { (subName, param) in
         ("\(name).\(subName)", param)
       }
     }
@@ -259,15 +351,25 @@ open class Trainable: MaybeTrainable {
 
   public typealias State = [String: StateItem]
 
+  public enum SaveStateError: Error {
+    case duplicateKey(String)
+  }
+
   @recordCaller
   private func _state() async throws -> State {
     var result = State()
-    for (name, param) in registeredParams {
+    for (name, param) in Array(registeredBuffers) + Array(registeredParams) {
+      if result.keys.contains(name) {
+        throw SaveStateError.duplicateKey("key \(name) is repeated in module state")
+      }
       if let data = param.data {
         result[name] = .tensor(try await data.state())
       }
     }
     for (name, child) in registeredChildren {
+      if result.keys.contains(name) {
+        throw SaveStateError.duplicateKey("key \(name) is repeated in module state")
+      }
       result[name] = .child(try await child.state())
     }
     return result
@@ -286,27 +388,28 @@ open class Trainable: MaybeTrainable {
     _ state: State, mustSetAllParameters: Bool = true, mustUseAllStates: Bool = true
   ) throws {
     var state = state
-    for (name, var param) in registeredParams {
+    for (name, var param) in Array(registeredBuffers) + Array(registeredParams) {
+      let keyType = (param as? Parameter != nil ? "parameter" : "buffer")
       if !state.keys.contains(name) {
         if mustSetAllParameters {
           throw LoadStateError.stateMissingKey(
-            "the state has no parameter key \(name) while the module does")
+            "the state has no \(keyType) key \(name) while the module does")
         }
       } else if case .tensor(let x) = state[name]! {
         if let data = param.data {
           if data.dtype != x.dtype {
             throw LoadStateError.dtypeMismatch(
-              "key \(name) has parameter dtype \(data.dtype) but dtype in state is \(x.dtype)")
+              "key \(name) has \(keyType) dtype \(data.dtype) but dtype in state is \(x.dtype)")
           } else if data.shape != x.shape {
             throw LoadStateError.shapeMismatch(
-              "key \(name) has parameter shape \(data.shape) but shape in state is \(x.shape)")
+              "key \(name) has \(keyType) shape \(data.shape) but shape in state is \(x.shape)")
           }
         }
         param.data = Tensor(state: x)
         state.removeValue(forKey: name)
       } else {
         throw LoadStateError.unexpectedType(
-          "expected parameter for \(name) but got another kind of object")
+          "expected \(keyType) for \(name) but got another kind of object")
       }
     }
     for (name, child) in registeredChildren {

@@ -1319,11 +1319,13 @@ final class HoneycrispTests: XCTestCase {
       @Param(name: "weight") var weight: Tensor
       @Param(name: "bias") var bias: Tensor
       @Param(name: "optional") var optional: Tensor?
+      @Buf(name: "someBuf") var someBuf: Tensor
 
       init(inSize: Int, outSize: Int) {
         super.init()
         weight = Tensor(rand: [inSize, outSize])
         bias = Tensor(rand: [outSize])
+        someBuf = Tensor(rand: [1])
       }
     }
 
@@ -1351,6 +1353,10 @@ final class HoneycrispTests: XCTestCase {
       XCTAssert(instance.$weight.data != nil)
       XCTAssertEqual(instance.bias.shape, [5])
       XCTAssertEqual(instance.weight.shape, [3, 5])
+
+      let buffers = instance.buffers
+      XCTAssertEqual(buffers.count, 1)
+      XCTAssertEqual(buffers[0].1.data!.shape, [1])
 
       instance.optional = Tensor(zeros: [7])
       params = instance.parameters
@@ -1385,7 +1391,9 @@ final class HoneycrispTests: XCTestCase {
 
     let net1 = Network()
     try net1.loadState(try await net.state())
-    for ((name1, param1), (name2, param2)) in zip(net.parameters, net1.parameters) {
+    for ((name1, param1), (name2, param2)) in zip(
+      net.buffersAndParameters, net1.buffersAndParameters)
+    {
       XCTAssertEqual(param1.data!.dtype, param2.data!.dtype)
       XCTAssertEqual(param1.data!.shape, param2.data!.shape)
       try await assertClose(param1.data!, param2.data!, "params differ for names \(name1)/\(name2)")
