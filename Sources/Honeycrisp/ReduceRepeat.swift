@@ -10,19 +10,19 @@ import HCBacktrace
 /// The `outerCount` would be `3 * 5`, i.e. `15`.
 /// The `innerCount` would be `1 * 9`, i.e. `9`.
 public struct ReduceDims: Hashable {
-  let outerCount: Int
-  let reduceCount: Int
-  let innerCount: Int
+  public let outerCount: Int
+  public let reduceCount: Int
+  public let innerCount: Int
 
-  var inCount: Int {
+  public var inCount: Int {
     outerCount * reduceCount * innerCount
   }
 
-  var outCount: Int {
+  public var outCount: Int {
     outerCount * innerCount
   }
 
-  var shape: [Int] {
+  public var shape: [Int] {
     [outerCount, reduceCount, innerCount]
   }
 
@@ -37,11 +37,11 @@ public struct RepeatDims: Hashable {
   public let repeatCount: Int
   public let innerCount: Int
 
-  var inCount: Int {
+  public var inCount: Int {
     return outerCount * innerCount
   }
 
-  var outCount: Int {
+  public var outCount: Int {
     return outerCount * repeatCount * innerCount
   }
 

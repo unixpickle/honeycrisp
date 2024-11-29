@@ -11,7 +11,7 @@ import Metal
 ///
 /// An instance of this structure can be called as a function, and will map an
 /// index in the virtual array to an index in the data array.
-public struct BroadcastStrides {
+public struct BroadcastStrides: Hashable, Equatable {
   public let dataCount: Int
   public let outerRepeats: Int
   public let innerRepeats: Int

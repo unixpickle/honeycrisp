@@ -157,7 +157,7 @@ open class Backend {
   ///
   /// Both inputs and the output should be of type `dtype`.
   /// The count argument specifies the number of elements in the output.
-  public func binaryOp(
+  open func binaryOp(
     _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -169,7 +169,7 @@ open class Backend {
   /// Perform a binary operator between a tensor and a scalar.
   ///
   /// The `count` is the number of elements in the input and the output.
-  public func binaryOp<T: NumericTensorElement>(
+  open func binaryOp<T: NumericTensorElement>(
     _ a: Tensor.Data, _ b: T, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -181,7 +181,7 @@ open class Backend {
   /// Perform a binary operator between a scalar and a tensor.
   ///
   /// The `count` is the number of elements in the input and the output.
-  public func binaryOp<T: NumericTensorElement>(
+  open func binaryOp<T: NumericTensorElement>(
     _ a: T, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -194,7 +194,7 @@ open class Backend {
   ///
   /// Both inputs and the output should be of type `dtype`.
   /// The count argument specifies the number of elements in the output.
-  public func bitwiseOp(
+  open func bitwiseOp(
     _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -206,7 +206,7 @@ open class Backend {
   /// Perform a bitwise operator between a tensor and a scalar.
   ///
   /// The `count` is the number of elements in the input and the output.
-  public func bitwiseOp<T: TensorElementBitPattern>(
+  open func bitwiseOp<T: TensorElementBitPattern>(
     _ a: Tensor.Data, _ b: T, op: BitwiseOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -218,7 +218,7 @@ open class Backend {
   /// Perform a bitwise operator between a scalar and a tensor.
   ///
   /// The `count` is the number of elements in the input and the output.
-  public func bitwiseOp<T: TensorElementBitPattern>(
+  open func bitwiseOp<T: TensorElementBitPattern>(
     _ a: T, _ b: Tensor.Data, op: BitwiseOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -231,7 +231,7 @@ open class Backend {
   ///
   /// All inputs and the output should be of type `dtype`.
   /// The `count` is the number of elements in the output.
-  public func mulAdd(
+  open func mulAdd(
     input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, count: Int, dtype: Tensor.DType
   ) async throws -> Tensor.Data {
     throw BackendError.notImplemented("mulAdd")
@@ -241,7 +241,7 @@ open class Backend {
   ///
   /// All inputs and the output should be of type `dtype`.
   /// The `count` is the number of elements in the output.
-  public func addMul(
+  open func addMul(
     input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -257,7 +257,7 @@ open class Backend {
   /// ```swift
   /// (input - mean) / (variance + epsilson).sqrt()
   /// ````
-  public func normalize<T: TensorElement>(
+  open func normalize<T: TensorElement>(
     input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T, count: Int,
     dtype: Tensor.DType
   )
@@ -272,7 +272,7 @@ open class Backend {
   ///
   /// The result is the same shape as the output of the operation, not necessarily the shape
   /// of the (pre-broadcasted) input.
-  public func normalizeXGrad<T: TensorElement>(
+  open func normalizeXGrad<T: TensorElement>(
     variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float, count: Int,
     dtype: Tensor.DType
   )
@@ -287,7 +287,7 @@ open class Backend {
   ///
   /// The result is the same shape as the output of the operation, not necessarily the shape
   /// of the (pre-broadcasted) variance.
-  public func normalizeVarianceGrad<T: TensorElement>(
+  open func normalizeVarianceGrad<T: TensorElement>(
     input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
     epsilon: T, count: Int, dtype: Tensor.DType
   )
@@ -299,7 +299,7 @@ open class Backend {
 
   /// Perform a broadcasted, elementwise comparison between two tensors, computing an
   /// output of booleans.
-  public func compare(
+  open func compare(
     _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -310,7 +310,7 @@ open class Backend {
 
   /// Perform an element-wise comparison between a tensor and a scalar, computing an
   /// output of booleans.
-  public func compare<T: TensorElement>(
+  open func compare<T: TensorElement>(
     _ a: Tensor.Data, _ b: T, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -321,7 +321,7 @@ open class Backend {
 
   /// Perform an element-wise comparison between a scalar and a tensor, computing an
   /// output of booleans.
-  public func compare<T: TensorElement>(
+  open func compare<T: TensorElement>(
     _ a: T, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -331,7 +331,7 @@ open class Backend {
   }
 
   /// Convert the input elements into a different data-type.
-  public func cast(_ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType)
+  open func cast(_ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType)
     async throws
     -> Tensor.Data
   {
@@ -342,7 +342,7 @@ open class Backend {
   ///
   /// The `scale` is applied to all output elements, while the `scales` are multiplied
   /// to the result element-wise and must have the same count as the input (if provided).
-  public func pow<T: NumericTensorElement>(
+  open func pow<T: NumericTensorElement>(
     _ a: Tensor.Data, _ b: T, scale: T, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -354,7 +354,7 @@ open class Backend {
   /// Constrain the elements in the tensor between a minimum and maximum value.
   ///
   /// If `min` or `max` are nil, then this serves as a pure max or min operation.
-  public func clamp<T: NumericTensorElement>(
+  open func clamp<T: NumericTensorElement>(
     _ a: Tensor.Data, min: T?, max: T?, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -365,7 +365,7 @@ open class Backend {
 
   /// Perform a reduction of an input tensor given the combined size of the leading, reduction,
   /// and trailing dimensions.
-  public func reduce(
+  open func reduce(
     _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
@@ -375,14 +375,14 @@ open class Backend {
   }
 
   /// Compute the log of the softmax operator along an axis of the tensor.
-  public func logSoftmax(_ a: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType) async throws
+  open func logSoftmax(_ a: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType) async throws
     -> Tensor.Data
   {
     throw BackendError.notImplemented("logSoftmax")
   }
 
   /// Compute the gradient of the log of the softmax operator.
-  public func logSoftmaxGrad(
+  open func logSoftmaxGrad(
     _ a: Tensor.Data, _ outGrad: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
@@ -392,7 +392,7 @@ open class Backend {
   }
 
   /// Repeat (chunks of) elements of a tensor.
-  public func repeated(
+  open func repeated(
     _ a: Tensor.Data, dims: RepeatDims, dtype: Tensor.DType
   )
     async throws
@@ -402,7 +402,7 @@ open class Backend {
   }
 
   /// Select values of a tensor from indices that are specified by another tensor.
-  public func gather(
+  open func gather(
     _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
   )
     async throws
@@ -414,7 +414,7 @@ open class Backend {
   /// Invert the operation of ``Backend/gather(_:_:dtype:)`` operation.
   ///
   /// When indices are not unique, sum the values for that index.
-  public func scatter(
+  open func scatter(
     _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
   )
     async throws
@@ -426,7 +426,7 @@ open class Backend {
   /// Use a boolean tensor to select between values from one tensor or another.
   ///
   /// Both the true and false values can be broadcasted or may be scalars.
-  public func when<T>(
+  open func when<T>(
     _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
     dtype: Tensor.DType
   )
@@ -443,7 +443,7 @@ open class Backend {
   ///
   /// The arguments `rows` and `cols` define the shape of `trans?(a) * trans?(b)`.
   /// The `inner` argument is the number of columns in `transA(a)` or rows in `transB(b)`.
-  public func matmul(
+  open func matmul(
     a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
     inner: Int, cols: Int, dtype: Tensor.DType
   )
@@ -454,7 +454,7 @@ open class Backend {
   }
 
   /// A batched version of ``Backend/matmul(a:transA:b:transB:transOut:rows:inner:cols:dtype:)``.
-  public func batchedMatmul(
+  open func batchedMatmul(
     matrixCount: Int, a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool,
     rows: Int, inner: Int, cols: Int, dtype: Tensor.DType
   )
@@ -465,14 +465,14 @@ open class Backend {
   }
 
   /// Create a low-triangular version of a (batch of) matrices.
-  public func tril(_ a: Tensor.Data, batch: Int, rows: Int, cols: Int, dtype: Tensor.DType)
+  open func tril(_ a: Tensor.Data, batch: Int, rows: Int, cols: Int, dtype: Tensor.DType)
     async throws -> Tensor.Data
   {
     throw BackendError.notImplemented("tril")
   }
 
   /// Compute a 1-dimensional convolution.
-  public func conv1D(
+  open func conv1D(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -483,7 +483,7 @@ open class Backend {
 
   /// Compute a 1-dimensional transposed convolution, or equivalently, a gradient through a
   /// 1-dimensional convolution with respect to the input.
-  public func conv1DTranspose(
+  open func conv1DTranspose(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -493,7 +493,7 @@ open class Backend {
   }
 
   /// Compute the gradient of a 1-dimensional convolution with respect to the kernel.
-  public func conv1DKernelGrad(
+  open func conv1DKernelGrad(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
     dtype: Tensor.DType
   )
@@ -504,7 +504,7 @@ open class Backend {
   }
 
   /// Compute a 2-dimensional convolution.
-  public func conv2D(
+  open func conv2D(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -515,7 +515,7 @@ open class Backend {
 
   /// Compute a 2-dimensional transposed convolution, or equivalently, a gradient through a
   /// 2-dimensional convolution with respect to the input.
-  public func conv2DTranspose(
+  open func conv2DTranspose(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -525,7 +525,7 @@ open class Backend {
   }
 
   /// Compute the gradient of a 2-dimensional convolution with respect to the kernel.
-  public func conv2DKernelGrad(
+  open func conv2DKernelGrad(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
     dtype: Tensor.DType
   )
@@ -537,14 +537,14 @@ open class Backend {
 
   /// Apply an element-wise operation to a tensor, optionally multiplying the output
   /// element-wise by a tensor of scales (of the same dtype).
-  public func elemwise(
+  open func elemwise(
     _ a: Tensor.Data, op: ElemwiseOp, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
   ) async throws -> Tensor.Data {
     throw BackendError.notImplemented("elemwise")
   }
 
   /// Concatenate multiple tensors with per-tensor inner strides.
-  public func concat(
+  open func concat(
     _ inputs: [Tensor.Data], outerCount: Int, innerCounts: [Int], dtype: Tensor.DType
   )
     async throws
@@ -554,14 +554,14 @@ open class Backend {
   }
 
   /// Create a tensor filled with a constant.
-  public func constant<T: TensorElement>(_ value: T, count: Int, dtype: Tensor.DType) async throws
+  open func constant<T: TensorElement>(_ value: T, count: Int, dtype: Tensor.DType) async throws
     -> Tensor.Data
   {
     throw BackendError.notImplemented("constant")
   }
 
   /// Create a tensor from the contents of a collection.
-  public func collection<T: TensorElement>(
+  open func collection<T: TensorElement>(
     _ collection: some Collection<T>, reverse: Bool, dtype: Tensor.DType
   )
     async throws -> Tensor.Data
@@ -570,22 +570,22 @@ open class Backend {
   }
 
   /// Compute a permutation of integers for permuting the axes of a tensor of the given shape.
-  public func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data {
+  open func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data {
     throw BackendError.notImplemented("axisPermutation")
   }
 
   /// Get the default random number generator for this backend.
-  public func defaultRandom() -> RandomGenerator {
+  open func defaultRandom() -> RandomGenerator {
     tracedFatalError("defaultRandom() not implemented")
   }
 
   /// Create a new random number generator for this backend.
-  public func createRandom() -> RandomGenerator {
+  open func createRandom() -> RandomGenerator {
     tracedFatalError("createRandom() not implemented")
   }
 
   /// Perform an AdamW update.
-  public func adamW(
+  open func adamW(
     param: Tensor.Data,
     grad: Tensor.Data,
     moment1: Tensor.Data,

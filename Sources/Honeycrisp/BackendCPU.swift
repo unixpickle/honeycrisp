@@ -223,7 +223,7 @@ open class CPUBackend: Backend {
       cpuBackend: self, seed: Int.random(in: 0..<1_000_000_000))
   }
 
-  internal func serialize<T>(_ work: @escaping () throws -> T) async throws -> T {
+  open func serialize<T>(_ work: @escaping () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { continuation in
       worker.schedule {
         var result: Result<T, Error>?
@@ -238,12 +238,12 @@ open class CPUBackend: Backend {
     }
   }
 
-  internal func allocate(_ byteCount: Int) async throws -> Tensor.Data {
+  open func allocate(_ byteCount: Int) async throws -> Tensor.Data {
     let data = try CPUData(byteCount: byteCount)
     return data
   }
 
-  override public func binaryOp(
+  override open func binaryOp(
     _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   ) async throws
     -> Tensor.Data
@@ -291,7 +291,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func binaryOp<T: NumericTensorElement>(
+  override open func binaryOp<T: NumericTensorElement>(
     _ a: Tensor.Data, _ b: T, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -337,7 +337,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func binaryOp<T: NumericTensorElement>(
+  override open func binaryOp<T: NumericTensorElement>(
     _ a: T, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -382,7 +382,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func bitwiseOp(
+  override open func bitwiseOp(
     _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, count: Int, dtype: Tensor.DType
   ) async throws
     -> Tensor.Data
@@ -401,7 +401,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func bitwiseOp<T: TensorElementBitPattern>(
+  override open func bitwiseOp<T: TensorElementBitPattern>(
     _ a: Tensor.Data, _ b: T, op: BitwiseOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -419,7 +419,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func bitwiseOp<T: TensorElementBitPattern>(
+  override open func bitwiseOp<T: TensorElementBitPattern>(
     _ a: T, _ b: Tensor.Data, op: BitwiseOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -437,7 +437,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func mulAdd(
+  override open func mulAdd(
     input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -484,7 +484,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func addMul(
+  override open func addMul(
     input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -531,7 +531,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func normalize<T: TensorElement>(
+  override open func normalize<T: TensorElement>(
     input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T, count: Int,
     dtype: Tensor.DType
   )
@@ -562,7 +562,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func normalizeXGrad<T: TensorElement>(
+  override open func normalizeXGrad<T: TensorElement>(
     variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float, count: Int,
     dtype: Tensor.DType
   )
@@ -589,7 +589,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func normalizeVarianceGrad<T: TensorElement>(
+  override open func normalizeVarianceGrad<T: TensorElement>(
     input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
     epsilon: T, count: Int, dtype: Tensor.DType
   )
@@ -624,7 +624,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func compare(
+  override open func compare(
     _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -656,7 +656,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func compare<T: TensorElement>(
+  override open func compare<T: TensorElement>(
     _ a: Tensor.Data, _ b: T, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -682,7 +682,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func compare<T: TensorElement>(
+  override open func compare<T: TensorElement>(
     _ a: T, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -708,7 +708,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func cast(
+  override open func cast(
     _ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType
   )
     async throws
@@ -730,7 +730,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func pow<T: NumericTensorElement>(
+  override open func pow<T: NumericTensorElement>(
     _ a: Tensor.Data, _ b: T, scale: T, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -786,7 +786,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func clamp<T: NumericTensorElement>(
+  override open func clamp<T: NumericTensorElement>(
     _ a: Tensor.Data, min: T?, max: T?, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -828,7 +828,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func reduce(
+  override open func reduce(
     _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
@@ -849,6 +849,7 @@ open class CPUBackend: Backend {
             vDSP_sve(inPtr, vDSP_Stride(dims.innerCount), y, vDSP_Length(dims.reduceCount))
           }
         }
+        return
       }
 
       func apply<T: NumericTensorElement>(_: T.Type) async throws {
@@ -912,7 +913,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func logSoftmax(
+  override open func logSoftmax(
     _ a: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
@@ -952,7 +953,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func logSoftmaxGrad(
+  override open func logSoftmaxGrad(
     _ a: Tensor.Data, _ outGrad: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
@@ -999,7 +1000,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func repeated(
+  override open func repeated(
     _ a: Tensor.Data, dims: RepeatDims, dtype: Tensor.DType
   )
     async throws
@@ -1020,7 +1021,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func gather(
+  override open func gather(
     _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
   )
     async throws
@@ -1079,7 +1080,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func scatter(
+  override open func scatter(
     _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
   )
     async throws
@@ -1116,7 +1117,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func when<T>(
+  override open func when<T>(
     _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
     dtype: Tensor.DType
   )
@@ -1158,7 +1159,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func matmul(
+  override open func matmul(
     a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
     inner: Int, cols: Int, dtype: Tensor.DType
   )
@@ -1170,7 +1171,7 @@ open class CPUBackend: Backend {
       inner: inner, cols: cols, dtype: dtype)
   }
 
-  override public func batchedMatmul(
+  override open func batchedMatmul(
     matrixCount: Int, a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool,
     rows: Int, inner: Int, cols: Int, dtype: Tensor.DType
   )
@@ -1251,7 +1252,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func tril(_ a: Tensor.Data, batch: Int, rows: Int, cols: Int, dtype: Tensor.DType)
+  override open func tril(_ a: Tensor.Data, batch: Int, rows: Int, cols: Int, dtype: Tensor.DType)
     async throws
     -> Tensor.Data
   {
@@ -1396,7 +1397,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func conv1D(
+  override open func conv1D(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -1405,7 +1406,7 @@ open class CPUBackend: Backend {
     try await convNd(config, batch: batch, image: image, kernel: kernel, dtype: dtype)
   }
 
-  override public func conv1DTranspose(
+  override open func conv1DTranspose(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -1414,7 +1415,7 @@ open class CPUBackend: Backend {
     try await convNdTranspose(config, batch: batch, image: image, kernel: kernel, dtype: dtype)
   }
 
-  override public func conv1DKernelGrad(
+  override open func conv1DKernelGrad(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
     dtype: Tensor.DType
   )
@@ -1424,7 +1425,7 @@ open class CPUBackend: Backend {
     try await convNdKernelGrad(config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
   }
 
-  override public func conv2D(
+  override open func conv2D(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -1433,7 +1434,7 @@ open class CPUBackend: Backend {
     try await convNd(config, batch: batch, image: image, kernel: kernel, dtype: dtype)
   }
 
-  override public func conv2DTranspose(
+  override open func conv2DTranspose(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -1442,7 +1443,7 @@ open class CPUBackend: Backend {
     try await convNdTranspose(config, batch: batch, image: image, kernel: kernel, dtype: dtype)
   }
 
-  override public func conv2DKernelGrad(
+  override open func conv2DKernelGrad(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
     dtype: Tensor.DType
   )
@@ -1452,7 +1453,7 @@ open class CPUBackend: Backend {
     try await convNdKernelGrad(config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
   }
 
-  override public func elemwise(
+  override open func elemwise(
     _ a: Tensor.Data, op: ElemwiseOp, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
   ) async throws -> Tensor.Data {
     return try await withMaybeBuffer(scales) { scalesBuf in
@@ -1472,7 +1473,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func concat(
+  override open func concat(
     _ inputs: [Tensor.Data], outerCount: Int, innerCounts: [Int], dtype: Tensor.DType
   )
     async throws
@@ -1497,7 +1498,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func constant<T: TensorElement>(_ value: T, count: Int, dtype: Tensor.DType)
+  override open func constant<T: TensorElement>(_ value: T, count: Int, dtype: Tensor.DType)
     async throws -> Tensor.Data
   {
     try await withBuffers(count * dtype.byteSize) { buffer in
@@ -1518,7 +1519,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func collection<T: TensorElement>(
+  override open func collection<T: TensorElement>(
     _ collection: some Collection<T>, reverse: Bool, dtype: Tensor.DType
   )
     async throws -> Tensor.Data
@@ -1532,8 +1533,7 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data
-  {
+  override open func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data {
     try await withBuffers(shape.product() * Tensor.DType.int64.byteSize) { buffer in
       try await serialize {
         let oldStrides = stridesForShape(shape)
@@ -1553,11 +1553,11 @@ open class CPUBackend: Backend {
     }
   }
 
-  override public func defaultRandom() -> RandomGenerator {
+  override open func defaultRandom() -> RandomGenerator {
     _defaultRandom!
   }
 
-  override public func createRandom() -> RandomGenerator {
+  override open func createRandom() -> RandomGenerator {
     CPURandomGenerator(cpuBackend: self, seed: Int.random(in: 0..<1_000_000_000))
   }
 

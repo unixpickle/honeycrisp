@@ -27,19 +27,19 @@ public final class Tensor {
     case float16
     case float32
 
-    var supportsGrad: Bool {
+    public var supportsGrad: Bool {
       isFloat
     }
 
-    var isNumeric: Bool {
+    public var isNumeric: Bool {
       self != .bool
     }
 
-    var isFloat: Bool {
+    public var isFloat: Bool {
       self == .float16 || self == .float32
     }
 
-    var byteSize: Int {
+    public var byteSize: Int {
       switch self {
       case .int64:
         8
