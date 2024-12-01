@@ -243,6 +243,18 @@ open class CPUBackend: Backend {
     return data
   }
 
+  override open func broadcast(_ a: BroadcastData, dtype: Tensor.DType) async throws -> Tensor.Data
+  {
+    let outCount = a.strides.shape.product()
+    let elSize = dtype.byteSize
+    return try await withBuffers(outCount * elSize, a.data) { buffer, aBuf in
+      for i in 0..<outCount {
+        buffer.advanced(by: elSize * i).copyMemory(
+          from: aBuf.advanced(by: elSize * a.strides(i)), byteCount: elSize)
+      }
+    }
+  }
+
   override open func binaryOp(
     _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   ) async throws
@@ -1124,20 +1136,9 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    func argData(_ x: TensorOrScalar<T>) async throws -> Tensor.Data {
-      switch x {
-      case .tensor(let t):
-        return t.data
-      case .scalar(let s, _):
-        let data = try await allocate(dtype.byteSize)
-        try await data.mutateOnCPU { out in
-          try arrayToPointer([s], output: out, dtype: dtype)
-        }
-        return data
-      }
-    }
-
-    return try await withBuffers(count * dtype.byteSize, mask.data, argData(a), argData(b)) {
+    let aData = try await tensorOrScalarData(a, dtype)
+    let bData = try await tensorOrScalarData(b, dtype)
+    return try await withBuffers(count * dtype.byteSize, mask.data, aData, bData) {
       buffer, maskBuf, aData, bData in
       let maskStrides = mask.strides
       let aStrides = a.strides
@@ -1561,6 +1562,17 @@ open class CPUBackend: Backend {
     CPURandomGenerator(cpuBackend: self, seed: Int.random(in: 0..<1_000_000_000))
   }
 
+  func tensorOrScalarData<T>(_ x: TensorOrScalar<T>, _ dtype: Tensor.DType) async throws
+    -> Tensor.Data
+  {
+    switch x {
+    case .tensor(let t):
+      t.data
+    case .scalar(let s, _):
+      try await constant(s, count: 1, dtype: dtype)
+    }
+  }
+
   func withMaybeBuffer<T>(
     _ buf: Tensor.Data?, _ fn: (UnsafeRawPointer?) async throws -> T
   ) async throws -> T {
@@ -1678,14 +1690,6 @@ open class CPUBackend: Backend {
     }
   }
 
-}
-
-func stridesForShape(_ shape: [Int]) -> [Int] {
-  var strides = [Int](repeating: 0, count: shape.count)
-  for i in 0..<shape.count {
-    strides[i] = shape[(i + 1)...].product()
-  }
-  return strides
 }
 
 func readBuffer<T, T1: TensorElement>(

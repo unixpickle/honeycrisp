@@ -27,12 +27,26 @@ inline T pythonIntMod(T lhs, T rhs) {
     }
 }
 
+struct bcast_strides {
+    uint numDims;
+    uint shape[16];
+    uint strides[16];
+};
+
+inline uint bcast_strides_index(bcast_strides strides, uint rawIndex) {
+    uint result = 0;
+    uint curIndex = rawIndex;
+    for (int i = (int)strides.numDims - 1; i >= 0; i--) {
+        result += strides.strides[i] * (curIndex % strides.shape[i]);
+        curIndex /= strides.shape[i];
+    }
+    return result;
+}
+
 #define BINARY_KERNELS(name, expr, type, outType) \
     struct name##vv_args_##type { \
-        uint aCount; \
-        uint aDiv; \
-        uint bCount; \
-        uint bDiv; \
+        struct bcast_strides aStrides; \
+        struct bcast_strides bStrides; \
         uint N; \
     }; \
     kernel void name##_vv_##type( \
@@ -43,8 +57,8 @@ inline T pythonIntMod(T lhs, T rhs) {
         uint id [[thread_position_in_grid]] \
     ) { \
         if (id < args.N) { \
-            type x = a[(id / args.aDiv) % args.aCount]; \
-            type y = b[(id / args.bDiv) % args.bCount]; \
+            type x = a[bcast_strides_index(args.aStrides, id)]; \
+            type y = b[bcast_strides_index(args.bStrides, id)]; \
             c[id] = expr; \
         } \
     } \
@@ -95,10 +109,8 @@ BINARY_KERNELS(mod, (pythonIntMod(x,y)), long, long)
 
 #define BITWISE_KERNELS(name, expr, type) \
     struct name##_args_##type { \
-        uint aCount; \
-        uint aDiv; \
-        uint bCount; \
-        uint bDiv; \
+        struct bcast_strides aStrides; \
+        struct bcast_strides bStrides; \
         uint N; \
     }; \
     kernel void name##_##type( \
@@ -109,8 +121,8 @@ BINARY_KERNELS(mod, (pythonIntMod(x,y)), long, long)
         uint id [[thread_position_in_grid]] \
     ) { \
         if (id < args.N) { \
-            type x = a[(id / args.aDiv) % args.aCount]; \
-            type y = b[(id / args.bDiv) % args.bCount]; \
+            type x = a[bcast_strides_index(args.aStrides, id)]; \
+            type y = b[bcast_strides_index(args.bStrides, id)]; \
             c[id] = expr; \
         } \
     }
@@ -131,17 +143,14 @@ ALL_BITWISE_KERNELS(long)
         device const type* b [[buffer(1)]], \
         device const type* c [[buffer(2)]], \
         device type* output [[buffer(3)]], \
-        constant uint &aCount [[buffer(4)]], \
-        constant uint &aDiv [[buffer(5)]], \
-        constant uint &bCount [[buffer(6)]], \
-        constant uint &bDiv [[buffer(7)]], \
-        constant uint &cCount [[buffer(8)]], \
-        constant uint &cDiv [[buffer(9)]], \
-        constant uint &N [[buffer(10)]], \
+        constant struct bcast_strides &aStrides [[buffer(4)]], \
+        constant struct bcast_strides &bStrides [[buffer(5)]], \
+        constant struct bcast_strides &cStrides [[buffer(6)]], \
+        constant uint &N [[buffer(7)]], \
         uint id [[thread_position_in_grid]] \
     ) { \
         if (id < N) { \
-            output[id] = (a[(id / aDiv) % aCount] + b[(id / bDiv) % bCount]) * c[(id / cDiv) % cCount]; \
+            output[id] = (a[bcast_strides_index(aStrides, id)] + b[bcast_strides_index(bStrides, id)]) * c[bcast_strides_index(cStrides, id)]; \
         } \
     } \
     kernel void mul_add_##type( \
@@ -149,17 +158,14 @@ ALL_BITWISE_KERNELS(long)
         device const type* b [[buffer(1)]], \
         device const type* c [[buffer(2)]], \
         device type* output [[buffer(3)]], \
-        constant uint &aCount [[buffer(4)]], \
-        constant uint &aDiv [[buffer(5)]], \
-        constant uint &bCount [[buffer(6)]], \
-        constant uint &bDiv [[buffer(7)]], \
-        constant uint &cCount [[buffer(8)]], \
-        constant uint &cDiv [[buffer(9)]], \
-        constant uint &N [[buffer(10)]], \
+        constant struct bcast_strides &aStrides [[buffer(4)]], \
+        constant struct bcast_strides &bStrides [[buffer(5)]], \
+        constant struct bcast_strides &cStrides [[buffer(6)]], \
+        constant uint &N [[buffer(7)]], \
         uint id [[thread_position_in_grid]] \
     ) { \
         if (id < N) { \
-            output[id] = (a[(id / aDiv) % aCount] * b[(id / bDiv) % bCount]) + c[(id / cDiv) % cCount]; \
+            output[id] = (a[bcast_strides_index(aStrides, id)] * b[bcast_strides_index(bStrides, id)]) + c[bcast_strides_index(cStrides, id)]; \
         } \
     }
 
@@ -170,33 +176,24 @@ DEFINE_FUSED_ADD_MUL(half)
 #define DEFINE_NORMALIZE(type) \
     struct normalize_args_##type { \
         float epsilon; \
-        uint inputCount; \
-        uint inputDiv; \
-        uint meanCount; \
-        uint meanDiv; \
-        uint varianceCount; \
-        uint varianceDiv; \
+        struct bcast_strides inputStrides; \
+        struct bcast_strides meanStrides; \
+        struct bcast_strides varianceStrides; \
         uint N; \
     }; \
     struct normalize_x_grad_args_##type { \
         float epsilon; \
         float sign; \
-        uint varianceCount; \
-        uint varianceDiv; \
-        uint outGradCount; \
-        uint outGradDiv; \
+        struct bcast_strides varianceStrides; \
+        struct bcast_strides outGradStrides; \
         uint N; \
     }; \
     struct normalize_var_grad_args_##type { \
         float epsilon; \
-        uint inputCount; \
-        uint inputDiv; \
-        uint meanCount; \
-        uint meanDiv; \
-        uint varianceCount; \
-        uint varianceDiv; \
-        uint outGradCount; \
-        uint outGradDiv; \
+        struct bcast_strides inputStrides; \
+        struct bcast_strides meanStrides; \
+        struct bcast_strides varianceStrides; \
+        struct bcast_strides outGradStrides; \
         uint N; \
     }; \
     kernel void normalize_##type( \
@@ -208,9 +205,9 @@ DEFINE_FUSED_ADD_MUL(half)
         uint id [[thread_position_in_grid]] \
     ) { \
         if (id < args.N) { \
-            type x = (float)input[(id / args.inputDiv) % args.inputCount]; \
-            type mu = (float)mean[(id / args.meanDiv) % args.meanCount]; \
-            type sig = (float)variance[(id / args.varianceDiv) % args.varianceCount]; \
+            type x = (float)input[bcast_strides_index(args.inputStrides, id)]; \
+            type mu = (float)mean[bcast_strides_index(args.meanStrides, id)]; \
+            type sig = (float)variance[bcast_strides_index(args.varianceStrides, id)]; \
             output[id] = (type)((x - mu) / sqrt(sig + args.epsilon)); \
         } \
     } \
@@ -222,8 +219,8 @@ DEFINE_FUSED_ADD_MUL(half)
         uint id [[thread_position_in_grid]] \
     ) { \
         if (id < args.N) { \
-            type sig = (float)variance[(id / args.varianceDiv) % args.varianceCount]; \
-            type g = (float)outGrad[(id / args.outGradDiv) % args.outGradCount]; \
+            type sig = (float)variance[bcast_strides_index(args.varianceStrides, id)]; \
+            type g = (float)outGrad[bcast_strides_index(args.outGradStrides, id)]; \
             output[id] = (type)(args.sign * g / sqrt(sig + args.epsilon)); \
         } \
     } \
@@ -237,10 +234,10 @@ DEFINE_FUSED_ADD_MUL(half)
         uint id [[thread_position_in_grid]] \
     ) { \
         if (id < args.N) { \
-            type x = (float)input[(id / args.inputDiv) % args.inputCount]; \
-            type mu = (float)mean[(id / args.meanDiv) % args.meanCount]; \
-            type sig = (float)variance[(id / args.varianceDiv) % args.varianceCount]; \
-            type g = (float)outGrad[(id / args.outGradDiv) % args.outGradCount]; \
+            type x = (float)input[bcast_strides_index(args.inputStrides, id)]; \
+            type mu = (float)mean[bcast_strides_index(args.meanStrides, id)]; \
+            type sig = (float)variance[bcast_strides_index(args.varianceStrides, id)]; \
+            type g = (float)outGrad[bcast_strides_index(args.outGradStrides, id)]; \
             output[id] = (type)(-g * 0.5 * (x - mu) * pow(sig + args.epsilon, -1.5)); \
         } \
     }
@@ -315,12 +312,9 @@ DEFINE_CLAMP(half, float)
 
 #define DEFINE_WHEN(type) \
     struct when_args_##type { \
-        uint maskCount; \
-        uint maskDiv; \
-        uint trueCount; \
-        uint trueDiv; \
-        uint falseCount; \
-        uint falseDiv; \
+        struct bcast_strides maskStrides; \
+        struct bcast_strides trueStrides; \
+        struct bcast_strides falseStrides; \
         uint N; \
     }; \
     kernel void when_##type( \
@@ -332,10 +326,10 @@ DEFINE_CLAMP(half, float)
         uint id [[thread_position_in_grid]] \
     ) { \
         if (id < args.N) { \
-            if (mask[(id / args.maskDiv) % args.maskCount]) { \
-                output[id] = trueIn[(id / args.trueDiv) % args.trueCount]; \
+            if (mask[bcast_strides_index(args.maskStrides, id)]) { \
+                output[id] = trueIn[bcast_strides_index(args.trueStrides, id)]; \
             } else { \
-                output[id] = falseIn[(id / args.falseDiv) % args.falseCount]; \
+                output[id] = falseIn[bcast_strides_index(args.falseStrides, id)]; \
             } \
         } \
     }

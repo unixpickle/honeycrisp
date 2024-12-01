@@ -8,13 +8,13 @@ extension Tensor {
       isTrue.dtype == isFalse.dtype,
       "when() argument dtypes differ: \(isTrue.dtype) vs \(isFalse.dtype)")
 
-    let (newShape, bcasts) = Tensor.lazyBroadcast([self, isTrue, isFalse])
-    let (t, tStrides) = bcasts[0]
-    let (isTrue, isTrueStrides) = bcasts[1]
-    let (isFalse, isFalseStrides) = bcasts[2]
+    let (newShape, allStrides) = Tensor.lazyBroadcast([self, isTrue, isFalse])
+    let tStrides = allStrides[0]
+    let isTrueStrides = allStrides[1]
+    let isFalseStrides = allStrides[2]
 
     let backend = Backend.current
-    let newData = Tensor.createDataTask(t, isTrue, isFalse) { t, isTrue, isFalse in
+    let newData = Tensor.createDataTask(self, isTrue, isFalse) { t, isTrue, isFalse in
       try await backend.when(
         BroadcastData(strides: tStrides, data: try await t.data),
         .tensor(BroadcastData(strides: isTrueStrides, data: try await isTrue.data)),
@@ -43,14 +43,14 @@ extension Tensor {
   private func _when<T: TensorElement>(isTrue: Tensor, isFalse: T) -> Tensor {
     alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
 
-    let (newShape, ((t, tStrides), (isTrue, isTrueStrides))) = Tensor.lazyBroadcast(self, isTrue)
+    let (newShape, (tStrides, isTrueStrides)) = Tensor.lazyBroadcast(self, isTrue)
 
     let backend = Backend.current
-    let newData = Tensor.createDataTask(t, isTrue) { t, isTrue in
+    let newData = Tensor.createDataTask(self, isTrue) { t, isTrue in
       try await backend.when(
         BroadcastData(strides: tStrides, data: try await t.data),
         .tensor(BroadcastData(strides: isTrueStrides, data: try await isTrue.data)),
-        .scalar(isFalse, newShape.product()),
+        .scalar(isFalse, newShape),
         T.self,
         count: newShape.product(),
         dtype: isTrue.dtype)
@@ -71,13 +71,13 @@ extension Tensor {
   private func _when<T: TensorElement>(isTrue: T, isFalse: Tensor) -> Tensor {
     alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
 
-    let (newShape, ((t, tStrides), (isFalse, isFalseStrides))) = Tensor.lazyBroadcast(self, isFalse)
+    let (newShape, (tStrides, isFalseStrides)) = Tensor.lazyBroadcast(self, isFalse)
 
     let backend = Backend.current
-    let newData = Tensor.createDataTask(t, isFalse) { t, isFalse in
+    let newData = Tensor.createDataTask(self, isFalse) { t, isFalse in
       try await backend.when(
         BroadcastData(strides: tStrides, data: try await t.data),
-        .scalar(isTrue, newShape.product()),
+        .scalar(isTrue, newShape),
         .tensor(BroadcastData(strides: isFalseStrides, data: try await isFalse.data)),
         T.self,
         count: newShape.product(),
@@ -101,11 +101,9 @@ extension Tensor {
     let backend = Backend.current
     let newData = createDataTask { t in
       try await backend.when(
-        BroadcastData(
-          strides: BroadcastStrides(dataCount: t.shape.product(), outerRepeats: 1, innerRepeats: 1),
-          data: try await t.data),
-        .scalar(isTrue, t.shape.product()),
-        .scalar(isFalse, t.shape.product()),
+        BroadcastData.simple(data: try await t.data, shape: t.shape),
+        .scalar(isTrue, t.shape),
+        .scalar(isFalse, t.shape),
         T.self,
         count: t.shape.product(),
         dtype: outDType)

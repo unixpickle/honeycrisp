@@ -1,35 +1,57 @@
 import HCBacktrace
 import Metal
 
-/// A mapping from a broadcasted array to the underlying data array.
+/// A shape and corresponding strides, allowing a mapping from a tensor
+/// to its underlying data.
 ///
-/// We can imagine we have some data with `dataCount` elements, but broadcast
-/// it to a virtual array of `dataCount * outerRepeats * innerRepeats`
-/// elements, where each element of the data is repeated sequentially
-/// `innerRepeats` times, and the entire result is repeated `outerRepeats`
-/// times.
-///
-/// An instance of this structure can be called as a function, and will map an
-/// index in the virtual array to an index in the data array.
+/// The strides must correspond to contiguous data, i.e. each stride that
+/// is non-zero must be larger than the following strides.
 public struct BroadcastStrides: Hashable, Equatable {
+  public let shape: [Int]
+  public let strides: [Int]
   public let dataCount: Int
-  public let outerRepeats: Int
-  public let innerRepeats: Int
+
+  public init(shape: [Int], strides: [Int]) {
+    assert(shape.count == strides.count)
+    self.shape = shape
+    self.strides = strides
+
+    dataCount = zip(strides, shape).filter({ $0.0 != 0 }).map({ $0.1 }).product()
+  }
 
   public var isNoOp: Bool {
-    outerRepeats == 1 && innerRepeats == 1
+    strides.allSatisfy { $0 != 0 }
   }
 
   /// Get the `RepeatDims` which could be applied to the raw array to get the
   /// virtual array.
   public func repeats() -> [RepeatDims] {
     var result = [RepeatDims]()
-    if innerRepeats > 1 {
-      result.append(RepeatDims(outerCount: dataCount, repeatCount: innerRepeats, innerCount: 1))
-    }
-    if outerRepeats > 1 {
-      result.append(
-        RepeatDims(outerCount: 1, repeatCount: outerRepeats, innerCount: dataCount * innerRepeats))
+    for (i, stride) in strides.enumerated().reversed() {
+      if stride == 0 && shape[i] != 1 {
+        var newDims = RepeatDims(
+          outerCount: zip(strides[..<i], shape[..<i]).filter({ $0.0 != 0 }).map({ $0.1 })
+            .product(),
+          repeatCount: shape[i],
+          innerCount: shape[(i + 1)...].product()
+        )
+        if let last = result.last {
+          if last.outerCount == newDims.outerCount
+            && last.innerCount * last.repeatCount == newDims.innerCount
+          {
+            // Coalesce consecutive repetitions.
+            // This is useful when broadcasting multiple consecutive dimensions,
+            // or dimensions with size 1 between them.
+            result.removeLast()
+            newDims = RepeatDims(
+              outerCount: newDims.outerCount,
+              repeatCount: last.repeatCount * newDims.repeatCount,
+              innerCount: last.innerCount
+            )
+          }
+        }
+        result.append(newDims)
+      }
     }
     return result
   }
@@ -40,10 +62,20 @@ public struct BroadcastStrides: Hashable, Equatable {
     return repeats().reversed().map { $0.inverse() }
   }
 
-  /// May an index in the virtual array to the data array.
+  /// Translate an index in the virtual array to the data array.
   public func callAsFunction(_ i: Int) -> Int {
-    assert(i >= 0 && i < dataCount * outerRepeats * innerRepeats)
-    return (i / innerRepeats) % dataCount
+    assert(i >= 0 && i < shape.product())
+    var curIdx = i
+    var result = 0
+    for (stride, size) in zip(strides, shape).reversed() {
+      result += stride * (curIdx % size)
+      curIdx /= size
+    }
+
+    assert(
+      result >= 0 && result < dataCount,
+      "shape=\(shape) strides=\(strides) index=\(i) result=\(result)")
+    return result
   }
 }
 
@@ -64,114 +96,11 @@ public struct BroadcastData {
   public var isSimple: Bool { strides.isNoOp }
 
   /// Wrap an unbroadcasted tensor in a ``BroadcastData``.
-  public static func simple(data: Tensor.Data, count: Int) -> BroadcastData {
-    BroadcastData(
-      strides: BroadcastStrides(dataCount: count, outerRepeats: 1, innerRepeats: 1), data: data)
-  }
-}
-
-/// An ordered sequence of `RepeatDims` which, when applied, expands the
-/// dimensions of one tensor to another shape.
-///
-/// Each step includes the (axes) which it affects in the source tensor,
-/// and this may be empty if new (outer) axes are being created.
-private class RepeatSequence {
-  public struct Step {
-    let dims: RepeatDims
-    let axes: [Int]
-  }
-
-  private var _steps: [Step] = []
-  public let inCount: Int
-  public var steps: [Step] { _steps }
-
-  public var outCount: Int {
-    steps.count == 0 ? inCount : steps[steps.count - 1].dims.outCount
-  }
-
-  public init(inCount: Int) {
-    self.inCount = inCount
-  }
-
-  private init(inCount: Int, steps: [Step]) {
-    self.inCount = inCount
-    _steps = steps
-  }
-
-  public func add(_ d: RepeatDims, axes: [Int]) {
-    if _steps.isEmpty {
-      assert(d.innerCount * d.outerCount == inCount)
-      _steps = [Step(dims: d, axes: axes)]
-    } else {
-      let last = _steps[_steps.count - 1]
-      assert(
-        d.innerCount >= last.dims.innerCount * last.dims.repeatCount,
-        "repeats must be strided along increasing dimensions")
-      assert(d.outerCount * d.innerCount == last.dims.outCount)
-      if last.dims.innerCount * last.dims.repeatCount == d.innerCount {
-        // We can modify the existing step
-        _steps[_steps.count - 1] = Step(
-          dims: RepeatDims(
-            outerCount: d.outerCount, repeatCount: last.dims.repeatCount * d.repeatCount,
-            innerCount: last.dims.innerCount
-          ),
-          axes: last.axes + axes)
-      } else {
-        _steps.append(Step(dims: d, axes: axes))
-      }
-    }
-  }
-
-  /// Compress the repeat sequence such that we only repeat dimensions that are
-  /// not supported by broadcasting.
-  /// We then return a combination of a `RepeatSequence` which must be applied
-  /// to the original data, and then a `BroadcastStrides` to be used with the
-  /// result to get the full expansion.
-  public func lazify() -> (RepeatSequence, BroadcastStrides) {
-    var newSteps = steps
-    var result = BroadcastStrides(dataCount: outCount, outerRepeats: 1, innerRepeats: 1)
-    if let first = newSteps.first, first.dims.innerCount == 1 {
-      newSteps.removeFirst()
-      result = BroadcastStrides(
-        dataCount: result.dataCount / first.dims.repeatCount, outerRepeats: 1,
-        innerRepeats: first.dims.repeatCount)
-
-      // We must modify all later repetitions to reflect the new
-      // smaller inner dimension.
-      for (i, x) in newSteps.enumerated() {
-        newSteps[i] = Step(
-          dims: RepeatDims(
-            outerCount: x.dims.outerCount,
-            repeatCount: x.dims.repeatCount,
-            innerCount: x.dims.innerCount / first.dims.repeatCount
-          ),
-          axes: x.axes
-        )
-      }
-    }
-    if let last = newSteps.last, last.dims.outerCount == 1 {
-      newSteps.removeLast()
-      result = BroadcastStrides(
-        dataCount: result.dataCount / last.dims.repeatCount,
-        outerRepeats: last.dims.repeatCount,
-        innerRepeats: result.innerRepeats
-      )
-    }
-    return (RepeatSequence(inCount: inCount, steps: newSteps), result)
-  }
-
-  public func inverse() -> [ReduceDims] {
-    var result = [ReduceDims]()
-    for step in steps.reversed() {
-      result.append(
-        ReduceDims(
-          outerCount: step.dims.outerCount,
-          reduceCount: step.dims.repeatCount,
-          innerCount: step.dims.innerCount
-        )
-      )
-    }
-    return result
+  public static func simple(data: Tensor.Data, shape: [Int]) -> BroadcastData {
+    Self(
+      strides: BroadcastStrides(shape: shape, strides: stridesForShape(shape)),
+      data: data
+    )
   }
 }
 
@@ -184,8 +113,52 @@ extension Tensor {
 
   @recordCaller
   private func _expand(shape newShape: [Int]) -> Tensor {
-    let plan = planExpansion(shape: newShape)
-    return flatApplyRepeats(plan.steps.map { $0.dims }).reshape(newShape)
+    if self.shape == newShape {
+      return self
+    }
+
+    let bcastStrides = expandStrides(shape: newShape)
+    let backend = Backend.current
+    let newData = createDataTask { t in
+      try await backend.broadcast(
+        BroadcastData(strides: bcastStrides, data: try await t.data),
+        dtype: t.dtype
+      )
+    }
+
+    if !Tensor.isGradEnabled || !needsGrad {
+      return Tensor(dataTask: newData, shape: newShape, dtype: dtype)
+    } else {
+      let handle = saveForBackward()
+      return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { grad in
+        handle.backward(backend) { grad.reduceBroadcast(bcastStrides, as: self) }
+      }
+    }
+  }
+
+  @recordCaller
+  internal func _expandStrides(shape newShape: [Int]) -> BroadcastStrides {
+    alwaysAssert(
+      newShape.count >= shape.count,
+      "cannot broadcast shape \(shape) to shorter shape \(newShape)"
+    )
+
+    let extraAxes = newShape.count - shape.count
+    var strides = Array(repeating: 0, count: extraAxes)
+    for (i, (oldSize, oldStride)) in zip(shape, stridesForShape(shape)).enumerated() {
+      let newSize = newShape[i + extraAxes]
+      if newSize != oldSize {
+        alwaysAssert(
+          oldSize == 1,
+          "axis \(i) cannot expand from size \(oldSize) to \(newSize): old shape \(shape), new shape \(newShape)"
+        )
+        strides.append(0)
+      } else {
+        strides.append(oldStride)
+      }
+    }
+
+    return BroadcastStrides(shape: newShape, strides: strides)
   }
 
   @recordCaller
@@ -201,77 +174,25 @@ extension Tensor {
   }
 
   @recordCaller
-  internal static func _lazyBroadcast(_ t: [Tensor]) -> ([Int], [(Tensor, BroadcastStrides)]) {
+  internal static func _lazyBroadcast(_ t: [Tensor]) -> ([Int], [BroadcastStrides]) {
     let newShape = broadcastShape(t.map { $0.shape })
-    let results = t.map { $0.lazyExpand(shape: newShape) }
+    let results = t.map { $0.expandStrides(shape: newShape) }
     return (newShape, results)
   }
 
   @recordCaller
   internal static func _lazyBroadcast(_ t1: Tensor, _ t2: Tensor) -> (
-    [Int], ((Tensor, BroadcastStrides), (Tensor, BroadcastStrides))
+    [Int], (BroadcastStrides, BroadcastStrides)
   ) {
     let newShape = broadcastShape([t1.shape, t2.shape])
-    let r1 = t1.lazyExpand(shape: newShape)
-    let r2 = t2.lazyExpand(shape: newShape)
+    let r1 = t1.expandStrides(shape: newShape)
+    let r2 = t2.expandStrides(shape: newShape)
     return (newShape, (r1, r2))
-  }
-
-  @recordCaller
-  internal func _lazyExpand(shape newShape: [Int]) -> (Tensor, BroadcastStrides) {
-    alwaysAssert(
-      newShape.count >= shape.count,
-      "cannot broadcast shape \(shape) to shorter shape \(newShape)"
-    )
-
-    let plan = planExpansion(shape: newShape)
-    let (lazyPlan, bcast) = plan.lazify()
-    let expanded = flatApplyRepeats(lazyPlan.steps.map { $0.dims })
-    var lazyShape = shape
-    for axis in lazyPlan.steps.flatMap({ $0.axes }) {
-      lazyShape[axis] = newShape[axis + (newShape.count - shape.count)]
-    }
-    assert(lazyShape.product() == expanded.shape.product())
-    return (expanded.reshape(lazyShape), bcast)
   }
 
   @recordCaller
   internal func _reduceBroadcast(_ bcast: BroadcastStrides, as tensor: Tensor) -> Tensor {
     return flatApplySums(bcast.repeatsInverse()).reshape(tensor.shape)
-  }
-
-  private func planExpansion(shape newShape: [Int]) -> RepeatSequence {
-    alwaysAssert(
-      newShape.count >= shape.count,
-      "cannot broadcast shape \(shape) to shorter shape \(newShape)"
-    )
-
-    let result = RepeatSequence(inCount: shape.product())
-    var innerCount = 1
-    var outerCount = shape.product()
-    for i in 0..<shape.count {
-      let axis = shape.count - (i + 1)
-      let oldValue = shape[axis]
-      let newValue = newShape[newShape.count - (i + 1)]
-      if newValue != oldValue {
-        alwaysAssert(
-          oldValue == 1,
-          "axis \(axis) cannot expand from size \(oldValue) to \(newValue): old shape \(shape), new shape \(newShape)"
-        )
-        result.add(
-          RepeatDims(outerCount: outerCount, repeatCount: newValue, innerCount: innerCount),
-          axes: [axis])
-        innerCount *= newValue
-      } else {
-        innerCount *= oldValue
-        outerCount /= oldValue
-      }
-    }
-    if newShape.count > shape.count {
-      let repeats = newShape[..<(newShape.count - shape.count)].product()
-      result.add(RepeatDims(outerCount: 1, repeatCount: repeats, innerCount: innerCount), axes: [])
-    }
-    return result
   }
 
   @recordCaller
@@ -305,4 +226,12 @@ extension Tensor {
     }
   }
 
+}
+
+func stridesForShape(_ shape: [Int]) -> [Int] {
+  var strides = [Int](repeating: 0, count: shape.count)
+  for i in 0..<shape.count {
+    strides[i] = shape[(i + 1)...].product()
+  }
+  return strides
 }

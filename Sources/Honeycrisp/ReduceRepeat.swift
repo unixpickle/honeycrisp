@@ -202,7 +202,7 @@ extension Tensor {
       var count = t.shape.product()
       var result = try await t.data
       for dims in allDims {
-        assert(dims.inCount == count)
+        assert(dims.inCount == count, "current count is \(count), reduces are \(allDims)")
         result = try await backend.reduce(result, op: .sum, dims: dims, dtype: t.dtype)
         count = dims.outCount
       }

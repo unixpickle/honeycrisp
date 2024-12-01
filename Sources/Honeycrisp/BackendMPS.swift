@@ -9,17 +9,51 @@ import MetalPerformanceShadersGraph
 /// implement operations on the GPU.
 open class MPSBackend: CPUBackend {
 
+  internal class Deallocator {
+    let fn: () -> Void
+    let trace: [CodeLocation]
+    var called: Bool = false
+
+    public init(
+      fn: @escaping () -> Void,
+      function: StaticString = #function,
+      file: StaticString = #file,
+      line: UInt = #line
+    ) {
+      self.fn = fn
+      self.trace = Backtrace.current + [CodeLocation(function: function, file: file, line: line)]
+    }
+
+    public func callAsFunction() {
+      called = true
+      fn()
+    }
+
+    deinit {
+      #if DEBUG
+        // In debug mode, this will help us catch bugs where we forgot to release resources.
+        assert(
+          called, "deallocator was never called, trace of creation:\n\n\(Backtrace.format(trace))")
+      #else
+        // In release mode, this is more likely caused by an exception returning from a backend
+        // method before using a buffer, so we want to actually free the buffer.
+        fn()
+      #endif
+    }
+  }
+
   internal class GPUData: Tensor.Data {
+
     public let backend: MPSBackend
     public let buffer: MTLBuffer
     public let completion: Task<Void, Error>?
-    public let deallocator: (() -> Void)?
+    public let deallocator: Deallocator?
 
     public init(
       backend: MPSBackend,
       buffer: MTLBuffer,
       completion: Task<Void, Error>?,
-      deallocator: (() -> Void)?
+      deallocator: Deallocator?
     ) {
       self.backend = backend
       self.buffer = buffer
@@ -57,6 +91,71 @@ open class MPSBackend: CPUBackend {
         }
       }
     }
+  }
+
+  public enum BroadcastError: Error {
+    case shapeTooLarge(String)
+    case dimTooLarge(String)
+  }
+
+  internal typealias StridesItem = (
+    UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32,
+    UInt32, UInt32, UInt32, UInt32
+  )
+
+  @recordCaller
+  internal static func _createStridesItem(_ arr: [Int]) throws -> StridesItem {
+    if arr.count > 16 {
+      throw BroadcastError.shapeTooLarge(
+        "maximum supported number of dims is 16, got \(arr.count) in shape \(arr)")
+    }
+    func at(_ i: Int) throws -> UInt32 {
+      if i >= arr.count {
+        return 0
+      }
+      if arr[i] >= Int(UInt32.max) {
+        throw BroadcastError.dimTooLarge("dimension \(arr[i]) is too large to fit in UInt32")
+      }
+      return UInt32(arr[i])
+    }
+    return (
+      try at(0),
+      try at(1),
+      try at(2),
+      try at(3),
+      try at(4),
+      try at(5),
+      try at(6),
+      try at(7),
+      try at(8),
+      try at(9),
+      try at(10),
+      try at(11),
+      try at(12),
+      try at(13),
+      try at(14),
+      try at(15)
+    )
+  }
+
+  internal typealias Strides = (dimCount: UInt32, shape: StridesItem, strides: StridesItem)
+
+  @recordCaller
+  internal static func _createStrides(_ s: BroadcastStrides) throws -> Strides {
+    if s.isNoOp {
+      return (
+        dimCount: UInt32(1),
+        shape: try createStridesItem([s.shape.product()]),
+        strides: try createStridesItem([1])
+      )
+    }
+    // TODO: coalesce non-zero and zero strides to reduce the total
+    // number of dimensions if possible.
+    return (
+      dimCount: UInt32(s.strides.count),
+      shape: try createStridesItem(s.shape),
+      strides: try createStridesItem(s.strides)
+    )
   }
 
   public enum Allocator {
@@ -165,7 +264,7 @@ open class MPSBackend: CPUBackend {
 
       return try await mpsBackend.serialize { [self] in
         let completion = try mpsBackend.completionBufferAndEncoder(
-          label: "sample", callbacks: [inStateCb]
+          label: "sample", deallocators: [inStateCb]
         ) { buf, enc in
           let state = try mpsBackend.getFunction(name: functionName)
           try mpsBackend.setArguments(
@@ -196,7 +295,7 @@ open class MPSBackend: CPUBackend {
 
       return try await mpsBackend.serialize { [self] in
         let completion = try mpsBackend.completionBufferAndEncoder(
-          label: "sampleInt", callbacks: [inStateCb]
+          label: "sampleInt", deallocators: [inStateCb]
         ) { buf, enc in
           let state = try mpsBackend.getFunction(name: "rand_long")
           try mpsBackend.setArguments(
@@ -368,7 +467,7 @@ open class MPSBackend: CPUBackend {
   }
 
   internal func allocateBuf(_ byteCount: Int) async throws -> (
-    MTLBuffer, (() -> Void)?
+    MTLBuffer, Deallocator?
   ) {
     if allocBuckets != nil {
       let bucket = nextAllocatorBucket(byteCount)
@@ -380,7 +479,7 @@ open class MPSBackend: CPUBackend {
         }
       return (
         rawResult,
-        { [weak self] in
+        Deallocator { [weak self] in
           if let self = self {
             self.allocBucketsLock.withLock {
               if self.allocBuckets![bucket] == nil {
@@ -434,73 +533,45 @@ open class MPSBackend: CPUBackend {
     throw BackendError.allocationFailed(byteCount)
   }
 
-  internal func gpuBuffer(_ data: Tensor.Data) async throws -> (MTLBuffer, (() -> Void)) {
+  @recordCaller
+  internal func _gpuBuffer(_ data: Tensor.Data) async throws -> (MTLBuffer, Deallocator) {
     if let data = data as? GPUData, data.backend === self {
-      return (data.buffer, { [data] () in let _ = data })
+      return (data.buffer, Deallocator { [data] () in let _ = data })
     }
+
     // Create an MPSBuffer which, while in use, maintains a background Task
     // inside of an onCPU call on the original data.
-    return (
-      try await withCheckedThrowingContinuation { outerContinuation in
-        Task.detached {
-          try await data.onCPU { cpuBuffer in
-            try await withCheckedThrowingContinuation { innerContinuation in
-              guard
-                let buffer = self.device.makeBuffer(
-                  bytesNoCopy: UnsafeMutableRawPointer(mutating: cpuBuffer),
-                  length: data.byteCount,
-                  options: .init(arrayLiteral: [.storageModeShared]),
-                  deallocator: { _, _ in innerContinuation.resume() }
-                )
-              else {
-                outerContinuation.resume(throwing: BackendError.failedToCreateMTLBuffer)
-                innerContinuation.resume(throwing: BackendError.failedToCreateMTLBuffer)
-                return
-              }
-              outerContinuation.resume(returning: buffer)
+    return try await withCheckedThrowingContinuation { outerContinuation in
+      Task.detached {
+        try await data.onCPU { cpuBuffer in
+          try await withCheckedThrowingContinuation {
+            (innerContinuation: CheckedContinuation<(), Error>) in
+            guard
+              let buffer = self.device.makeBuffer(
+                bytesNoCopy: UnsafeMutableRawPointer(mutating: cpuBuffer),
+                length: data.byteCount,
+                options: .init(arrayLiteral: [.storageModeShared])
+              )
+            else {
+              outerContinuation.resume(throwing: BackendError.failedToCreateMTLBuffer)
+              innerContinuation.resume(throwing: BackendError.failedToCreateMTLBuffer)
+              return
             }
+            outerContinuation.resume(
+              returning: (buffer, Deallocator { innerContinuation.resume() })
+            )
           }
         }
-      },
-      { () in () }
-    )
+      }
+    }
   }
 
-  internal func gpuBuffer(_ data: Tensor.Data?) async throws -> (MTLBuffer?, (() -> Void)?) {
+  internal func gpuBuffer(_ data: Tensor.Data?) async throws -> (MTLBuffer?, Deallocator?) {
     guard let data = data else {
       return (nil, nil)
     }
-
-    if let data = data as? GPUData, data.backend === self {
-      return (data.buffer, { [data] () in let _ = data })
-    }
-
-    // Create an MPSBuffer which, while in use, maintains a background Task
-    // inside of an onCPU call on the original data.
-    return (
-      try await withCheckedThrowingContinuation { outerContinuation in
-        Task.detached {
-          try await data.onCPU { cpuBuffer in
-            try await withCheckedThrowingContinuation { innerContinuation in
-              guard
-                let buffer = self.device.makeBuffer(
-                  bytesNoCopy: UnsafeMutableRawPointer(mutating: cpuBuffer),
-                  length: data.byteCount,
-                  options: .init(arrayLiteral: [.storageModeShared]),
-                  deallocator: { _, _ in innerContinuation.resume() }
-                )
-              else {
-                outerContinuation.resume(throwing: BackendError.failedToCreateMTLBuffer)
-                innerContinuation.resume(throwing: BackendError.failedToCreateMTLBuffer)
-                return
-              }
-              outerContinuation.resume(returning: buffer)
-            }
-          }
-        }
-      },
-      { () in () }
-    )
+    let (x, y) = try await gpuBuffer(data)
+    return (x, y)
   }
 
   internal func getFunction(name: String) throws -> MTLComputePipelineState {
@@ -528,7 +599,7 @@ open class MPSBackend: CPUBackend {
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
         label: "pow",
-        callbacks: [aCb] + (scalesCb == nil ? [] : [scalesCb!])
+        deallocators: [aCb] + (scalesCb == nil ? [] : [scalesCb!])
       ) {
         buf, enc in
         let funcName =
@@ -609,7 +680,7 @@ open class MPSBackend: CPUBackend {
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
         label: "elemwise",
-        callbacks: [aCb] + (scalesCb == nil ? [] : [scalesCb!])
+        deallocators: [aCb] + (scalesCb == nil ? [] : [scalesCb!])
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(enc, .buffer(aBuf), .buffer(output), .uint(UInt32(count)))
@@ -623,10 +694,8 @@ open class MPSBackend: CPUBackend {
             .buffer(output),
             .opaque(
               (
-                UInt32(count),
-                UInt32(1),
-                UInt32(count),
-                UInt32(1),
+                MPSBackend.createStrides(BroadcastStrides(shape: [count], strides: [1])),
+                MPSBackend.createStrides(BroadcastStrides(shape: [count], strides: [1])),
                 UInt32(count)
               )))
           dispatch1D(enc, state: state, threadCount: count)
@@ -682,23 +751,21 @@ open class MPSBackend: CPUBackend {
     let (aBuf, aCb) = try await gpuBuffer(a.data)
     let (bBuf, bCb) = try await gpuBuffer(b.data)
     let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
-
+    let aStrides = try MPSBackend.createStrides(a.strides)
+    let bStrides = try MPSBackend.createStrides(b.strides)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "binaryOp", callbacks: [aCb, bCb]
+        label: "binaryOp", deallocators: [aCb, bCb]
       ) {
         buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
-          enc, .buffer(aBuf), .buffer(bBuf), .buffer(output),
-          .opaque(
-            (
-              UInt32(a.strides.dataCount),
-              UInt32(a.strides.innerRepeats),
-              UInt32(b.strides.dataCount),
-              UInt32(b.strides.innerRepeats),
-              UInt32(count)
-            )))
+          enc,
+          .buffer(aBuf),
+          .buffer(bBuf),
+          .buffer(output),
+          .opaque((aStrides, bStrides, UInt32(count)))
+        )
         dispatch1D(enc, state: state, threadCount: count)
       }
       return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
@@ -725,7 +792,7 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "binaryOp", callbacks: [aCb]
+        label: "binaryOp", deallocators: [aCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
@@ -756,7 +823,7 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "binaryOp", callbacks: [bCb]
+        label: "binaryOp", deallocators: [bCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
@@ -800,22 +867,18 @@ open class MPSBackend: CPUBackend {
     let (aBuf, aCb) = try await gpuBuffer(a.data)
     let (bBuf, bCb) = try await gpuBuffer(b.data)
     let (output, outputCb) = try await allocateBuf(count * Tensor.DType.bool.byteSize)
+    let aStrides = try MPSBackend.createStrides(a.strides)
+    let bStrides = try MPSBackend.createStrides(b.strides)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "compare", callbacks: [aCb, bCb]
+        label: "compare", deallocators: [aCb, bCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .buffer(aBuf), .buffer(bBuf), .buffer(output),
-          .opaque(
-            (
-              UInt32(a.strides.dataCount),
-              UInt32(a.strides.innerRepeats),
-              UInt32(b.strides.dataCount),
-              UInt32(b.strides.innerRepeats),
-              UInt32(count)
-            )))
+          .opaque((aStrides, bStrides, UInt32(count)))
+        )
         dispatch1D(enc, state: state, threadCount: count)
       }
       return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
@@ -842,7 +905,7 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "compare", callbacks: [aCb]
+        label: "compare", deallocators: [aCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
@@ -873,7 +936,7 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "compare", callbacks: [bCb]
+        label: "compare", deallocators: [bCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
@@ -909,22 +972,18 @@ open class MPSBackend: CPUBackend {
     let (aBuf, aCb) = try await gpuBuffer(a.data)
     let (bBuf, bCb) = try await gpuBuffer(b.data)
     let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
+    let aStrides = try MPSBackend.createStrides(a.strides)
+    let bStrides = try MPSBackend.createStrides(b.strides)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "bitwiseOp", callbacks: [aCb, bCb]
+        label: "bitwiseOp", deallocators: [aCb, bCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .buffer(aBuf), .buffer(bBuf), .buffer(output),
-          .opaque(
-            (
-              UInt32(a.strides.dataCount),
-              UInt32(a.strides.innerRepeats),
-              UInt32(b.strides.dataCount),
-              UInt32(b.strides.innerRepeats),
-              UInt32(count)
-            )))
+          .opaque((aStrides, bStrides, UInt32(count)))
+        )
         dispatch1D(enc, state: state, threadCount: count)
       }
       return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
@@ -949,17 +1008,15 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "bitwiseOp", callbacks: [aCb]
+        label: "bitwiseOp", deallocators: [aCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .buffer(aBuf), .data(Data(bData)), .buffer(output),
           .opaque(
             (
-              UInt32(count),
-              UInt32(1),
-              UInt32(1),
-              UInt32(1),
+              MPSBackend.createStrides(BroadcastStrides(shape: [count], strides: [1])),
+              MPSBackend.createStrides(BroadcastStrides(shape: [count], strides: [0])),
               UInt32(count)
             )))
         dispatch1D(enc, state: state, threadCount: count)
@@ -986,17 +1043,15 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "bitwiseOp", callbacks: [aCb]
+        label: "bitwiseOp", deallocators: [aCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .data(Data(aData)), .buffer(bBuf), .buffer(output),
           .opaque(
             (
-              UInt32(1),
-              UInt32(1),
-              UInt32(count),
-              UInt32(1),
+              MPSBackend.createStrides(BroadcastStrides(shape: [count], strides: [0])),
+              MPSBackend.createStrides(BroadcastStrides(shape: [count], strides: [1])),
               UInt32(count)
             )))
         dispatch1D(enc, state: state, threadCount: count)
@@ -1046,18 +1101,21 @@ open class MPSBackend: CPUBackend {
     let (aBuf, aCb) = try await gpuBuffer(a.data)
     let (bBuf, bCb) = try await gpuBuffer(b.data)
     let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
+    let inputStrides = try MPSBackend.createStrides(input.strides)
+    let aStrides = try MPSBackend.createStrides(a.strides)
+    let bStrides = try MPSBackend.createStrides(b.strides)
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "addMulOrMulAdd", callbacks: [inCb, aCb, bCb]
+        label: "addMulOrMulAdd", deallocators: [inCb, aCb, bCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
           enc, .buffer(inBuf), .buffer(aBuf), .buffer(bBuf),
           .buffer(output),
-          .uint(UInt32(input.strides.dataCount)), .uint(UInt32(input.strides.innerRepeats)),
-          .uint(UInt32(a.strides.dataCount)), .uint(UInt32(a.strides.innerRepeats)),
-          .uint(UInt32(b.strides.dataCount)), .uint(UInt32(b.strides.innerRepeats)),
+          .opaque(inputStrides),
+          .opaque(aStrides),
+          .opaque(bStrides),
           .uint(UInt32(count)))
         dispatch1D(enc, state: state, threadCount: count)
       }
@@ -1112,7 +1170,7 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "adamw", callbacks: [paramCb, gradCb, moment1Cb, moment2Cb]
+        label: "adamw", deallocators: [paramCb, gradCb, moment1Cb, moment2Cb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
@@ -1152,9 +1210,13 @@ open class MPSBackend: CPUBackend {
     let (varianceBuf, varianceCb) = try await gpuBuffer(variance.data)
     let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
 
+    let inputStrides = try MPSBackend.createStrides(input.strides)
+    let meanStrides = try MPSBackend.createStrides(mean.strides)
+    let varianceStrides = try MPSBackend.createStrides(variance.strides)
+
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "normalize", callbacks: [inCb, meanCb, varianceCb]
+        label: "normalize", deallocators: [inCb, meanCb, varianceCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
@@ -1163,12 +1225,9 @@ open class MPSBackend: CPUBackend {
           .opaque(
             (
               epsilon.toFloat(),
-              UInt32(input.strides.dataCount),
-              UInt32(input.strides.innerRepeats),
-              UInt32(mean.strides.dataCount),
-              UInt32(mean.strides.innerRepeats),
-              UInt32(variance.strides.dataCount),
-              UInt32(variance.strides.innerRepeats),
+              inputStrides,
+              meanStrides,
+              varianceStrides,
               UInt32(count)
             ))
         )
@@ -1198,9 +1257,12 @@ open class MPSBackend: CPUBackend {
     let (outGradBuf, outGradCb) = try await gpuBuffer(outGrad.data)
     let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
 
+    let varianceStrides = try MPSBackend.createStrides(variance.strides)
+    let outGradStrides = try MPSBackend.createStrides(outGrad.strides)
+
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "normalizeXGrad", callbacks: [varianceCb, outGradCb]
+        label: "normalizeXGrad", deallocators: [varianceCb, outGradCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
@@ -1210,10 +1272,8 @@ open class MPSBackend: CPUBackend {
             (
               epsilon.toFloat(),
               sign.toFloat(),
-              UInt32(variance.strides.dataCount),
-              UInt32(variance.strides.innerRepeats),
-              UInt32(outGrad.strides.dataCount),
-              UInt32(outGrad.strides.innerRepeats),
+              varianceStrides,
+              outGradStrides,
               UInt32(count)
             )))
         dispatch1D(enc, state: state, threadCount: count)
@@ -1243,9 +1303,14 @@ open class MPSBackend: CPUBackend {
     let (outGradBuf, outGradCb) = try await gpuBuffer(outGrad.data)
     let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
 
+    let inputStrides = try MPSBackend.createStrides(input.strides)
+    let meanStrides = try MPSBackend.createStrides(mean.strides)
+    let varianceStrides = try MPSBackend.createStrides(variance.strides)
+    let outGradStrides = try MPSBackend.createStrides(outGrad.strides)
+
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "normalizeVarianceGrad", callbacks: [inCb, meanCb, varianceCb, outGradCb]
+        label: "normalizeVarianceGrad", deallocators: [inCb, meanCb, varianceCb, outGradCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(
@@ -1255,14 +1320,10 @@ open class MPSBackend: CPUBackend {
           .opaque(
             (
               epsilon.toFloat(),
-              UInt32(input.strides.dataCount),
-              UInt32(input.strides.innerRepeats),
-              UInt32(mean.strides.dataCount),
-              UInt32(mean.strides.innerRepeats),
-              UInt32(variance.strides.dataCount),
-              UInt32(variance.strides.innerRepeats),
-              UInt32(outGrad.strides.dataCount),
-              UInt32(outGrad.strides.innerRepeats),
+              inputStrides,
+              meanStrides,
+              varianceStrides,
+              outGradStrides,
               UInt32(count)
             )))
         dispatch1D(enc, state: state, threadCount: count)
@@ -1290,7 +1351,7 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "cast", callbacks: [aCb]
+        label: "cast", deallocators: [aCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         try setArguments(enc, .buffer(aBuf), .buffer(output), .uint(UInt32(count)))
@@ -1318,7 +1379,7 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "clamp", callbacks: [aCb]
+        label: "clamp", deallocators: [aCb]
       ) { buf, enc in
         let state = try getFunction(name: functionName)
         if dtype == .int64 {
@@ -1341,7 +1402,7 @@ open class MPSBackend: CPUBackend {
   }
 
   internal func tensorOrScalarBuffer<T>(_ obj: TensorOrScalar<T>, _ dtype: Tensor.DType)
-    async throws -> (MTLBuffer, () -> Void)
+    async throws -> (MTLBuffer, Deallocator)
   {
     switch obj {
     case .tensor(let t):
@@ -1350,7 +1411,7 @@ open class MPSBackend: CPUBackend {
       try await {
         let (buf, cb) = try await allocateBuf(dtype.byteSize)
         try arrayToPointer([s], output: buf.contents(), dtype: dtype)
-        return (buf, cb ?? { () in () })
+        return (buf, cb ?? Deallocator { () in () })
       }()
     }
   }
@@ -1365,16 +1426,17 @@ open class MPSBackend: CPUBackend {
     alwaysAssert(count < UInt32.max, "cannot apply when() to \(count) elements")
 
     let (maskBuf, maskCb) = try await gpuBuffer(mask.data)
-    let maskStrides = mask.strides
     let (aBuf, aCb) = try await tensorOrScalarBuffer(a, dtype)
     let (bBuf, bCb) = try await tensorOrScalarBuffer(b, dtype)
-    let aStrides = a.strides
-    let bStrides = b.strides
+
+    let maskStrides = try MPSBackend.createStrides(mask.strides)
+    let aStrides = try MPSBackend.createStrides(a.strides)
+    let bStrides = try MPSBackend.createStrides(b.strides)
 
     let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "when", callbacks: [maskCb, aCb, bCb]
+        label: "when", deallocators: [maskCb, aCb, bCb]
       ) { buf, enc in
         let typeName = dtype.metalSizeType
         let functionName = "when_\(typeName)"
@@ -1387,12 +1449,9 @@ open class MPSBackend: CPUBackend {
           .buffer(output),
           .opaque(
             (
-              UInt32(maskStrides.dataCount),
-              UInt32(maskStrides.innerRepeats),
-              UInt32(aStrides.dataCount),
-              UInt32(aStrides.innerRepeats),
-              UInt32(bStrides.dataCount),
-              UInt32(bStrides.innerRepeats),
+              maskStrides,
+              aStrides,
+              bStrides,
               UInt32(count)
             ))
         )
@@ -1420,7 +1479,7 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "repeated", callbacks: [aCb]
+        label: "repeated", deallocators: [aCb]
       ) { buf, enc in
         let state = try getFunction(name: "repeat_\(typeName)")
         try setArguments(
@@ -1443,11 +1502,11 @@ open class MPSBackend: CPUBackend {
   {
     alwaysAssert(inputs.count == innerCounts.count)
     var inBufs = [MTLBuffer]()
-    var inCbs = [() -> Void]()
+    var inDeallocators = [Deallocator]()
     for input in inputs {
-      let (buf, cb) = try await gpuBuffer(input)
+      let (buf, d) = try await gpuBuffer(input)
       inBufs.append(buf)
-      inCbs.append(cb)
+      inDeallocators.append(d)
     }
     let totalInner = innerCounts.sum()
     let (buffer, bufferCb) = try await allocateBuf(outerCount * totalInner * dtype.byteSize)
@@ -1456,7 +1515,7 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "concat", callbacks: inCbs
+        label: "concat", deallocators: inDeallocators
       ) { buf, enc in
         for (i, innerCount) in innerCounts.enumerated() {
           let offset = innerCounts[..<i].sum()
@@ -1485,7 +1544,7 @@ open class MPSBackend: CPUBackend {
     let (output, outputCb) = try await allocateBuf(s.gatherOutCount * dtype.byteSize)
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "gather", callbacks: [aCb, idxCb]
+        label: "gather", deallocators: [aCb, idxCb]
       ) { buf, enc in
         let typeName = dtype.metalSizeType
         let functionName = "gather\(s.broadcasted ? "_bcast" : "")_\(typeName)"
@@ -1522,7 +1581,7 @@ open class MPSBackend: CPUBackend {
       return try await serialize { [self] in
         let scatter = self.createScatter(scatter: s, dtype: mpsDType)
         let completion = completionBuffer(
-          label: "scatter", callbacks: [aCb, idxCb]
+          label: "scatter", deallocators: [aCb, idxCb]
         ) { buf in
           scatter.graph.encode(
             to: buf as! MPSCommandBuffer,
@@ -1558,7 +1617,7 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBuffer(
-        label: "scatterUnique", callbacks: [aCb, idxCb]
+        label: "scatterUnique", deallocators: [aCb, idxCb]
       ) { buf in
         let typeName = dtype.metalSizeType
         let functionName = "scatter\(s.broadcasted ? "_bcast" : "")_\(typeName)"
@@ -1632,7 +1691,7 @@ open class MPSBackend: CPUBackend {
       let newStrides = stridesForShape(newShape)
 
       let completion = try completionBufferAndEncoder(
-        label: "axisPermutation", callbacks: []
+        label: "axisPermutation", deallocators: []
       ) { buf, enc in
         let functionName = "axis_permutation"
         let state = try getFunction(name: functionName)
@@ -1667,7 +1726,7 @@ open class MPSBackend: CPUBackend {
     return try await serialize { [self] in
       let red = self.createReduction(op: op, dims: dims, dtype: mpsDType)
       let completion = completionBuffer(
-        label: "reduce", callbacks: [aCb]
+        label: "reduce", deallocators: [aCb]
       ) { buf in
         red.graph.encode(
           to: buf as! MPSCommandBuffer,
@@ -1739,7 +1798,7 @@ open class MPSBackend: CPUBackend {
     if dims.innerCount == 1 && (dtype == .float16 || dtype == .float32) {
       return try await serialize { [self] in
         let completion = try completionBufferAndEncoder(
-          label: "logSoftmax", callbacks: [aCb]
+          label: "logSoftmax", deallocators: [aCb]
         ) { buf, enc in
           try setArguments(enc, .buffer(aBuf), .buffer(output), .uint(UInt32(dims.reduceCount)))
 
@@ -1759,7 +1818,7 @@ open class MPSBackend: CPUBackend {
         outerCount: dims.outerCount, middleCount: dims.reduceCount, innerCount: dims.innerCount,
         dtype: mpsDType)
       let completion = completionBuffer(
-        label: "logSoftmax", callbacks: [aCb]
+        label: "logSoftmax", deallocators: [aCb]
       ) { buf in
         op.graph.encode(
           to: buf as! MPSCommandBuffer,
@@ -1833,7 +1892,7 @@ open class MPSBackend: CPUBackend {
     if dims.innerCount == 1 && (dtype == .float16 || dtype == .float32) {
       return try await serialize { [self] in
         let completion = try completionBufferAndEncoder(
-          label: "logSoftmaxGrad", callbacks: [aCb, outGradCb]
+          label: "logSoftmaxGrad", deallocators: [aCb, outGradCb]
         ) { buf, enc in
           try setArguments(
             enc,
@@ -1859,7 +1918,7 @@ open class MPSBackend: CPUBackend {
         outerCount: dims.outerCount, middleCount: dims.reduceCount, innerCount: dims.innerCount,
         dtype: mpsDType)
       let completion = completionBuffer(
-        label: "logSoftmaxGrad", callbacks: [aCb, outGradCb]
+        label: "logSoftmaxGrad", deallocators: [aCb, outGradCb]
       ) { buf in
         op.graph.encode(
           to: buf as! MPSCommandBuffer,
@@ -1963,7 +2022,7 @@ open class MPSBackend: CPUBackend {
         transA: transA, transB: transB, batch: matrixCount, rows: rows, inner: inner, cols: cols,
         dtype: mpsDType)
       let completion = completionBuffer(
-        label: "batchedMatmul", callbacks: [aCb, bCb]
+        label: "batchedMatmul", deallocators: [aCb, bCb]
       ) { buf in
         alwaysAssert(
           aBuf.allocatedSize >= matrixCount * aShape.0 * aShape.1 * dtype.byteSize,
@@ -2077,7 +2136,7 @@ open class MPSBackend: CPUBackend {
       let op = try self.createConv2D(
         config, batch: batch, kind: transpose ? .transpose : .forward, dtype: mpsDType)
       let completion = completionBuffer(
-        label: "conv2D", callbacks: [imageCb, kernelCb]
+        label: "conv2D", deallocators: [imageCb, kernelCb]
       ) { buf in
         alwaysAssert(
           imageBuf.allocatedSize >= imageShape.product() * dtype.byteSize,
@@ -2192,7 +2251,7 @@ open class MPSBackend: CPUBackend {
     return try await serialize { [self] in
       let op = try self.createConv2D(config, batch: batch, kind: .kernelGrad, dtype: mpsDType)
       let completion = completionBuffer(
-        label: "conv2DKernelGrad", callbacks: [imageCb, outGradCb]
+        label: "conv2DKernelGrad", deallocators: [imageCb, outGradCb]
       ) { buf in
         alwaysAssert(
           imageBuf.allocatedSize >= imageShape.product() * dtype.byteSize,
@@ -2439,7 +2498,7 @@ open class MPSBackend: CPUBackend {
   }
 
   internal func completionBuffer(
-    label: String, callbacks: [(() -> Void)], _ action: (MTLCommandBuffer) throws -> Void
+    label: String, deallocators: [Deallocator], _ action: (MTLCommandBuffer) throws -> Void
   ) rethrows -> Task<(), Error> {
     let rawBuf = commandQueue!.makeCommandBuffer()!
     rawBuf.label = label
@@ -2453,7 +2512,7 @@ open class MPSBackend: CPUBackend {
         } else {
           Result.success(())
         }
-      for x in callbacks {
+      for x in deallocators {
         x()
       }
       cb.putResult(result)
@@ -2467,12 +2526,12 @@ open class MPSBackend: CPUBackend {
   }
 
   internal func completionBufferAndEncoder(
-    label: String, callbacks: [(() -> Void)],
+    label: String, deallocators: [Deallocator],
     _ action: (MTLCommandBuffer, MTLComputeCommandEncoder) throws -> Void
   ) throws -> Task<
     (), Error
   > {
-    try completionBuffer(label: label, callbacks: callbacks) { buf in
+    try completionBuffer(label: label, deallocators: deallocators) { buf in
       guard let computeEncoder = buf.makeComputeCommandEncoder() else {
         throw BackendError.kernelFailed("could not create compute encoder")
       }

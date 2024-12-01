@@ -745,7 +745,7 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for + operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
-    let (outputShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
+    let (outputShape, (lhsStrides, rhsStrides)) = Tensor.lazyBroadcast(lhs, rhs)
 
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
@@ -794,7 +794,7 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for * operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
-    let (outputShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
+    let (outputShape, (lhsStrides, rhsStrides)) = Tensor.lazyBroadcast(lhs, rhs)
 
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
@@ -861,7 +861,7 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
-    let (outputShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
+    let (outputShape, (lhsStrides, rhsStrides)) = Tensor.lazyBroadcast(lhs, rhs)
 
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
@@ -932,7 +932,7 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
-    let (outputShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
+    let (outputShape, (lhsStrides, rhsStrides)) = Tensor.lazyBroadcast(lhs, rhs)
 
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in
@@ -1001,7 +1001,7 @@ public final class Tensor {
     alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
-    let (outputShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
+    let (outputShape, (lhsStrides, rhsStrides)) = Tensor.lazyBroadcast(lhs, rhs)
 
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in

@@ -27,14 +27,14 @@ open class Backend {
 
   public enum TensorOrScalar<T: TensorElement> {
     case tensor(BroadcastData)
-    case scalar(T, Int)
+    case scalar(T, [Int])
 
     internal var strides: BroadcastStrides {
       switch self {
       case .tensor(let t):
         t.strides
-      case .scalar(_, let s):
-        BroadcastStrides(dataCount: 1, outerRepeats: s, innerRepeats: 1)
+      case .scalar(_, let shape):
+        BroadcastStrides(shape: shape, strides: [Int](repeating: 0, count: shape.count))
       }
     }
   }
@@ -151,6 +151,12 @@ open class Backend {
   }
 
   public init() {
+  }
+
+  /// Convert broadcasted data to a plain Tensor.Data object to be used in
+  /// operations that do not support broadcasting.
+  open func broadcast(_ a: BroadcastData, dtype: Tensor.DType) async throws -> Tensor.Data {
+    throw BackendError.notImplemented("broadcast")
   }
 
   /// Perform a broadcasted binary operator between two tensors.
@@ -603,7 +609,7 @@ open class Backend {
     -> (param: Tensor.Data, moment1: Tensor.Data, moment2: Tensor.Data)
   {
     func bd(_ data: Tensor.Data) -> BroadcastData {
-      BroadcastData.simple(data: data, count: count)
+      BroadcastData.simple(data: data, shape: [count])
     }
 
     let newMt = try await binaryOp(

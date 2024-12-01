@@ -31,7 +31,7 @@ extension Tensor {
       lhs.dtype == rhs.dtype,
       "dtypes for comparison operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
-    let (newShape, ((lhs, lhsStrides), (rhs, rhsStrides))) = Tensor.lazyBroadcast(lhs, rhs)
+    let (newShape, (lhsStrides, rhsStrides)) = Tensor.lazyBroadcast(lhs, rhs)
 
     let backend = Backend.current
     let newData = createDataTask(lhs, rhs) { lhs, rhs in

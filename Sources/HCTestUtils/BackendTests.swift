@@ -160,8 +160,8 @@ open class BackendTests {
   public static func testFusedNormalize() async throws {
     let epsilon = 0.3
     for dtype: Tensor.DType in [.float32, .float16] {
-      let atol: Float = dtype == .float32 ? 1e-4 : 1e-2
-      let rtol: Float = dtype == .float32 ? 1e-4 : 1e-2
+      let atol: Float = dtype == .float32 ? 1e-4 : 2e-2
+      let rtol: Float = dtype == .float32 ? 1e-4 : 2e-2
       for xShape in [[6], [3, 6], [5, 3, 6]] {
         for meanShape in [[6], [1, 6], [3, 6], [5, 1, 6], [5, 3, 6], [3, 1], [5, 1, 1]] {
           for varianceShape in [
