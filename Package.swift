@@ -16,6 +16,9 @@ let package = Package(
     .library(
       name: "Honeycrisp",
       targets: ["Honeycrisp"]),
+    .library(
+      name: "HCTestUtils",
+      targets: ["HCTestUtils"]),
   ],
   dependencies: [
     .package(
@@ -45,12 +48,17 @@ let package = Package(
       resources: [
         .process("Resources")
       ]),
-    .testTarget(
-      name: "HoneycrispTests",
-      dependencies: ["Honeycrisp", .product(name: "Gzip", package: "GzipSwift")],
+    .target(
+      name: "HCTestUtils",
+      dependencies: [
+        "Honeycrisp", .product(name: "Gzip", package: "GzipSwift"),
+      ],
       resources: [
         .process("Resources")
       ]),
+    .testTarget(
+      name: "HoneycrispTests",
+      dependencies: ["Honeycrisp", "HCTestUtils"]),
     .executableTarget(
       name: "HCMatrixBench",
       dependencies: ["Honeycrisp"]),
