@@ -10,6 +10,7 @@ public struct BroadcastStrides: Hashable, Equatable {
   public let shape: [Int]
   public let strides: [Int]
   public let dataCount: Int
+  public let isNoOp: Bool
 
   public init(shape: [Int], strides: [Int]) {
     assert(shape.count == strides.count)
@@ -17,14 +18,15 @@ public struct BroadcastStrides: Hashable, Equatable {
     self.strides = strides
 
     dataCount = zip(strides, shape).filter({ $0.0 != 0 }).map({ $0.1 }).product()
+    isNoOp = zip(strides, shape).allSatisfy { stride, size in stride != 0 || size == 1 }
   }
 
-  public var isNoOp: Bool {
-    strides.allSatisfy { $0 != 0 }
+  public var dataShape: [Int] {
+    return zip(shape, strides).map { size, stride in stride == 0 ? 1 : size }
   }
 
   /// Get the `RepeatDims` which could be applied to the raw array to get the
-  /// virtual array.
+  /// broadcasted array.
   public func repeats() -> [RepeatDims] {
     var result = [RepeatDims]()
     for (i, stride) in strides.enumerated().reversed() {
@@ -65,6 +67,11 @@ public struct BroadcastStrides: Hashable, Equatable {
   /// Translate an index in the virtual array to the data array.
   public func callAsFunction(_ i: Int) -> Int {
     assert(i >= 0 && i < shape.product())
+
+    if isNoOp {
+      return i
+    }
+
     var curIdx = i
     var result = 0
     for (stride, size) in zip(strides, shape).reversed() {

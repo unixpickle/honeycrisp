@@ -214,24 +214,21 @@ open class MPSBackend: CPUBackend {
   }
 
   private struct ScatterKey: Hashable {
-    let broadcasted: Bool
-    let outCount: Int
-
-    let outerCount: Int
-    let middleCount: Int
-    let innerCount: Int
-
+    var valueShape: [Int]
+    var axis: Int
+    var indexShape: [Int]
+    var indexStrides: [Int]
     let dtype: MPSDataType
   }
 
   public class MPSRandomGenerator: RandomGenerator {
     public let mpsBackend: MPSBackend
 
-    override internal var stateCount: Int {
+    override open var stateCount: Int {
       2
     }
 
-    override internal var stateDType: Tensor.DType {
+    override open var stateDType: Tensor.DType {
       .int64
     }
 
@@ -243,11 +240,11 @@ open class MPSBackend: CPUBackend {
       )
     }
 
-    override internal func _seed(_ x: Int) async throws -> Tensor.Data {
+    override open func _seed(_ x: Int) async throws -> Tensor.Data {
       try await mpsBackend.collection([x, 0], reverse: false, dtype: .int64)
     }
 
-    override internal func _sample(
+    override open func _sample(
       state: Tensor.Data, count: Int, dist: RandomDist, dtype: Tensor.DType
     )
       async throws -> (
@@ -282,7 +279,7 @@ open class MPSBackend: CPUBackend {
       }
     }
 
-    override internal func _sample(state: Tensor.Data, count: Int, in range: Range<Int64>)
+    override open func _sample(state: Tensor.Data, count: Int, in range: Range<Int64>)
       async throws -> (
         sample: Tensor.Data, state: Tensor.Data
       )
@@ -399,10 +396,9 @@ open class MPSBackend: CPUBackend {
       names.append("when_\(type)")
       names.append("repeat_\(type)")
       names.append("strided_copy_\(type)")
-      for mode in ["", "_bcast"] {
-        for op in ["gather", "scatter"] {
-          names.append("\(op)\(mode)_\(type)")
-        }
+      names.append("broadcast_\(type)")
+      for op in ["gather", "scatter"] {
+        names.append("\(op)_\(type)")
       }
       for op in ["xor", "and", "or"] {
         names.append("\(op)_\(type)")
@@ -1461,6 +1457,37 @@ open class MPSBackend: CPUBackend {
     }
   }
 
+  override open func broadcast(_ a: BroadcastData, dtype: Tensor.DType) async throws -> Tensor.Data
+  {
+    let outCount = a.strides.shape.product()
+    alwaysAssert(
+      outCount <= Int(UInt32.max),
+      "cannot apply repeat kernel to this many values")
+
+    let typeName = dtype.metalSizeType
+
+    let (aBuf, aCb) = try await gpuBuffer(a.data)
+    let (output, outputCb) = try await allocateBuf(outCount * dtype.byteSize)
+    let aStrides = try MPSBackend.createStrides(a.strides)
+
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(
+        label: "broadcast", deallocators: [aCb]
+      ) { buf, enc in
+        let state = try getFunction(name: "broadcast_\(typeName)")
+        try setArguments(
+          enc,
+          .buffer(aBuf),
+          .buffer(output),
+          .opaque(aStrides),
+          .uint(UInt32(outCount))
+        )
+        dispatch1D(enc, state: state, threadCount: outCount)
+      }
+      return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
+    }
+  }
+
   override open func repeated(
     _ a: Tensor.Data, dims: RepeatDims, dtype: Tensor.DType
   )
@@ -1540,14 +1567,16 @@ open class MPSBackend: CPUBackend {
     -> Tensor.Data
   {
     let (aBuf, aCb) = try await gpuBuffer(a)
-    let (idxBuf, idxCb) = try await gpuBuffer(s.indices)
+    let (idxBuf, idxCb) = try await gpuBuffer(s.indices.data)
     let (output, outputCb) = try await allocateBuf(s.gatherOutCount * dtype.byteSize)
+    let indexStrides = try MPSBackend.createStrides(s.indices.strides)
+
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
         label: "gather", deallocators: [aCb, idxCb]
       ) { buf, enc in
         let typeName = dtype.metalSizeType
-        let functionName = "gather\(s.broadcasted ? "_bcast" : "")_\(typeName)"
+        let functionName = "gather_\(typeName)"
         let state = try getFunction(name: functionName)
         try setArguments(
           enc,
@@ -1557,7 +1586,8 @@ open class MPSBackend: CPUBackend {
           .uint(UInt32(s.outerCount)),
           .uint(UInt32(s.outCount)),
           .uint(UInt32(s.middleCount)),
-          .uint(UInt32(s.innerCount))
+          .uint(UInt32(s.innerCount)),
+          .opaque(indexStrides)
         )
         dispatch1D(enc, state: state, threadCount: s.gatherOutCount)
       }
@@ -1572,7 +1602,8 @@ open class MPSBackend: CPUBackend {
     -> Tensor.Data
   {
     let (aBuf, aCb) = try await gpuBuffer(a)
-    let (idxBuf, idxCb) = try await gpuBuffer(s.indices)
+    let (idxBuf, idxCb) = try await gpuBuffer(s.indices.data)
+    let indexStrides = try MPSBackend.createStrides(s.indices.strides)
 
     let outBytes = s.gatherInCount * dtype.byteSize
     let (output, outputCb) = try await allocateBuf(outBytes)
@@ -1594,7 +1625,7 @@ open class MPSBackend: CPUBackend {
               scatter.inputB: MPSGraphTensorData(
                 MPSVector(
                   buffer: idxBuf,
-                  descriptor: MPSVectorDescriptor(length: s.indicesCount, dataType: .int64))),
+                  descriptor: MPSVectorDescriptor(length: s.indices.dataCount, dataType: .int64))),
             ],
             targetOperations: nil,
             resultsDictionary: [
@@ -1620,7 +1651,7 @@ open class MPSBackend: CPUBackend {
         label: "scatterUnique", deallocators: [aCb, idxCb]
       ) { buf in
         let typeName = dtype.metalSizeType
-        let functionName = "scatter\(s.broadcasted ? "_bcast" : "")_\(typeName)"
+        let functionName = "scatter_\(typeName)"
         let state = try getFunction(name: functionName)
 
         let blitEncoder = buf.makeBlitCommandEncoder()!
@@ -1633,7 +1664,8 @@ open class MPSBackend: CPUBackend {
         try setArguments(
           computeEncoder, .buffer(aBuf), .buffer(idxBuf), .buffer(output),
           .uint(UInt32(s.outerCount)), .uint(UInt32(s.outCount)),
-          .uint(UInt32(s.middleCount)), .uint(UInt32(s.innerCount)))
+          .uint(UInt32(s.middleCount)), .uint(UInt32(s.innerCount)),
+          .opaque(indexStrides))
         dispatch1D(computeEncoder, state: state, threadCount: s.gatherOutCount)
         computeEncoder.endEncoding()
       }
@@ -1643,40 +1675,78 @@ open class MPSBackend: CPUBackend {
 
   private func createScatter(scatter: ScatterGatherIndices, dtype: MPSDataType) -> TwoToOneGraph {
     let key = ScatterKey(
-      broadcasted: scatter.broadcasted, outCount: scatter.outCount, outerCount: scatter.outerCount,
-      middleCount: scatter.middleCount, innerCount: scatter.innerCount, dtype: dtype)
+      valueShape: scatter.valueShape,
+      axis: scatter.axis,
+      indexShape: scatter.indices.strides.shape,
+      indexStrides: scatter.indices.strides.strides,
+      dtype: dtype
+    )
     if let r = scatters[key] {
       return r
-    } else {
-      let graph = MPSGraph()
-      let inputShape = [scatter.outerCount, scatter.outCount, scatter.innerCount]
-      let indexShape =
-        scatter.broadcasted
-        ? [scatter.outCount] : [scatter.outerCount, scatter.outCount, scatter.innerCount]
-      let outputShape = [scatter.outerCount, scatter.middleCount, scatter.innerCount]
-      let input = graph.placeholder(
-        shape: mpsShape([inputShape.product()]), dataType: dtype, name: "input")
-      let indices = graph.placeholder(
-        shape: mpsShape([indexShape.product()]), dataType: .int64, name: "indices")
-      let inputReshaped = graph.reshape(input, shape: mpsShape(inputShape), name: "inputReshaped")
-      let indicesReshaped = graph.reshape(
-        indices, shape: mpsShape(indexShape), name: "indexReshaped")
-      let unshapedOutput =
-        if scatter.broadcasted {
-          graph.scatter(
-            inputReshaped, indices: indicesReshaped, shape: mpsShape(outputShape), axis: 1,
-            mode: .add, name: "scatter")
-        } else {
-          graph.scatterAlongAxis(
-            1, updates: inputReshaped, indices: indicesReshaped, shape: mpsShape(outputShape),
-            mode: .add, name: "scatter")
-        }
-      let output = graph.reshape(
-        unshapedOutput, shape: mpsShape([outputShape.product()]), name: "output")
-      let r = TwoToOneGraph(graph: graph, inputA: input, inputB: indices, output: output)
-      scatters[key] = r
-      return r
     }
+
+    let graph = MPSGraph()
+    let inputShape = key.indexShape
+    var indexShape = scatter.indices.strides.dataShape
+    if indexShape[..<scatter.axis].allSatisfy({ $0 == 1 })
+      && indexShape[(scatter.axis + 1)...].allSatisfy({ $0 == 1 })
+    {
+      indexShape = [indexShape[scatter.axis]]
+    }
+    let shape3DIn = [
+      inputShape[..<scatter.axis].product(), inputShape[scatter.axis],
+      inputShape[(scatter.axis + 1)...].product(),
+    ]
+    let shape3DOut = [
+      key.valueShape[..<scatter.axis].product(), key.valueShape[scatter.axis],
+      key.valueShape[(scatter.axis + 1)...].product(),
+    ]
+
+    assert(inputShape.product() == scatter.gatherOutCount)
+    assert(shape3DOut.product() == scatter.gatherInCount)
+    assert(indexShape.product() == scatter.indices.dataCount)
+
+    let input = graph.placeholder(
+      shape: mpsShape([inputShape.product()]), dataType: dtype, name: "input")
+    let indices = graph.placeholder(
+      shape: mpsShape([indexShape.product()]), dataType: .int64, name: "indices")
+    let inputReshaped = graph.reshape(input, shape: mpsShape(shape3DIn), name: "inputReshaped")
+    let indicesReshaped = graph.reshape(
+      indices, shape: mpsShape(indexShape), name: "indexReshaped")
+    let unshapedOutput =
+      if indexShape.count == 1 {
+        graph.scatter(
+          inputReshaped,
+          indices: indicesReshaped,
+          shape: mpsShape(shape3DOut),
+          axis: 1,
+          mode: .add,
+          name: "scatter"
+        )
+      } else {
+        graph.scatterAlongAxis(
+          1,
+          updates: inputReshaped,
+          indices: graph.reshape(
+            (inputShape != indexShape
+              ? graph.broadcast(indicesReshaped, shape: mpsShape(inputShape), name: "bcast")
+              : indicesReshaped),
+            shape: mpsShape(shape3DIn),
+            name: "bcastReshaped"
+          ),
+          shape: mpsShape(shape3DOut),
+          mode: .add,
+          name: "scatter"
+        )
+      }
+    let output = graph.reshape(
+      unshapedOutput,
+      shape: mpsShape([shape3DOut.product()]),
+      name: "output"
+    )
+    let r = TwoToOneGraph(graph: graph, inputA: input, inputB: indices, output: output)
+    scatters[key] = r
+    return r
   }
 
   override open func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data {

@@ -176,13 +176,15 @@ private func formatCalls(_ locs: [CodeLocation]) -> String {
 
 /// If a condition is false, abort program execution and print the current backtrace with an
 /// optional error message.
+@inlinable
+@inline(__always)
 public func alwaysAssert(
   _ condition: Bool, _ message: String? = nil, function: StaticString = #function,
   file: StaticString = #file, line: UInt = #line
 ) {
-  Backtrace.record(
-    {
-      if !condition {
+  if !condition {
+    Backtrace.record(
+      {
         let msg =
           if let message = message {
             "\n\nTraceback:\n\n\(Backtrace.format())\n\nAssertion failure: \(message)"
@@ -190,8 +192,12 @@ public func alwaysAssert(
             "\n\nTraceback:\n\n\(Backtrace.format())\n\nAssertion failure"
           }
         fatalError(msg)
-      }
-    }, function: function, file: file, line: line)
+      },
+      function: function,
+      file: file,
+      line: line
+    )
+  }
 }
 
 /// Abort program execution and print the current backtrace with an optional error message.

@@ -524,12 +524,11 @@ public final class Tensor {
   }
 
   @recordCaller
-  internal func _createDataTask(_ fn: @escaping (Tensor) async throws -> Data) -> Task<Data, Error>
-  {
+  private func _createDataTask(_ fn: @escaping (Tensor) async throws -> Data) -> Task<Data, Error> {
     Tensor.createDataTask(self, fn)
   }
 
-  static internal func createDataTask<T>(
+  static public func createDataTask<T>(
     _ fn: @escaping () async throws -> T,
     function: StaticString = #function,
     file: StaticString = #file,
@@ -555,7 +554,7 @@ public final class Tensor {
   }
 
   @recordCaller
-  static internal func _createDataTask(
+  static private func _createDataTask(
     _ x: Tensor, _ fn: @escaping (Tensor) async throws -> Data
   ) -> Task<Data, Error> {
     let safeRef1 = x.noGrad()
@@ -565,7 +564,7 @@ public final class Tensor {
   }
 
   @recordCaller
-  static internal func _createDataTask(
+  static private func _createDataTask(
     _ x: Tensor, _ y: Tensor, _ fn: @escaping (Tensor, Tensor) async throws -> Data
   ) -> Task<Data, Error> {
     let safeRef1 = x.noGrad()
@@ -576,7 +575,7 @@ public final class Tensor {
   }
 
   @recordCaller
-  static internal func _createDataTask(
+  static private func _createDataTask(
     _ x: Tensor, _ y: Tensor, _ z: Tensor,
     _ fn: @escaping (Tensor, Tensor, Tensor) async throws -> Data
   ) -> Task<Data, Error> {
@@ -589,7 +588,7 @@ public final class Tensor {
   }
 
   @recordCaller
-  static internal func _createDataTask(
+  static private func _createDataTask(
     _ w: Tensor, _ x: Tensor, _ y: Tensor, _ z: Tensor,
     _ fn: @escaping (Tensor, Tensor, Tensor, Tensor) async throws -> Data
   ) -> Task<Data, Error> {

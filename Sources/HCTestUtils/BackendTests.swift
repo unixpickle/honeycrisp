@@ -506,6 +506,26 @@ open class BackendTests {
       // Subtle test for boolean gather
       try await assertDataEqual(transposeMe.t() == 0, (transposeMe == 0).t())
     }
+
+    // Test broadcasting along a different axis.
+    for dtype: Tensor.DType in [.float16, .float32] {
+      let y = Tensor(rand: [3, 4, 5], dtype: dtype)
+      var yGrad: Tensor?
+      let indices = Tensor(data: (0..<20).map({ $0 % 4 }), shape: [1, 4, 5])
+      let indicesBcast = indices.expand(shape: [3, 4, 5])
+      func useY() -> Tensor {
+        y.onGrad { yGrad = $0 }
+      }
+      let actualOut = useY().gather(axis: 1, indices: indices)
+      let outGrad = Tensor(randLike: actualOut)
+      actualOut.backward(outGrad)
+      let actualGrad = yGrad!
+      let expectedOut = useY().gather(axis: 1, indices: indicesBcast)
+      expectedOut.backward(outGrad)
+      let expectedGrad = yGrad!
+      try await assertDataEqual(actualOut, expectedOut)
+      try await assertClose(actualGrad, expectedGrad)
+    }
   }
 
   public static func testMatrixMatrixProduct() async throws {
@@ -905,13 +925,18 @@ open class BackendTests {
 
     let t2 = Tensor(data: t2Arr, shape: [1, 2, 1, 3, 1])
     try await assertDataEqual(t2.repeating(axis: 0, count: 2), t2Arr + t2Arr)
+    try await assertDataEqual(t2.repeating(axis: 0, count: 2), t2.expand(shape: [2, 2, 1, 3, 1]))
     try await assertDataEqual(t2.repeating(axis: 1, count: 2), t2Arr + t2Arr)
     try await assertDataEqual(
       t2.repeating(axis: 2, count: 2), [1, 2, 3, 1, 2, 3, 4, 5, 6, 4, 5, 6])
     try await assertDataEqual(
+      t2.expand(shape: [1, 2, 2, 3, 1]), [1, 2, 3, 1, 2, 3, 4, 5, 6, 4, 5, 6])
+    try await assertDataEqual(
       t2.repeating(axis: 3, count: 2), [1, 2, 3, 1, 2, 3, 4, 5, 6, 4, 5, 6])
     try await assertDataEqual(
       t2.repeating(axis: 4, count: 2), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6])
+    try await assertDataEqual(
+      t2.expand(shape: [1, 2, 1, 3, 2]), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6])
 
     var grad: Tensor?
     let repeated = t2.onGrad({ g in grad = g }).repeating(axis: 2, count: 2)

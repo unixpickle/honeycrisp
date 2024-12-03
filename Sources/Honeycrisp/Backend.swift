@@ -398,13 +398,24 @@ open class Backend {
   }
 
   /// Repeat (chunks of) elements of a tensor.
+  ///
+  /// The default implementation uses broadcasting.
   open func repeated(
     _ a: Tensor.Data, dims: RepeatDims, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    throw BackendError.notImplemented("repeated")
+    try await broadcast(
+      BroadcastData(
+        strides: BroadcastStrides(
+          shape: [dims.outerCount, dims.repeatCount, dims.innerCount],
+          strides: [dims.innerCount, 0, 1]
+        ),
+        data: a
+      ),
+      dtype: dtype
+    )
   }
 
   /// Select values of a tensor from indices that are specified by another tensor.

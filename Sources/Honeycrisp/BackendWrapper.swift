@@ -12,11 +12,11 @@ open class BackendWrapper: Backend {
     public let wrappedBackend: B
     public let wrapped: RandomGenerator
 
-    override internal var stateCount: Int {
+    override open var stateCount: Int {
       wrapped.stateCount
     }
 
-    override internal var stateDType: Tensor.DType {
+    override open var stateDType: Tensor.DType {
       wrapped.stateDType
     }
 
@@ -26,7 +26,7 @@ open class BackendWrapper: Backend {
       super.init(backend: wrappedBackend, state: wrapped.state)
     }
 
-    override public var state: Tensor {
+    override open var state: Tensor {
       get {
         wrapped.state
       }

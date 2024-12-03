@@ -2,84 +2,94 @@ import HCBacktrace
 
 /// A low-level description of indexing for a gather or scatter operation.
 public struct ScatterGatherIndices {
-  /// If true, then the indices are broadcasted along all non-indexed dimensions.
-  /// Otherwise, there is a unique index for every output position in the tensor.
-  public let broadcasted: Bool
+  /// The shape of the tensor of input values before the gather.
+  public let valueShape: [Int]
+
+  /// The axis to perform the gather along.
+  public let axis: Int
 
   /// The int64 tensor data containing the indices.
-  public let indices: Tensor.Data
+  /// Must have the same shape as valueShape.
+  public let indices: BroadcastData
 
-  /// If `true`, then no index is repeated inside of ``ScatterGatherIndices/indices``.
+  /// If `true`, then no index is repeated inside of ``ScatterGatherIndices/indices``
+  /// within the gathered axis.
   ///
   /// This is used to determine if reduction is necessary during a scatter.
   public let indicesAreUnique: Bool
 
-  /// The new size of the gathered dimension.
-  public let outCount: Int
+  var outerCount: Int {
+    valueShape[..<axis].product()
+  }
 
-  /// The product of all leading dimensions before the affected axis.
-  public let outerCount: Int
+  var middleCount: Int {
+    valueShape[axis]
+  }
 
-  /// The size of the gathered dimension before the gather.
-  public let middleCount: Int
+  var innerCount: Int {
+    valueShape[(axis + 1)...].product()
+  }
 
-  /// The product of all trailing dimensions after the affected axis.
-  public let innerCount: Int
-
-  /// The number of indices in the ``ScatterGatherIndices/indices`` data.
-  ///
-  /// This depends on whether this operation is broadcasted.
-  public var indicesCount: Int {
-    if broadcasted {
-      outCount
-    } else {
-      gatherOutCount
-    }
+  var outCount: Int {
+    indices.strides.shape[axis]
   }
 
   /// The number of input elements for a gather, or output elements for a scatter.
   public var gatherInCount: Int {
-    outerCount * middleCount * innerCount
+    valueShape.product()
   }
 
   /// The number of output elements for a gather, or input elements for a scatter.
   public var gatherOutCount: Int {
-    outerCount * outCount * innerCount
+    return indices.strides.shape.product()
   }
 }
 
 extension Tensor {
 
   @recordCaller
+  internal func _expandIndices(axis: Int, indices: Tensor) -> (Tensor, BroadcastStrides) {
+    let indices =
+      if indices.shape.count == 1 {
+        {
+          var bcastShape = Array(repeating: 1, count: shape.count)
+          bcastShape[axis] = indices.shape[0]
+          return indices.reshape(bcastShape)
+        }()
+      } else {
+        indices
+      }
+
+    var expandShape = shape
+    expandShape[axis] = indices.shape[axis]
+    let indicesStrides = indices.expandStrides(shape: expandShape)
+
+    return (indices, indicesStrides)
+  }
+
+  @recordCaller
   private func _gather(axis: Int, indices: Tensor, indicesAreUnique: Bool = false) -> Tensor {
-    let axis = positiveAxis(axis)
-    alwaysAssert(indices.dtype == .int64, "can only gather with indices of dtype \(indices.dtype)")
+    alwaysAssert(shape.count > 0, "cannot gather() on a zero-dimensional tensor")
     alwaysAssert(
-      shape.count == indices.shape.count || indices.shape.count == 1,
-      "incompatible indices shape \(indices.shape) for tensor shape \(shape)")
+      indices.dtype == .int64,
+      "can only gather with indices of dtype int64, but got \(indices.dtype)")
 
-    var newShape = shape
-    newShape[axis] = indices.shape.count == 1 ? indices.shape[0] : indices.shape[axis]
-    if indices.shape.count != 1 {
-      alwaysAssert(
-        newShape == indices.shape,
-        "tensor shape \(shape) must match indices shape \(indices) except at axis \(axis)")
-    }
+    let axis = positiveAxis(axis)
+    let (indices, indicesStrides) = expandIndices(axis: axis, indices: indices)
 
+    let newShape = indicesStrides.shape
     let backend = Backend.current
     let newData = Tensor.createDataTask(self, indices) { t, indices in
       try await backend.gather(
         try await t.data,
         ScatterGatherIndices(
-          broadcasted: indices.shape.count != t.shape.count,
-          indices: try await indices.data,
-          indicesAreUnique: indicesAreUnique,
-          outCount: indices.shape.count == 1 ? indices.shape[0] : indices.shape[axis],
-          outerCount: t.shape[..<axis].product(),
-          middleCount: t.shape[axis],
-          innerCount: t.shape[(axis + 1)...].product()
+          valueShape: t.shape,
+          axis: axis,
+          indices: BroadcastData(strides: indicesStrides, data: try await indices.data),
+          indicesAreUnique: indicesAreUnique
         ),
-        dtype: t.dtype)
+        dtype: t.dtype
+      )
     }
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype)
@@ -89,7 +99,11 @@ extension Tensor {
         let shape = shape
         handle.backward(backend) {
           grad.scatter(
-            axis: axis, count: shape[axis], indices: indices, indicesAreUnique: indicesAreUnique)
+            axis: axis,
+            count: shape[axis],
+            indices: indices,
+            indicesAreUnique: indicesAreUnique
+          )
         }
       }
     }
@@ -99,11 +113,13 @@ extension Tensor {
   private func _scatter(axis: Int, count: Int, indices: Tensor, indicesAreUnique: Bool = false)
     -> Tensor
   {
-    let axis = positiveAxis(axis)
-    alwaysAssert(indices.dtype == .int64, "can only scatter with indices of dtype \(indices.dtype)")
+    alwaysAssert(shape.count > 0, "cannot scatter() on a zero-dimensional tensor")
     alwaysAssert(
-      shape == indices.shape || (indices.shape.count == 1 && shape[axis] == indices.shape[0]),
-      "incompatible indices shape \(indices.shape) for tensor shape \(shape)")
+      indices.dtype == .int64,
+      "can only scatter with indices of dtype int64, but got \(indices.dtype)")
+
+    let axis = positiveAxis(axis)
+    let (indices, indicesStrides) = expandIndices(axis: axis, indices: indices)
 
     var newShape = shape
     newShape[axis] = count
@@ -113,13 +129,10 @@ extension Tensor {
       try await backend.scatter(
         try await t.data,
         ScatterGatherIndices(
-          broadcasted: indices.shape.count != t.shape.count,
-          indices: try await indices.data,
-          indicesAreUnique: indicesAreUnique,
-          outCount: indices.shape.count == 1 ? indices.shape[0] : indices.shape[axis],
-          outerCount: t.shape[..<axis].product(),
-          middleCount: count,
-          innerCount: t.shape[(axis + 1)...].product()
+          valueShape: newShape,
+          axis: axis,
+          indices: BroadcastData(strides: indicesStrides, data: try await indices.data),
+          indicesAreUnique: indicesAreUnique
         ), dtype: t.dtype)
     }
     if !needsGrad || !Tensor.isGradEnabled {

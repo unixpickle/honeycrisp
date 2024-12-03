@@ -19,16 +19,16 @@ public enum RandomDist {
 /// initializers like ``Tensor/init(rand:dtype:generator:function:file:line:)``.
 /// These calls with synchronously update ``RandomGenerator/state``, ensuring that the generator
 /// is used in a deterministic order.
-public class RandomGenerator {
+open class RandomGenerator {
   public let backend: Backend
   private var _state: Tensor
   private let _opLock: NSLock = NSLock()
 
-  internal var stateCount: Int {
+  open var stateCount: Int {
     tracedFatalError("must override stateCount")
   }
 
-  internal var stateDType: Tensor.DType {
+  open var stateDType: Tensor.DType {
     tracedFatalError("must override stateDType")
   }
 
@@ -64,7 +64,7 @@ public class RandomGenerator {
     }
   }
 
-  internal func _seed(_ x: Int) async throws -> Tensor.Data {
+  open func _seed(_ x: Int) async throws -> Tensor.Data {
     tracedFatalError("_seed() is not implemented")
   }
 
@@ -88,7 +88,7 @@ public class RandomGenerator {
     }
   }
 
-  internal func _sample(state: Tensor.Data, count: Int, dist: RandomDist, dtype: Tensor.DType)
+  open func _sample(state: Tensor.Data, count: Int, dist: RandomDist, dtype: Tensor.DType)
     async throws -> (
       sample: Tensor.Data, state: Tensor.Data
     )
@@ -115,7 +115,7 @@ public class RandomGenerator {
     }
   }
 
-  internal func _sample(state: Tensor.Data, count: Int, in range: Range<Int64>) async throws -> (
+  open func _sample(state: Tensor.Data, count: Int, in range: Range<Int64>) async throws -> (
     sample: Tensor.Data, state: Tensor.Data
   ) {
     tracedFatalError("_sample(state:count:in:) is not implemented")

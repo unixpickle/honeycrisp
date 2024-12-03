@@ -33,7 +33,7 @@ struct bcast_strides {
     uint strides[16];
 };
 
-inline uint bcast_strides_index(bcast_strides strides, uint rawIndex) {
+inline uint bcast_strides_index(struct bcast_strides strides, uint rawIndex) {
     uint result = 0;
     uint curIndex = rawIndex;
     for (int i = (int)strides.numDims - 1; i >= 0; i--) {
@@ -42,6 +42,24 @@ inline uint bcast_strides_index(bcast_strides strides, uint rawIndex) {
     }
     return result;
 }
+
+#define BROADCAST_KERNEL(type) \
+    kernel void broadcast_##type( \
+        device const type* a [[buffer(0)]], \
+        device type* b [[buffer(1)]], \
+        constant struct bcast_strides &strides [[buffer(2)]], \
+        constant uint &N [[buffer(3)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            b[id] = a[bcast_strides_index(strides, id)]; \
+        } \
+    } \
+
+BROADCAST_KERNEL(char)
+BROADCAST_KERNEL(short)
+BROADCAST_KERNEL(int)
+BROADCAST_KERNEL(long)
 
 #define BINARY_KERNELS(name, expr, type, outType) \
     struct name##vv_args_##type { \
@@ -885,113 +903,32 @@ kernel void rand_long(
 DEFINE_RAND(float)
 DEFINE_RAND(half)
 
-template <typename T>
-void gather_bcast_impl(
-    device const T* input,
-    device const ulong* indices,
-    device T* output,
-    uint outerCount,
-    uint indexCount,
-    uint middleCount,
-    uint innerCount,
-    uint id
-) {
-    uint innerIdx = id % innerCount;
-    uint indexIdx = (id / innerCount) % indexCount;
-    uint outerIdx = (id / innerCount) / indexCount;
-    if (outerIdx < outerCount) {
-        ulong index = indices[indexIdx];
-        ulong srcIndex = innerIdx + index*innerCount + outerIdx*innerCount*middleCount;
-        output[id] = input[srcIndex];
-    }
-}
-
-template <typename T>
-void gather_impl(
-    device const T* input,
-    device const ulong* indices,
-    device T* output,
-    uint outerCount,
-    uint indexCount,
-    uint middleCount,
-    uint innerCount,
-    uint id
-) {
-    uint innerIdx = id % innerCount;
-    uint indexIdx = (id / innerCount) % indexCount;
-    uint outerIdx = (id / innerCount) / indexCount;
-    if (outerIdx < outerCount) {
-        ulong index = indices[innerIdx + indexIdx*innerCount + outerIdx*innerCount*indexCount];
-        ulong srcIndex = innerIdx + index*innerCount + outerIdx*innerCount*middleCount;
-        output[id] = input[srcIndex];
-    }
-}
-
 #define DEFINE_GATHER(gather, type) \
-kernel void gather##_##type( \
-    device const type* input [[buffer(0)]], \
-    device const ulong* indices [[buffer(1)]], \
-    device type* output [[buffer(2)]], \
-    constant uint &outerCount [[buffer(3)]], \
-    constant uint &indexCount [[buffer(4)]], \
-    constant uint &middleCount [[buffer(5)]], \
-    constant uint &innerCount [[buffer(6)]], \
-    uint id [[thread_position_in_grid]] \
-) { \
-    gather##_impl<type>(input, indices, output, outerCount, indexCount, middleCount, \
-                        innerCount, id); \
-}
+    kernel void gather##_##type( \
+        device const type* input [[buffer(0)]], \
+        device const ulong* indices [[buffer(1)]], \
+        device type* output [[buffer(2)]], \
+        constant uint &outerCount [[buffer(3)]], \
+        constant uint &indexCount [[buffer(4)]], \
+        constant uint &middleCount [[buffer(5)]], \
+        constant uint &innerCount [[buffer(6)]], \
+        constant struct bcast_strides &indexStrides [[buffer(7)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        uint innerIdx = id % innerCount; \
+        uint indexIdx = (id / innerCount) % indexCount; \
+        uint outerIdx = (id / innerCount) / indexCount; \
+        if (outerIdx < outerCount) { \
+            ulong index = indices[bcast_strides_index(indexStrides, id)]; \
+            ulong srcIndex = innerIdx + index*innerCount + outerIdx*innerCount*middleCount; \
+            output[id] = input[srcIndex]; \
+        } \
+    }
 
 DEFINE_GATHER(gather, char)
-DEFINE_GATHER(gather_bcast, char)
 DEFINE_GATHER(gather, short)
-DEFINE_GATHER(gather_bcast, short)
 DEFINE_GATHER(gather, int)
-DEFINE_GATHER(gather_bcast, int)
 DEFINE_GATHER(gather, long)
-DEFINE_GATHER(gather_bcast, long)
-
-template <typename T>
-void scatter_bcast_impl(
-    device const T* input,
-    device const ulong* indices,
-    device T* output,
-    uint outerCount,
-    uint indexCount,
-    uint middleCount,
-    uint innerCount,
-    uint id
-) {
-    uint innerIdx = id % innerCount;
-    uint indexIdx = (id / innerCount) % indexCount;
-    uint outerIdx = (id / innerCount) / indexCount;
-    if (outerIdx < outerCount) {
-        ulong index = indices[indexIdx];
-        ulong dstIndex = innerIdx + index*innerCount + outerIdx*innerCount*middleCount;
-        output[dstIndex] = input[id];
-    }
-}
-
-template <typename T>
-void scatter_impl(
-    device const T* input,
-    device const ulong* indices,
-    device T* output,
-    uint outerCount,
-    uint indexCount,
-    uint middleCount,
-    uint innerCount,
-    uint id
-) {
-    uint innerIdx = id % innerCount;
-    uint indexIdx = (id / innerCount) % indexCount;
-    uint outerIdx = (id / innerCount) / indexCount;
-    if (outerIdx < outerCount) {
-        ulong index = indices[innerIdx + indexIdx*innerCount + outerIdx*innerCount*indexCount];
-        ulong dstIndex = innerIdx + index*innerCount + outerIdx*innerCount*middleCount;
-        output[dstIndex] = input[id];
-    }
-}
 
 #define DEFINE_SCATTER(scatter, type) \
     kernel void scatter##_##type( \
@@ -1002,20 +939,23 @@ void scatter_impl(
         constant uint &indexCount [[buffer(4)]], \
         constant uint &middleCount [[buffer(5)]], \
         constant uint &innerCount [[buffer(6)]], \
+        constant struct bcast_strides &indexStrides [[buffer(7)]], \
         uint id [[thread_position_in_grid]] \
     ) { \
-        scatter##_impl<type>(input, indices, output, outerCount, \
-                             indexCount, middleCount, innerCount, id); \
+        uint innerIdx = id % innerCount; \
+        uint indexIdx = (id / innerCount) % indexCount; \
+        uint outerIdx = (id / innerCount) / indexCount; \
+        if (outerIdx < outerCount) { \
+            ulong index = indices[bcast_strides_index(indexStrides, id)]; \
+            ulong dstIndex = innerIdx + index*innerCount + outerIdx*innerCount*middleCount; \
+            output[dstIndex] = input[id]; \
+        } \
     }
 
 DEFINE_SCATTER(scatter, char)
-DEFINE_SCATTER(scatter_bcast, char)
 DEFINE_SCATTER(scatter, short)
-DEFINE_SCATTER(scatter_bcast, short)
 DEFINE_SCATTER(scatter, int)
-DEFINE_SCATTER(scatter_bcast, int)
 DEFINE_SCATTER(scatter, long)
-DEFINE_SCATTER(scatter_bcast, long)
 
 kernel void axis_permutation(
     device const uint* newStrides [[buffer(0)]],

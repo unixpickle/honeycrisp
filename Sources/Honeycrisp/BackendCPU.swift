@@ -53,11 +53,11 @@ open class CPUBackend: Backend {
 
     public let cpuBackend: CPUBackend
 
-    override internal var stateCount: Int {
+    override open var stateCount: Int {
       2
     }
 
-    override internal var stateDType: Tensor.DType {
+    override open var stateDType: Tensor.DType {
       .int64
     }
 
@@ -68,11 +68,11 @@ open class CPUBackend: Backend {
         state: cpuBackend.use { Tensor(data: [seed, 0], dtype: .int64) })
     }
 
-    override internal func _seed(_ x: Int) async throws -> Tensor.Data {
+    override open func _seed(_ x: Int) async throws -> Tensor.Data {
       try await cpuBackend.collection([x, 0], reverse: false, dtype: .int64)
     }
 
-    override internal func _sample(
+    override open func _sample(
       state: Tensor.Data, count: Int, dist: RandomDist, dtype: Tensor.DType
     )
       async throws -> (
@@ -119,7 +119,7 @@ open class CPUBackend: Backend {
       }
     }
 
-    override internal func _sample(state: Tensor.Data, count: Int, in range: Range<Int64>)
+    override open func _sample(state: Tensor.Data, count: Int, in range: Range<Int64>)
       async throws -> (
         sample: Tensor.Data, state: Tensor.Data
       )
@@ -1039,42 +1039,24 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await withBuffers(s.gatherOutCount * dtype.byteSize, a, s.indices) {
+    try await withBuffers(s.gatherOutCount * dtype.byteSize, a, s.indices.data) {
       outData, inData, idxBuf in
-      if s.broadcasted {
-        let innerSize = s.innerCount * dtype.byteSize
-        try await serialize {
-          try readBuffer(Int64.self, idxBuf, count: s.indicesCount, dtype: .int64) {
-            flatIndices in
-            for i in 0..<s.outerCount {
-              for (j, idx) in flatIndices.enumerated() {
-                let source = inData.advanced(
-                  by: i * s.middleCount * innerSize + Int(idx) * innerSize)
-                let dst = outData.advanced(
-                  by: i * flatIndices.count * innerSize + j * innerSize)
-                dst.copyMemory(from: source, byteCount: innerSize)
-              }
-            }
-          }
-        }
-        return
-      }
-
-      // Unbroadcasted case below
-
       func apply<T: TensorElement>(_ zero: T) async throws {
         try await serialize {
-          try readBuffer(Int64.self, idxBuf, count: s.indicesCount, dtype: .int64) {
+          try readBuffer(Int64.self, idxBuf, count: s.indices.dataCount, dtype: .int64) {
             flatIndices in
             try readBuffer(T.self, inData, count: s.gatherInCount, dtype: dtype) { inArr in
               try writeBuffer(T.self, outData, count: s.gatherOutCount, dtype: dtype) { outArr in
-                for i in 0..<s.outerCount {
-                  for j in 0..<s.outCount {
-                    for k in 0..<s.innerCount {
-                      let outIdx = i * s.outCount * s.innerCount + j * s.innerCount + k
-                      let inIdx = Int(flatIndices[outIdx])
-                      let source = inArr[
-                        i * s.middleCount * s.innerCount + inIdx * s.innerCount + k]
+                let outerCount = s.outerCount
+                let oldMidCount = s.middleCount
+                let newMidCount = s.outCount
+                let innerCount = s.innerCount
+                for i in 0..<outerCount {
+                  for j in 0..<newMidCount {
+                    for k in 0..<innerCount {
+                      let outIdx = (i * newMidCount + j) * innerCount + k
+                      let inIdx = Int(flatIndices[s.indices.strides(outIdx)])
+                      let source = inArr[(i * oldMidCount + inIdx) * innerCount + k]
                       outArr[outIdx] = source
                     }
                   }
@@ -1098,20 +1080,24 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    try await withBuffers(s.gatherInCount * dtype.byteSize, a, s.indices) { buffer, aBuf, idxBuf in
+    try await withBuffers(s.gatherInCount * dtype.byteSize, a, s.indices.data) {
+      buffer, aBuf, idxBuf in
       func apply<T: NumericTensorElement>(_ zero: T) async throws {
         try await serialize {
-          try readBuffer(Int64.self, idxBuf, count: s.indicesCount, dtype: .int64) {
+          try readBuffer(Int64.self, idxBuf, count: s.indices.dataCount, dtype: .int64) {
             flatIndices in
             try readBuffer(T.self, aBuf, count: s.gatherOutCount, dtype: dtype) { inArr in
+              let outerCount = s.outerCount
+              let oldMidCount = s.middleCount
+              let newMidCount = s.outCount
+              let innerCount = s.innerCount
               var outArr = [T](repeating: zero, count: s.gatherInCount)
-              for i in 0..<s.outerCount {
-                for j in 0..<s.outCount {
-                  for k in 0..<s.innerCount {
-                    let inIdx = i * s.outCount * s.innerCount + j * s.innerCount + k
-                    let indexIdx = s.broadcasted ? j : inIdx
-                    let jOut = Int(flatIndices[indexIdx])
-                    let outIdx = i * s.middleCount * s.innerCount + jOut * s.innerCount + k
+              for i in 0..<outerCount {
+                for j in 0..<newMidCount {
+                  for k in 0..<innerCount {
+                    let inIdx = (i * newMidCount + j) * innerCount + k
+                    let jOut = Int(flatIndices[s.indices.strides(inIdx)])
+                    let outIdx = (i * oldMidCount + jOut) * innerCount + k
                     outArr[outIdx] = outArr[outIdx] + inArr[inIdx]
                   }
                 }
