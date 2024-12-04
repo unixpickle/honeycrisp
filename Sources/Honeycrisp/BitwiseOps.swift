@@ -71,7 +71,6 @@ extension Tensor {
         BroadcastData(strides: lhsStrides, data: try await lhs.data),
         BroadcastData(strides: rhsStrides, data: try await rhs.data),
         op: op,
-        count: newShape.product(),
         dtype: lhs.dtype
       )
     }
@@ -106,7 +105,7 @@ extension Tensor {
     let backend = Backend.current
     let newData = createDataTask(rhs) { rhs in
       try await backend.bitwiseOp(
-        lhs, try await rhs.data, op: op, count: rhs.shape.product(), dtype: rhs.dtype
+        try await rhs.data, lhs, op: op, count: rhs.shape.product(), dtype: rhs.dtype
       )
     }
     return Tensor(dataTask: newData, shape: rhs.shape, dtype: rhs.dtype)

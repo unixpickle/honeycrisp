@@ -20,7 +20,6 @@ extension Tensor {
         .tensor(BroadcastData(strides: isTrueStrides, data: try await isTrue.data)),
         .tensor(BroadcastData(strides: isFalseStrides, data: try await isFalse.data)),
         Float.self,
-        count: newShape.product(),
         dtype: isTrue.dtype)
     }
     if !Tensor.isGradEnabled || (!isTrue.needsGrad && !isFalse.needsGrad) {
@@ -52,7 +51,6 @@ extension Tensor {
         .tensor(BroadcastData(strides: isTrueStrides, data: try await isTrue.data)),
         .scalar(isFalse, newShape),
         T.self,
-        count: newShape.product(),
         dtype: isTrue.dtype)
     }
     if !Tensor.isGradEnabled || (!isTrue.needsGrad) {
@@ -80,7 +78,6 @@ extension Tensor {
         .scalar(isTrue, newShape),
         .tensor(BroadcastData(strides: isFalseStrides, data: try await isFalse.data)),
         T.self,
-        count: newShape.product(),
         dtype: isFalse.dtype)
     }
     if !Tensor.isGradEnabled || (!isFalse.needsGrad) {
@@ -105,7 +102,6 @@ extension Tensor {
         .scalar(isTrue, t.shape),
         .scalar(isFalse, t.shape),
         T.self,
-        count: t.shape.product(),
         dtype: outDType)
     }
     return Tensor(dataTask: newData, shape: shape, dtype: outDType)

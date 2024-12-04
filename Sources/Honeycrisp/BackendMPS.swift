@@ -730,15 +730,15 @@ open class MPSBackend: CPUBackend {
   }
 
   override open func binaryOp(
-    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     guard let typeName = Self.binaryOpType(dtype) else {
-      return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
+      return try await super.binaryOp(a, b, op: op, dtype: dtype)
     }
-
+    let count = a.strides.shape.product()
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.binaryOpName(op)
@@ -846,15 +846,16 @@ open class MPSBackend: CPUBackend {
   }
 
   override open func compare(
-    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     guard let typeName = Self.binaryOpType(dtype) else {
-      return try await super.compare(a, b, op: op, count: count, dtype: dtype)
+      return try await super.compare(a, b, op: op, dtype: dtype)
     }
 
+    let count = a.strides.shape.product()
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.comparisonOpName(op)
@@ -955,11 +956,12 @@ open class MPSBackend: CPUBackend {
   }
 
   override open func bitwiseOp(
-    _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
+    let count = a.strides.shape.product()
     alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.bitwiseOpName(op)
@@ -1021,74 +1023,39 @@ open class MPSBackend: CPUBackend {
     }
   }
 
-  override open func bitwiseOp<T: TensorElementBitPattern>(
-    _ a: T, _ b: Tensor.Data, op: BitwiseOp, count: Int, dtype: Tensor.DType
-  )
-    async throws
-    -> Tensor.Data
-  {
-    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
-
-    let opName = Self.bitwiseOpName(op)
-    let functionName = "\(opName)_\(dtype.metalSizeType)"
-
-    let (bBuf, aCb) = try await gpuBuffer(b)
-    let aData = a.bitsForBitwiseOp
-    alwaysAssert(aData.count == dtype.byteSize)
-    let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
-
-    return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder(
-        label: "bitwiseOp", deallocators: [aCb]
-      ) { buf, enc in
-        let state = try getFunction(name: functionName)
-        try setArguments(
-          enc, .data(Data(aData)), .buffer(bBuf), .buffer(output),
-          .opaque(
-            (
-              MPSBackend.createStrides(BroadcastStrides(shape: [count], strides: [0])),
-              MPSBackend.createStrides(BroadcastStrides(shape: [count], strides: [1])),
-              UInt32(count)
-            )))
-        dispatch1D(enc, state: state, threadCount: count)
-      }
-      return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
-    }
-  }
-
   override open func mulAdd(
-    input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, count: Int, dtype: Tensor.DType
+    input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     try await addMulOrMulAdd(
-      input: input, a: coeff, b: bias, method: "mul_add", count: count, dtype: dtype)
+      input: input, a: coeff, b: bias, method: "mul_add", dtype: dtype)
   }
 
   override open func addMul(
-    input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, count: Int, dtype: Tensor.DType
+    input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     try await addMulOrMulAdd(
-      input: input, a: bias, b: coeff, method: "add_mul", count: count, dtype: dtype)
+      input: input, a: bias, b: coeff, method: "add_mul", dtype: dtype)
   }
 
   private func addMulOrMulAdd(
-    input: BroadcastData, a: BroadcastData, b: BroadcastData, method: String, count: Int,
-    dtype: Tensor.DType
+    input: BroadcastData, a: BroadcastData, b: BroadcastData, method: String, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
+    let count = input.strides.shape.product()
     alwaysAssert(count <= UInt32.max, "\(method) cannot operate on as many as \(count) values")
     guard let typeName = MPSBackend.CastTypes[dtype] else {
       if method == "mul_add" {
-        return try await super.mulAdd(input: input, coeff: a, bias: b, count: count, dtype: dtype)
+        return try await super.mulAdd(input: input, coeff: a, bias: b, dtype: dtype)
       } else {
-        return try await super.addMul(input: input, bias: a, coeff: b, count: count, dtype: dtype)
+        return try await super.addMul(input: input, bias: a, coeff: b, dtype: dtype)
       }
     }
     let functionName = "\(method)_\(typeName)"
@@ -1188,17 +1155,18 @@ open class MPSBackend: CPUBackend {
   }
 
   override open func normalize<T: TensorElement>(
-    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T, count: Int,
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    alwaysAssert(count <= UInt32.max, "normalize cannot operate on as many as \(count) values")
     guard let typeName = MPSBackend.CastTypes[dtype] else {
       return try await super.normalize(
-        input: input, mean: mean, variance: variance, epsilon: epsilon, count: count, dtype: dtype)
+        input: input, mean: mean, variance: variance, epsilon: epsilon, dtype: dtype)
     }
+    let count = input.strides.shape.product()
+    alwaysAssert(count <= UInt32.max, "normalize cannot operate on as many as \(count) values")
     let functionName = "normalize_\(typeName)"
 
     let (inBuf, inCb) = try await gpuBuffer(input.data)
@@ -1234,19 +1202,19 @@ open class MPSBackend: CPUBackend {
   }
 
   override open func normalizeXGrad<T: TensorElement>(
-    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float, count: Int,
+    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    alwaysAssert(
-      count <= UInt32.max, "normalizeXGrad cannot operate on as many as \(count) values")
     guard let typeName = MPSBackend.CastTypes[dtype] else {
       return try await super.normalizeXGrad(
-        variance: variance, outGrad: outGrad, epsilon: epsilon, sign: sign, count: count,
-        dtype: dtype)
+        variance: variance, outGrad: outGrad, epsilon: epsilon, sign: sign, dtype: dtype)
     }
+    let count = variance.strides.shape.product()
+    alwaysAssert(
+      count <= UInt32.max, "normalizeXGrad cannot operate on as many as \(count) values")
     let functionName = "normalize_x_grad_\(typeName)"
 
     let (varianceBuf, varianceCb) = try await gpuBuffer(variance.data)
@@ -1280,17 +1248,18 @@ open class MPSBackend: CPUBackend {
 
   override open func normalizeVarianceGrad<T: TensorElement>(
     input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
-    epsilon: T, count: Int, dtype: Tensor.DType
+    epsilon: T, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    alwaysAssert(
-      count <= UInt32.max, "normalizeVarianceGrad cannot operate on as many as \(count) values")
     guard let typeName = MPSBackend.CastTypes[dtype] else {
       return try await super.normalize(
-        input: input, mean: mean, variance: variance, epsilon: epsilon, count: count, dtype: dtype)
+        input: input, mean: mean, variance: variance, epsilon: epsilon, dtype: dtype)
     }
+    let count = input.strides.shape.product()
+    alwaysAssert(
+      count <= UInt32.max, "normalizeVarianceGrad cannot operate on as many as \(count) values")
     let functionName = "normalize_var_grad_\(typeName)"
 
     let (inBuf, inCb) = try await gpuBuffer(input.data)
@@ -1413,12 +1382,13 @@ open class MPSBackend: CPUBackend {
   }
 
   override open func when<T>(
-    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
+    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
+    let count = mask.strides.shape.product()
     alwaysAssert(count < UInt32.max, "cannot apply when() to \(count) elements")
 
     let (maskBuf, maskCb) = try await gpuBuffer(mask.data)

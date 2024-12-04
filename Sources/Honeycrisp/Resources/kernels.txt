@@ -916,7 +916,6 @@ DEFINE_RAND(half)
         uint id [[thread_position_in_grid]] \
     ) { \
         uint innerIdx = id % innerCount; \
-        uint indexIdx = (id / innerCount) % indexCount; \
         uint outerIdx = (id / innerCount) / indexCount; \
         if (outerIdx < outerCount) { \
             ulong index = indices[bcast_strides_index(indexStrides, id)]; \
@@ -943,7 +942,6 @@ DEFINE_GATHER(gather, long)
         uint id [[thread_position_in_grid]] \
     ) { \
         uint innerIdx = id % innerCount; \
-        uint indexIdx = (id / innerCount) % indexCount; \
         uint outerIdx = (id / innerCount) / indexCount; \
         if (outerIdx < outerCount) { \
             ulong index = indices[bcast_strides_index(indexStrides, id)]; \

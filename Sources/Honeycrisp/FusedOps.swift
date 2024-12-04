@@ -17,7 +17,8 @@ extension Tensor {
         input: BroadcastData(strides: tStrides, data: try await t.data),
         coeff: BroadcastData(strides: coeffStrides, data: try await coeff.data),
         bias: BroadcastData(strides: biasStrides, data: try await bias.data),
-        count: outputShape.product(), dtype: t.dtype)
+        dtype: t.dtype
+      )
     }
     if (needsGrad || coeff.needsGrad || bias.needsGrad) && Tensor.isGradEnabled {
       let handle = self.saveForBackward()
@@ -51,7 +52,8 @@ extension Tensor {
         input: BroadcastData(strides: tStrides, data: try await t.data),
         bias: BroadcastData(strides: biasStrides, data: try await bias.data),
         coeff: BroadcastData(strides: coeffStrides, data: try await coeff.data),
-        count: outputShape.product(), dtype: t.dtype)
+        dtype: t.dtype
+      )
     }
     if (needsGrad || coeff.needsGrad || bias.needsGrad) && Tensor.isGradEnabled {
       let handle = self.saveForBackward()
@@ -90,7 +92,6 @@ extension Tensor {
         mean: BroadcastData(strides: meanStrides, data: try await mean.data),
         variance: BroadcastData(strides: varianceStrides, data: try await variance.data),
         epsilon: epsilon,
-        count: outputShape.product(),
         dtype: t.dtype)
     }
     if (needsGrad || mean.needsGrad || variance.needsGrad) && Tensor.isGradEnabled {
@@ -140,7 +141,6 @@ extension Tensor {
         outGrad: BroadcastData(strides: outGradStrides, data: try await outGrad.data),
         epsilon: epsilon,
         sign: sign,
-        count: outputShape.product(),
         dtype: variance.dtype)
     }
     return Tensor(dataTask: newData, shape: outputShape, dtype: variance.dtype)
@@ -171,7 +171,6 @@ extension Tensor {
         variance: BroadcastData(strides: varianceStrides, data: try await variance.data),
         outGrad: BroadcastData(strides: outGradStrides, data: try await outGrad.data),
         epsilon: epsilon,
-        count: outputShape.product(),
         dtype: input.dtype)
     }
     return Tensor(dataTask: newData, shape: outputShape, dtype: variance.dtype)

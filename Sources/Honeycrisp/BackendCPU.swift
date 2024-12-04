@@ -256,11 +256,12 @@ open class CPUBackend: Backend {
   }
 
   override open func binaryOp(
-    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, dtype: Tensor.DType
   ) async throws
     -> Tensor.Data
   {
-    try await withBuffers(count * dtype.byteSize, a.data, b.data) { buffer, aBuf, bBuf in
+    let count = a.strides.shape.product()
+    return try await withBuffers(count * dtype.byteSize, a.data, b.data) { buffer, aBuf, bBuf in
       func apply<T: NumericTensorElement>(_: T.Type) async throws {
         try await serialize {
           if dtype == .float32 && (op != .mod) && a.isSimple && b.isSimple {
@@ -395,11 +396,12 @@ open class CPUBackend: Backend {
   }
 
   override open func bitwiseOp(
-    _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, dtype: Tensor.DType
   ) async throws
     -> Tensor.Data
   {
-    try await withBuffers(count * dtype.byteSize, a.data, b.data) { buffer, aBuf, bBuf in
+    let count = a.strides.shape.product()
+    return try await withBuffers(count * dtype.byteSize, a.data, b.data) { buffer, aBuf, bBuf in
       try await serialize {
         let x = aBuf.bindMemory(to: UInt8.self, capacity: a.dataCount * dtype.byteSize)
         let y = bBuf.bindMemory(to: UInt8.self, capacity: b.dataCount * dtype.byteSize)
@@ -431,31 +433,14 @@ open class CPUBackend: Backend {
     }
   }
 
-  override open func bitwiseOp<T: TensorElementBitPattern>(
-    _ a: T, _ b: Tensor.Data, op: BitwiseOp, count: Int, dtype: Tensor.DType
-  )
-    async throws
-    -> Tensor.Data
-  {
-    try await withBuffers(count * dtype.byteSize, b) { buffer, bBuf in
-      let operandBytes = a.bitsForBitwiseOp
-      try await serialize {
-        let inp = bBuf.bindMemory(to: UInt8.self, capacity: count)
-        let out = buffer.bindMemory(to: UInt8.self, capacity: count)
-        for i in 0..<(count * dtype.byteSize) {
-          out[i] = op.apply(operandBytes[i % operandBytes.count], inp[i])
-        }
-      }
-    }
-  }
-
   override open func mulAdd(
-    input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, count: Int, dtype: Tensor.DType
+    input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await withBuffers(count * dtype.byteSize, input.data, coeff.data, bias.data) {
+    let count = input.strides.shape.product()
+    return try await withBuffers(count * dtype.byteSize, input.data, coeff.data, bias.data) {
       buffer, inBuf, coeffBuf, biasBuf in
       func apply<T1: NumericTensorElement>(_: T1.Type) async throws {
         try await serialize {
@@ -497,12 +482,13 @@ open class CPUBackend: Backend {
   }
 
   override open func addMul(
-    input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, count: Int, dtype: Tensor.DType
+    input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await withBuffers(count * dtype.byteSize, input.data, coeff.data, bias.data) {
+    let count = input.strides.shape.product()
+    return try await withBuffers(count * dtype.byteSize, input.data, coeff.data, bias.data) {
       buffer, inBuf, coeffBuf, biasBuf in
       func apply<T1: NumericTensorElement>(_: T1.Type) async throws {
         try await serialize {
@@ -544,13 +530,14 @@ open class CPUBackend: Backend {
   }
 
   override open func normalize<T: TensorElement>(
-    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T, count: Int,
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     assert(dtype.isFloat)
+    let count = input.strides.shape.product()
     return try await withBuffers(count * dtype.byteSize, input.data, mean.data, variance.data) {
       buffer, inBuf, meanBuf, varianceBuf in
       try await serialize {
@@ -575,13 +562,14 @@ open class CPUBackend: Backend {
   }
 
   override open func normalizeXGrad<T: TensorElement>(
-    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float, count: Int,
+    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await withBuffers(count * dtype.byteSize, variance.data, outGrad.data) {
+    let count = variance.strides.shape.product()
+    return try await withBuffers(count * dtype.byteSize, variance.data, outGrad.data) {
       buffer, varianceBuf, outGradBuf in
       try await serialize {
         try readBuffer(Float.self, varianceBuf, count: variance.dataCount, dtype: dtype) {
@@ -603,12 +591,13 @@ open class CPUBackend: Backend {
 
   override open func normalizeVarianceGrad<T: TensorElement>(
     input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
-    epsilon: T, count: Int, dtype: Tensor.DType
+    epsilon: T, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await withBuffers(
+    let count = input.strides.shape.product()
+    return try await withBuffers(
       count * dtype.byteSize, input.data, mean.data, variance.data, outGrad.data
     ) { buffer, inBuf, meanBuf, varianceBuf, outGradBuf in
       try await serialize {
@@ -637,12 +626,13 @@ open class CPUBackend: Backend {
   }
 
   override open func compare(
-    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await withBuffers(count * Tensor.DType.bool.byteSize, a.data, b.data) {
+    let count = a.strides.shape.product()
+    return try await withBuffers(count * Tensor.DType.bool.byteSize, a.data, b.data) {
       buffer, aBuf, bBuf in
       let aStrides = a.strides
       let bStrides = b.strides
@@ -1116,12 +1106,13 @@ open class CPUBackend: Backend {
   }
 
   override open func when<T>(
-    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
+    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
+    let count = mask.strides.shape.product()
     let aData = try await tensorOrScalarData(a, dtype)
     let bData = try await tensorOrScalarData(b, dtype)
     return try await withBuffers(count * dtype.byteSize, mask.data, aData, bData) {

@@ -751,7 +751,9 @@ public final class Tensor {
       try await backend.binaryOp(
         BroadcastData(strides: lhsStrides, data: try await lhs.data),
         BroadcastData(strides: rhsStrides, data: try await rhs.data),
-        op: .add, count: outputShape.product(), dtype: lhs.dtype)
+        op: .add,
+        dtype: lhs.dtype
+      )
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
@@ -800,7 +802,9 @@ public final class Tensor {
       try await backend.binaryOp(
         BroadcastData(strides: lhsStrides, data: try await lhs.data),
         BroadcastData(strides: rhsStrides, data: try await rhs.data),
-        op: .mul, count: outputShape.product(), dtype: lhs.dtype)
+        op: .mul,
+        dtype: lhs.dtype
+      )
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
@@ -867,7 +871,9 @@ public final class Tensor {
       try await backend.binaryOp(
         BroadcastData(strides: lhsStrides, data: try await lhs.data),
         BroadcastData(strides: rhsStrides, data: try await rhs.data),
-        op: .sub, count: outputShape.product(), dtype: lhs.dtype)
+        op: .sub,
+        dtype: lhs.dtype
+      )
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
@@ -938,7 +944,9 @@ public final class Tensor {
       try await backend.binaryOp(
         BroadcastData(strides: lhsStrides, data: try await lhs.data),
         BroadcastData(strides: rhsStrides, data: try await rhs.data),
-        op: .div, count: outputShape.product(), dtype: lhs.dtype)
+        op: .div,
+        dtype: lhs.dtype
+      )
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)
@@ -1007,7 +1015,9 @@ public final class Tensor {
       try await backend.binaryOp(
         BroadcastData(strides: lhsStrides, data: try await lhs.data),
         BroadcastData(strides: rhsStrides, data: try await rhs.data),
-        op: .mod, count: outputShape.product(), dtype: lhs.dtype)
+        op: .mod,
+        dtype: lhs.dtype
+      )
     }
     if !Tensor.isGradEnabled || (!lhs.needsGrad && !rhs.needsGrad) {
       return Tensor(dataTask: newData, shape: outputShape, dtype: lhs.dtype)

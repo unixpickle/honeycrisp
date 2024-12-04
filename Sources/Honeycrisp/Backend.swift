@@ -164,7 +164,7 @@ open class Backend {
   /// Both inputs and the output should be of type `dtype`.
   /// The count argument specifies the number of elements in the output.
   open func binaryOp(
-    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -201,7 +201,7 @@ open class Backend {
   /// Both inputs and the output should be of type `dtype`.
   /// The count argument specifies the number of elements in the output.
   open func bitwiseOp(
-    _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -221,24 +221,12 @@ open class Backend {
     throw BackendError.notImplemented("bitwiseOp")
   }
 
-  /// Perform a bitwise operator between a scalar and a tensor.
-  ///
-  /// The `count` is the number of elements in the input and the output.
-  open func bitwiseOp<T: TensorElementBitPattern>(
-    _ a: T, _ b: Tensor.Data, op: BitwiseOp, count: Int, dtype: Tensor.DType
-  )
-    async throws
-    -> Tensor.Data
-  {
-    throw BackendError.notImplemented("bitwiseOp")
-  }
-
   /// Perform a broadcasted, fused multiply-then-add operation.
   ///
   /// All inputs and the output should be of type `dtype`.
   /// The `count` is the number of elements in the output.
   open func mulAdd(
-    input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, count: Int, dtype: Tensor.DType
+    input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, dtype: Tensor.DType
   ) async throws -> Tensor.Data {
     throw BackendError.notImplemented("mulAdd")
   }
@@ -248,7 +236,7 @@ open class Backend {
   /// All inputs and the output should be of type `dtype`.
   /// The `count` is the number of elements in the output.
   open func addMul(
-    input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, count: Int, dtype: Tensor.DType
+    input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -264,7 +252,7 @@ open class Backend {
   /// (input - mean) / (variance + epsilson).sqrt()
   /// ````
   open func normalize<T: TensorElement>(
-    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T, count: Int,
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T,
     dtype: Tensor.DType
   )
     async throws
@@ -279,7 +267,7 @@ open class Backend {
   /// The result is the same shape as the output of the operation, not necessarily the shape
   /// of the (pre-broadcasted) input.
   open func normalizeXGrad<T: TensorElement>(
-    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float, count: Int,
+    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float,
     dtype: Tensor.DType
   )
     async throws
@@ -295,7 +283,7 @@ open class Backend {
   /// of the (pre-broadcasted) variance.
   open func normalizeVarianceGrad<T: TensorElement>(
     input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
-    epsilon: T, count: Int, dtype: Tensor.DType
+    epsilon: T, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -306,7 +294,7 @@ open class Backend {
   /// Perform a broadcasted, elementwise comparison between two tensors, computing an
   /// output of booleans.
   open func compare(
-    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
@@ -444,7 +432,7 @@ open class Backend {
   ///
   /// Both the true and false values can be broadcasted or may be scalars.
   open func when<T>(
-    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type, count: Int,
+    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _: T.Type,
     dtype: Tensor.DType
   )
     async throws
@@ -627,7 +615,6 @@ open class Backend {
       bd(try await binaryOp(beta1, moment1, op: .mul, count: count, dtype: dtype)),
       bd(try await binaryOp(1 - beta1, grad, op: .mul, count: count, dtype: dtype)),
       op: .add,
-      count: count,
       dtype: dtype
     )
     let gradSq = try await pow(grad, 2, scale: 1 - beta2, scales: nil, count: count, dtype: dtype)
@@ -635,7 +622,6 @@ open class Backend {
       bd(try await binaryOp(beta2, moment2, op: .mul, count: count, dtype: dtype)),
       bd(gradSq),
       op: .add,
-      count: count,
       dtype: dtype
     )
     let scaledMt = try await binaryOp(
@@ -655,7 +641,6 @@ open class Backend {
           )
         ),
         op: .div,
-        count: count,
         dtype: dtype
       ),
       lr,
@@ -674,7 +659,6 @@ open class Backend {
       bd(decayed),
       bd(stepDir),
       op: .sub,
-      count: count,
       dtype: dtype
     )
     return (param: newParam, moment1: newMt, moment2: newVt)

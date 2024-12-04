@@ -39,7 +39,6 @@ extension Tensor {
         BroadcastData(strides: lhsStrides, data: try await lhs.data),
         BroadcastData(strides: rhsStrides, data: try await rhs.data),
         op: op,
-        count: newShape.product(),
         dtype: lhs.dtype
       )
     }

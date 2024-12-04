@@ -59,14 +59,18 @@ open class BackendWrapper: Backend {
     wrapped = wrapping
   }
 
+  override open func broadcast(_ a: BroadcastData, dtype: Tensor.DType) async throws -> Tensor.Data
+  {
+    try await wrapped.broadcast(a, dtype: dtype)
+  }
+
   override public func binaryOp(
-    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, count: Int,
-    dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.binaryOp(a, b, op: op, count: count, dtype: dtype)
+    try await wrapped.binaryOp(a, b, op: op, dtype: dtype)
   }
 
   override public func binaryOp<T: NumericTensorElement>(
@@ -87,66 +91,84 @@ open class BackendWrapper: Backend {
     try await wrapped.binaryOp(a, b, op: op, count: count, dtype: dtype)
   }
 
-  override public func mulAdd(
-    input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, count: Int, dtype: Tensor.DType
+  override open func bitwiseOp(
+    _ a: BroadcastData, _ b: BroadcastData, op: BitwiseOp, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.mulAdd(input: input, coeff: coeff, bias: bias, count: count, dtype: dtype)
+    try await wrapped.bitwiseOp(a, b, op: op, dtype: dtype)
+  }
+
+  override open func bitwiseOp<T: TensorElementBitPattern>(
+    _ a: Tensor.Data, _ b: T, op: BitwiseOp, count: Int, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.bitwiseOp(a, b, op: op, count: count, dtype: dtype)
+  }
+
+  override public func mulAdd(
+    input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.mulAdd(input: input, coeff: coeff, bias: bias, dtype: dtype)
   }
 
   override public func addMul(
-    input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, count: Int, dtype: Tensor.DType
+    input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.addMul(input: input, bias: bias, coeff: coeff, count: count, dtype: dtype)
+    try await wrapped.addMul(input: input, bias: bias, coeff: coeff, dtype: dtype)
   }
 
   override public func normalize<T: TensorElement>(
-    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T, count: Int,
+    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     try await wrapped.normalize(
-      input: input, mean: mean, variance: variance, epsilon: epsilon, count: count, dtype: dtype)
+      input: input, mean: mean, variance: variance, epsilon: epsilon, dtype: dtype)
   }
 
   override public func normalizeXGrad<T: TensorElement>(
-    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float, count: Int,
+    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     try await wrapped.normalizeXGrad(
-      variance: variance, outGrad: outGrad, epsilon: epsilon, sign: sign, count: count, dtype: dtype
+      variance: variance, outGrad: outGrad, epsilon: epsilon, sign: sign, dtype: dtype
     )
   }
 
   override public func normalizeVarianceGrad<T: TensorElement>(
     input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
-    epsilon: T, count: Int, dtype: Tensor.DType
+    epsilon: T, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     try await wrapped.normalizeVarianceGrad(
       input: input, mean: mean, variance: variance, outGrad: outGrad, epsilon: epsilon,
-      count: count, dtype: dtype)
+      dtype: dtype)
   }
 
   override public func compare(
-    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.compare(a, b, op: op, count: count, dtype: dtype)
+    try await wrapped.compare(a, b, op: op, dtype: dtype)
   }
 
   override public func compare<T: TensorElement>(
@@ -250,13 +272,13 @@ open class BackendWrapper: Backend {
   }
 
   override public func when<T>(
-    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _ x: T.Type, count: Int,
+    _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _ x: T.Type,
     dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.when(mask, a, b, x, count: count, dtype: dtype)
+    try await wrapped.when(mask, a, b, x, dtype: dtype)
   }
 
   override public func matmul(
