@@ -490,6 +490,107 @@ public class Linear: Trainable {
   }
 }
 
+/// A ``Trainable`` module that applies a learned 1-dimensional convolution.
+public class Conv1D: Trainable {
+  public typealias Dim = Conv1DConfig.Dim
+  public typealias Padding = Conv1DConfig.Padding
+
+  public enum PaddingType {
+    case none
+    case same
+    case allSides(Int)
+    case leftRight(Int, Int)
+  }
+
+  public let inChannels: Int
+  public let outChannels: Int
+  public let kernelSize: Dim
+  public let stride: Dim
+  public let dilation: Dim
+  public let padding: Padding
+  public let groups: Int
+  public let channelsLast: Bool
+
+  @Param(name: "weight") public var weight: Tensor
+  @Param(name: "bias") public var bias: Tensor?
+
+  public init(
+    inChannels: Int, outChannels: Int, kernelSize: Int, stride: Int = 1,
+    padding: PaddingType = .none, dilation: Int = 1, groups: Int = 1,
+    channelsLast: Bool = false, bias: Bool = true, dtype: Tensor.DType = .float32
+  ) {
+    self.inChannels = inChannels
+    self.outChannels = outChannels
+    self.kernelSize = Dim(constant: kernelSize)
+    self.stride = Dim(constant: stride)
+    self.dilation = Dim(constant: dilation)
+    alwaysAssert(
+      inChannels % groups == 0, "outChannels \(outChannels) not divisible by groups \(groups)")
+    alwaysAssert(
+      outChannels % groups == 0, "inChannels \(inChannels) not divisible by groups \(groups)")
+    switch padding {
+    case .none:
+      self.padding = Padding(before: Dim(constant: 0), after: Dim(constant: 0))
+    case .same:
+      alwaysAssert(
+        self.stride == Dim(constant: 1),
+        "cannot use padding mode 'same' with stride \(self.stride)")
+      self.padding = Conv1DConfig.samePadding(kernelSize: self.kernelSize, dilation: self.dilation)
+    case .allSides(let x):
+      self.padding = Padding(before: Dim(constant: x), after: Dim(constant: x))
+    case .leftRight(let left, let right):
+      self.padding = Padding(before: Dim(constant: left), after: Dim(constant: right))
+    }
+    self.groups = groups
+    self.channelsLast = channelsLast
+    super.init()
+    self.weight =
+      (Tensor(
+        rand: [outChannels, inChannels / groups] + self.kernelSize.dims,
+        dtype: dtype) - 0.5)
+      * (sqrt(3.0) / 0.5 / sqrt(Float(inChannels * self.kernelSize.dims.product())))
+    if bias {
+      self.bias = Tensor(zeros: [outChannels])
+    } else {
+      self.bias = nil
+    }
+  }
+
+  @recordCaller
+  private func _callAsFunction(_ x: Tensor) -> Tensor {
+    alwaysAssert(x.shape.count == 3, "invalid input shape for conv1d: \(x.shape)")
+    let (width, channels) =
+      if channelsLast {
+        (x.shape[1], x.shape[2])
+      } else {
+        (x.shape[2], x.shape[1])
+      }
+    alwaysAssert(
+      channels == inChannels,
+      "channels of input \(channels) doesn't match expected channels \(inChannels)")
+
+    let convDesc: Conv1DConfig
+    do {
+      convDesc = try Conv1DConfig(
+        inChannels: inChannels, outChannels: outChannels, kernelSize: kernelSize,
+        imageSize: Dim(constant: width), stride: stride, dilation: dilation, padding: padding,
+        groups: groups, channelsLast: channelsLast)
+    } catch {
+      tracedFatalError("failed to instantiate Conv1DConfig: \(error)")
+    }
+
+    var h = Tensor.conv1D(convDesc, image: x, kernel: weight)
+    if let bias = bias {
+      if channelsLast {
+        h = h + bias
+      } else {
+        h = h + bias[..., NewAxis()]
+      }
+    }
+    return h
+  }
+}
+
 /// A ``Trainable`` module that applies a learned 2-dimensional convolution.
 public class Conv2D: Trainable {
   public typealias Dim = Conv2DConfig.Dim

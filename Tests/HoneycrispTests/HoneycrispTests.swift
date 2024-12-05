@@ -401,6 +401,23 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testConv1DTrainable() async throws {
+    let cFirst = Conv1D(inChannels: 3, outChannels: 5, kernelSize: 3, stride: 2)
+    let inFirst = Tensor(zeros: [2, 3, 16])
+    let outFirst = cFirst(inFirst)
+    XCTAssertEqual(outFirst.shape, [2, 5, 16 / 2 - 1])
+
+    let cLast = Conv1D(inChannels: 3, outChannels: 5, kernelSize: 3, stride: 2, channelsLast: true)
+    let inLast = Tensor(zeros: [2, 16, 3])
+    let outLast = cLast(inLast)
+    XCTAssertEqual(outLast.shape, [2, 16 / 2 - 1, 5])
+
+    let cLastSame = Conv1D(
+      inChannels: 3, outChannels: 5, kernelSize: 3, padding: .same, channelsLast: true)
+    let outLastSame = cLastSame(inLast)
+    XCTAssertEqual(outLastSame.shape, [2, 16, 5])
+  }
+
   func testNoGrad() async throws {
     let x = Tensor(ones: [3]).onGrad { grad in assert(false) }
     XCTAssert(!Tensor.withGrad(enabled: false) { x.sum() }.needsGrad)
