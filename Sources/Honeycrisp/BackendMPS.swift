@@ -37,7 +37,9 @@ open class MPSBackend: CPUBackend {
       #else
         // In release mode, this is more likely caused by an exception returning from a backend
         // method before using a buffer, so we want to actually free the buffer.
-        fn()
+        if !called {
+          fn()
+        }
       #endif
     }
   }
