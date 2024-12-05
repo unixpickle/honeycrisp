@@ -29,11 +29,14 @@ inline T pythonIntMod(T lhs, T rhs) {
 
 struct bcast_strides {
     uint numDims;
-    uint shape[16];
-    uint strides[16];
+    uint shape[8];
+    uint strides[8];
 };
 
 inline uint bcast_strides_index(struct bcast_strides strides, uint rawIndex) {
+    if (strides.numDims == 1) {
+        return rawIndex * strides.strides[0];
+    }
     uint result = 0;
     uint curIndex = rawIndex;
     for (int i = (int)strides.numDims - 1; i >= 0; i--) {

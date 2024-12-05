@@ -99,19 +99,19 @@ open class MPSBackend: CPUBackend {
   }
 
   internal typealias StridesItem = (
-    UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32,
-    UInt32, UInt32, UInt32, UInt32
+    UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32
   )
 
   @recordCaller
-  internal static func _createStridesItem(_ arr: [Int]) throws -> StridesItem {
-    if arr.count > 16 {
+  internal static func _createStridesItem(_ arr: [Int], padding: UInt32) throws -> StridesItem {
+    if arr.count > 8 {
       throw BroadcastError.shapeTooLarge(
-        "maximum supported number of dims is 16, got \(arr.count) in shape \(arr)")
+        "maximum supported number of dims in broadcast shape is 8, got \(arr.count) in shape \(arr)"
+      )
     }
     func at(_ i: Int) throws -> UInt32 {
       if i >= arr.count {
-        return 0
+        return padding
       }
       if arr[i] >= Int(UInt32.max) {
         throw BroadcastError.dimTooLarge("dimension \(arr[i]) is too large to fit in UInt32")
@@ -126,15 +126,7 @@ open class MPSBackend: CPUBackend {
       try at(4),
       try at(5),
       try at(6),
-      try at(7),
-      try at(8),
-      try at(9),
-      try at(10),
-      try at(11),
-      try at(12),
-      try at(13),
-      try at(14),
-      try at(15)
+      try at(7)
     )
   }
 
@@ -145,16 +137,34 @@ open class MPSBackend: CPUBackend {
     if s.isNoOp {
       return (
         dimCount: UInt32(1),
-        shape: try createStridesItem([s.shape.product()]),
-        strides: try createStridesItem([1])
+        shape: try createStridesItem([s.shape.product()], padding: 1),
+        strides: try createStridesItem([1], padding: 0)
       )
     }
-    // TODO: coalesce non-zero and zero strides to reduce the total
-    // number of dimensions if possible.
+
+    // Coalesce consecutive contiguous dimensions to produce a simpler
+    // shape for the kernel to handle.
+    var shape = s.shape
+    var strides = s.strides
+    var i = shape.count - 1
+    while i > 0 {
+      if strides[i] != 0 && strides[i - 1] != 0 && (strides[i - 1] == shape[i] * strides[i]) {
+        strides[i - 1] = strides[i]
+        shape[i - 1] *= shape[i]
+        shape.remove(at: i)
+        strides.remove(at: i)
+      } else if strides[i] == 0 && strides[i - 1] == 0 {
+        shape[i - 1] *= shape[i]
+        shape.remove(at: i)
+        strides.remove(at: i)
+      }
+      i -= 1
+    }
+
     return (
-      dimCount: UInt32(s.strides.count),
-      shape: try createStridesItem(s.shape),
-      strides: try createStridesItem(s.strides)
+      dimCount: UInt32(strides.count),
+      shape: try createStridesItem(shape, padding: 1),
+      strides: try createStridesItem(strides, padding: 0)
     )
   }
 

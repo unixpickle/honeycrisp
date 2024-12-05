@@ -21,6 +21,10 @@ public struct BroadcastStrides: Hashable, Equatable {
     isNoOp = zip(strides, shape).allSatisfy { stride, size in stride != 0 || size == 1 }
   }
 
+  public init(contiguousForShape shape: [Int]) {
+    self.init(shape: shape, strides: stridesForShape(shape))
+  }
+
   public var dataShape: [Int] {
     return zip(shape, strides).map { size, stride in stride == 0 ? 1 : size }
   }
@@ -104,10 +108,7 @@ public struct BroadcastData {
 
   /// Wrap an unbroadcasted tensor in a ``BroadcastData``.
   public static func simple(data: Tensor.Data, shape: [Int]) -> BroadcastData {
-    Self(
-      strides: BroadcastStrides(shape: shape, strides: stridesForShape(shape)),
-      data: data
-    )
+    Self(strides: BroadcastStrides(contiguousForShape: shape), data: data)
   }
 }
 
