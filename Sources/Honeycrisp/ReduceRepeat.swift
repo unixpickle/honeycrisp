@@ -111,11 +111,11 @@ extension Tensor {
 
   @recordCaller
   private func _maxPool2D(width kw: Int, height kh: Int, channelsLast: Bool = false) -> Tensor {
-    alwaysAssert(shape.count == 4, "invalid shape for maxPool2D \(shape)")
+    #alwaysAssert(shape.count == 4, "invalid shape for maxPool2D \(shape)")
     let b = shape[0]
     let (h, w, c) = channelsLast ? (shape[1], shape[2], shape[3]) : (shape[2], shape[3], shape[1])
-    alwaysAssert(h % kh == 0, "pool height \(kh) does not divide image height \(h)")
-    alwaysAssert(w % kw == 0, "pool width \(kw) does not divide image width \(w)")
+    #alwaysAssert(h % kh == 0, "pool height \(kh) does not divide image height \(h)")
+    #alwaysAssert(w % kw == 0, "pool width \(kw) does not divide image width \(w)")
     if channelsLast {
       return reshape([b, h / kh, kh, w / kw, kw, c])[FullRange(count: 2), PermuteAxes(1, 0)]
         .reshape([b, h / kh, kh * kw, w / kw, c]).max(axis: 2)
@@ -144,7 +144,7 @@ extension Tensor {
       let outShape = keepdims ? Array(repeating: 1, count: shape.count) : []
       return reshape([shape.product()]).reduce(op: op, axis: 0).reshape(outShape)
     }
-    alwaysAssert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
+    #alwaysAssert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
     let backend = Backend.current
     let newData = createDataTask { t in
       try await backend.reduce(try await t.data, op: op, dims: t.reduceDims(axis), dtype: t.dtype)
@@ -166,7 +166,7 @@ extension Tensor {
   @recordCaller
   private func _repeating(axis: Int, count: Int) -> Tensor {
     let axis = positiveAxis(axis)
-    alwaysAssert(axis >= 0 && axis <= shape.count, "axis \(axis) out of bounds for shape \(shape)")
+    #alwaysAssert(axis >= 0 && axis <= shape.count, "axis \(axis) out of bounds for shape \(shape)")
     let outerCount = shape[..<axis].product()
     let innerCount = shape[axis...].product()
     let newShape =
@@ -184,7 +184,8 @@ extension Tensor {
   internal func _reduceDims(_ axis: Int? = nil) -> ReduceDims {
     if let axis = axis {
       let axis = (axis < 0 ? axis + shape.count : axis)
-      alwaysAssert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
+      #alwaysAssert(
+        axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
       return ReduceDims(
         outerCount: shape[..<axis].product(),
         reduceCount: shape[axis],

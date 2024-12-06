@@ -104,7 +104,7 @@ open class Trainable: MaybeTrainable {
         if buf.maybeName == nil {
           buf.maybeName = String("\(storageKeyPath)".split(separator: ".").last!)
         }
-        alwaysAssert(
+        #alwaysAssert(
           !(newValue.maybeTensor()?.needsGrad ?? false), "buffer value cannot need grad")
         buf.maybeData = newValue
         if newValue.isNil {
@@ -138,7 +138,7 @@ open class Trainable: MaybeTrainable {
         if let t = newValue {
           maybeData = TensorType.fromTensor(t)
         } else {
-          alwaysAssert(
+          #alwaysAssert(
             false, "Cannot unset parameter data. Consider setting the property itself to nil.")
         }
       }
@@ -182,7 +182,7 @@ open class Trainable: MaybeTrainable {
         if param.maybeName == nil {
           param.maybeName = String("\(storageKeyPath)".split(separator: ".").last!)
         }
-        alwaysAssert(
+        #alwaysAssert(
           !(newValue.maybeTensor()?.needsGrad ?? false), "parameter value cannot need grad")
         param.maybeData = newValue
         if newValue.isNil {
@@ -216,7 +216,7 @@ open class Trainable: MaybeTrainable {
         if let t = newValue {
           maybeData = TensorType.fromTensor(t)
         } else {
-          alwaysAssert(
+          #alwaysAssert(
             false, "Cannot unset parameter data. Consider setting the property itself to nil.")
         }
       }
@@ -640,15 +640,15 @@ public class Conv2D: Trainable {
     self.kernelSize = kernelSize.dim
     self.stride = stride.dim
     self.dilation = dilation.dim
-    alwaysAssert(
+    #alwaysAssert(
       inChannels % groups == 0, "outChannels \(outChannels) not divisible by groups \(groups)")
-    alwaysAssert(
+    #alwaysAssert(
       outChannels % groups == 0, "inChannels \(inChannels) not divisible by groups \(groups)")
     switch padding {
     case .none:
       self.padding = Padding(before: Dim(constant: 0), after: Dim(constant: 0))
     case .same:
-      alwaysAssert(
+      #alwaysAssert(
         self.stride == Dim(constant: 1),
         "cannot use padding mode 'same' with stride \(self.stride)")
       self.padding = Conv2DConfig.samePadding(kernelSize: self.kernelSize, dilation: self.dilation)
@@ -676,14 +676,14 @@ public class Conv2D: Trainable {
 
   @recordCaller
   private func _callAsFunction(_ x: Tensor) -> Tensor {
-    alwaysAssert(x.shape.count == 4, "invalid input shape for conv2d: \(x.shape)")
+    #alwaysAssert(x.shape.count == 4, "invalid input shape for conv2d: \(x.shape)")
     let (height, width, channels) =
       if channelsLast {
         (x.shape[1], x.shape[2], x.shape[3])
       } else {
         (x.shape[2], x.shape[3], x.shape[1])
       }
-    alwaysAssert(
+    #alwaysAssert(
       channels == inChannels,
       "channels of input \(channels) doesn't match expected channels \(inChannels)")
 
@@ -753,7 +753,7 @@ public class LayerNorm: Trainable {
 
   @recordCaller
   private func _callAsFunction(_ x: Tensor) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       x.shape.count >= shape.count && Array(x.shape[(x.shape.count - shape.count)...]) == shape,
       "LayerNorm shape \(shape) is incompatible with input shape \(x.shape)")
 
@@ -790,7 +790,7 @@ public class GroupNorm: Trainable {
     groupCount: Int, channelCount: Int, channelsLast: Bool = false, dtype: Tensor.DType = .float32,
     eps: Float = 1e-5, affine: Bool = true
   ) {
-    alwaysAssert(
+    #alwaysAssert(
       channelCount % groupCount == 0,
       "channelCount \(channelCount) must be divisible by groupCount \(groupCount)")
     self.groupCount = groupCount
@@ -810,11 +810,11 @@ public class GroupNorm: Trainable {
   @recordCaller
   private func _callAsFunction(_ x: Tensor) -> Tensor {
     if channelsLast {
-      alwaysAssert(
+      #alwaysAssert(
         x.shape[x.shape.count - 1] == channelCount,
         "expected \(channelCount) channels but got shape \(x.shape)")
     } else {
-      alwaysAssert(
+      #alwaysAssert(
         x.shape[1] == channelCount, "expected \(channelCount) channels but got shape \(x.shape)")
     }
     let cFirst =

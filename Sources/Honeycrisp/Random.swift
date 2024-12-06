@@ -42,8 +42,8 @@ open class RandomGenerator {
     }
     set {
       _opLock.withLock {
-        alwaysAssert(newValue.shape == [stateCount])
-        alwaysAssert(newValue.dtype == stateDType)
+        #alwaysAssert(newValue.shape == [stateCount])
+        #alwaysAssert(newValue.dtype == stateDType)
         _state = newValue
       }
     }
@@ -162,7 +162,7 @@ extension Tensor {
   ) {
     let backend = Backend.current
     let dataTask = Backtrace.record(function: function, file: file, line: line) {
-      alwaysAssert(
+      #alwaysAssert(
         generator == nil || generator!.backend === backend,
         "backend for provided generator is not the current backend")
       let generator = generator ?? backend.defaultRandom()
@@ -208,7 +208,7 @@ extension Tensor {
   ) {
     let dataTask = Backtrace.record(function: function, file: file, line: line) {
       let backend = Backend.current
-      alwaysAssert(
+      #alwaysAssert(
         generator == nil || generator!.backend === backend,
         "backend for provided generator is not the current backend")
       let generator = generator ?? backend.defaultRandom()

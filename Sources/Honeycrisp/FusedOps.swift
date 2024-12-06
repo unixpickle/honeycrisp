@@ -3,8 +3,8 @@ import HCBacktrace
 extension Tensor {
   @recordCaller
   private func _mul(_ coeff: Tensor, thenAdd bias: Tensor) -> Tensor {
-    alwaysAssert(dtype == coeff.dtype, "dtype \(dtype) does not match coefficients \(coeff.dtype)")
-    alwaysAssert(dtype == bias.dtype, "dtype \(dtype) does not match bias \(bias.dtype)")
+    #alwaysAssert(dtype == coeff.dtype, "dtype \(dtype) does not match coefficients \(coeff.dtype)")
+    #alwaysAssert(dtype == bias.dtype, "dtype \(dtype) does not match bias \(bias.dtype)")
 
     let (outputShape, allStrides) = Tensor.lazyBroadcast([self, coeff, bias])
     let tStrides = allStrides[0]
@@ -38,8 +38,8 @@ extension Tensor {
 
   @recordCaller
   private func _add(_ bias: Tensor, thenMul coeff: Tensor) -> Tensor {
-    alwaysAssert(dtype == coeff.dtype, "dtype \(dtype) does not match coefficients \(coeff.dtype)")
-    alwaysAssert(dtype == bias.dtype, "dtype \(dtype) does not match bias \(bias.dtype)")
+    #alwaysAssert(dtype == coeff.dtype, "dtype \(dtype) does not match coefficients \(coeff.dtype)")
+    #alwaysAssert(dtype == bias.dtype, "dtype \(dtype) does not match bias \(bias.dtype)")
 
     let (outputShape, allStrides) = Tensor.lazyBroadcast([self, coeff, bias])
     let tStrides = allStrides[0]
@@ -75,9 +75,9 @@ extension Tensor {
 
   @recordCaller
   private func _normalize<T: TensorElement>(mean: Tensor, variance: Tensor, epsilon: T) -> Tensor {
-    alwaysAssert(dtype.isFloat, "cannot apply normalize() to dtype \(dtype)")
-    alwaysAssert(dtype == mean.dtype, "dtype \(dtype) does not match mean \(mean.dtype)")
-    alwaysAssert(
+    #alwaysAssert(dtype.isFloat, "cannot apply normalize() to dtype \(dtype)")
+    #alwaysAssert(dtype == mean.dtype, "dtype \(dtype) does not match mean \(mean.dtype)")
+    #alwaysAssert(
       dtype == variance.dtype, "dtype \(dtype) does not match variance \(variance.dtype)")
 
     let (outputShape, allStrides) = Tensor.lazyBroadcast([self, mean, variance])
@@ -127,9 +127,10 @@ extension Tensor {
   private static func _normalizeXGrad<T: TensorElement>(
     variance: Tensor, outGrad: Tensor, epsilon: T, sign: Float
   ) -> Tensor {
-    alwaysAssert(!variance.needsGrad && !outGrad.needsGrad)
-    alwaysAssert(variance.dtype.isFloat, "cannot apply normalizeXGrad() to dtype \(variance.dtype)")
-    alwaysAssert(
+    #alwaysAssert(!variance.needsGrad && !outGrad.needsGrad)
+    #alwaysAssert(
+      variance.dtype.isFloat, "cannot apply normalizeXGrad() to dtype \(variance.dtype)")
+    #alwaysAssert(
       variance.dtype == outGrad.dtype, "dtype \(variance.dtype) does not match \(outGrad.dtype)")
 
     let (outputShape, (varianceStrides, outGradStrides)) = Tensor.lazyBroadcast(variance, outGrad)
@@ -150,11 +151,11 @@ extension Tensor {
   private static func _normalizeVarianceGrad<T: TensorElement>(
     input: Tensor, mean: Tensor, variance: Tensor, outGrad: Tensor, epsilon: T
   ) -> Tensor {
-    alwaysAssert(!input.needsGrad && !mean.needsGrad && !variance.needsGrad && !outGrad.needsGrad)
-    alwaysAssert(input.dtype.isFloat, "cannot apply normalizeXGrad() to dtype \(variance.dtype)")
-    alwaysAssert(input.dtype == mean.dtype)
-    alwaysAssert(input.dtype == variance.dtype)
-    alwaysAssert(input.dtype == outGrad.dtype)
+    #alwaysAssert(!input.needsGrad && !mean.needsGrad && !variance.needsGrad && !outGrad.needsGrad)
+    #alwaysAssert(input.dtype.isFloat, "cannot apply normalizeXGrad() to dtype \(variance.dtype)")
+    #alwaysAssert(input.dtype == mean.dtype)
+    #alwaysAssert(input.dtype == variance.dtype)
+    #alwaysAssert(input.dtype == outGrad.dtype)
 
     let (outputShape, allStrides) = Tensor.lazyBroadcast([input, mean, variance, outGrad])
     let inputStrides = allStrides[0]

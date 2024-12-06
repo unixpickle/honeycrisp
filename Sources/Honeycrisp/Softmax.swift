@@ -4,9 +4,9 @@ extension Tensor {
 
   @recordCaller
   private func _logSoftmax(axis: Int = -1) -> Tensor {
-    alwaysAssert(dtype.isNumeric, "dtype \(dtype) not supported for logSoftmax")
+    #alwaysAssert(dtype.isNumeric, "dtype \(dtype) not supported for logSoftmax")
     let posAxis = positiveAxis(axis)
-    alwaysAssert(posAxis >= 0 && posAxis < shape.count, "invalid axis \(axis) for shape \(shape)")
+    #alwaysAssert(posAxis >= 0 && posAxis < shape.count, "invalid axis \(axis) for shape \(shape)")
 
     let backend = Backend.current
     let newData = createDataTask { t in
@@ -33,11 +33,11 @@ extension Tensor {
 
   @recordCaller
   private static func _logSoftmaxGrad(inputs: Tensor, grads: Tensor, axis: Int = -1) -> Tensor {
-    alwaysAssert(inputs.dtype.isNumeric)
-    alwaysAssert(inputs.dtype == grads.dtype)
-    alwaysAssert(inputs.shape == grads.shape)
+    #alwaysAssert(inputs.dtype.isNumeric)
+    #alwaysAssert(inputs.dtype == grads.dtype)
+    #alwaysAssert(inputs.shape == grads.shape)
     let posAxis = inputs.positiveAxis(axis)
-    alwaysAssert(
+    #alwaysAssert(
       posAxis >= 0 && posAxis < inputs.shape.count, "invalid axis \(axis) for shape \(inputs.shape)"
     )
 

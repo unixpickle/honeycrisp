@@ -56,3 +56,8 @@ import Foundation
 /// ```
 @attached(peer, names: arbitrary)
 public macro recordCaller() = #externalMacro(module: "HCBacktraceMacros", type: "RecordCaller")
+
+/// Assert a condition with a backtrace on failure.
+@freestanding(expression)
+public macro alwaysAssert(_ value: Bool, _ message: String? = nil) =
+  #externalMacro(module: "HCBacktraceMacros", type: "AlwaysAssert")

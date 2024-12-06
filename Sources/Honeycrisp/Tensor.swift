@@ -108,7 +108,7 @@ public final class Tensor {
     @recordCaller
     private func _backward(_ backend: Backend, _ gradFn: @escaping () -> Tensor) {
       typealias StackType = (Backend, (() -> Tensor), ((Tensor) -> Void))
-      alwaysAssert(addGrad != nil, "cannot re-use backward handle")
+      #alwaysAssert(addGrad != nil, "cannot re-use backward handle")
       let ag = addGrad!
       addGrad = nil
       cancel = nil
@@ -290,7 +290,7 @@ public final class Tensor {
         cancel: { [self] in
           numBackwardHandles -= 1
           if curGrad != nil && numBackwardHandles == 0 {
-            alwaysAssert(
+            #alwaysAssert(
               false,
               "backward pass was incompleted due to an unused reference.\n\nTraceback of reference creation:\n\n\(Backtrace.format(creationTrace))"
             )
@@ -300,12 +300,12 @@ public final class Tensor {
 
     @recordCaller
     internal func _addGrad(_ backend: Backend, _ grad: Tensor) {
-      alwaysAssert(numBackwardHandles > 0)
-      alwaysAssert(
+      #alwaysAssert(numBackwardHandles > 0)
+      #alwaysAssert(
         grad.shape == shape,
         "gradient shape \(grad.shape) must match tensor shape \(shape)"
       )
-      alwaysAssert(
+      #alwaysAssert(
         grad.dtype == dtype, "gradient dtype \(grad.dtype) must match tensor dtype \(dtype)")
       if let cg = curGrad {
         curGrad = backend.use { cg + grad }
@@ -342,7 +342,7 @@ public final class Tensor {
           let result = try await dataTask.value
           let allocSize = result.byteCount
           let minSize = shape.product() * dtype.byteSize
-          alwaysAssert(
+          #alwaysAssert(
             allocSize >= minSize, "buffer of size \(allocSize) underflows shape \(shape)")
           return result
         }, function: function, file: file, line: line)
@@ -356,7 +356,7 @@ public final class Tensor {
       self.needsGrad = backwardImpl != nil
     } else {
       Backtrace.record(function: function, file: file, line: line) {
-        alwaysAssert(
+        #alwaysAssert(
           backwardImpl == nil, "cannot provide a backward function if !Tensor.isGradEnabled")
       }
       self.needsGrad = false
@@ -384,11 +384,11 @@ public final class Tensor {
     let shape = shape ?? [data.count]
     let dtype = dtype ?? T.dtype
     if !dtype.supportsGrad {
-      alwaysAssert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
+      #alwaysAssert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
     }
-    alwaysAssert(
+    #alwaysAssert(
       data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
-    alwaysAssert(
+    #alwaysAssert(
       dtype.canUseScalarType(T.self),
       "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
     let dataTask = Backtrace.record(function: function, file: file, line: line) {
@@ -459,7 +459,7 @@ public final class Tensor {
     line: UInt = #line
   ) {
     let dtype = dtype ?? T.dtype
-    alwaysAssert(
+    #alwaysAssert(
       dtype.canUseScalarType(T.self),
       "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
     let dataTask = Backtrace.record(function: function, file: file, line: line) {
@@ -473,7 +473,7 @@ public final class Tensor {
 
   @recordCaller
   private func _copyToArray<T: TensorElement>(_ out: inout [T]) async throws {
-    alwaysAssert(out.count == shape.product(), "out size must match our size")
+    #alwaysAssert(out.count == shape.product(), "out size must match our size")
     try await data.onCPU { buf in
       try pointerToArray(buf, output: &out, dtype: dtype)
     }
@@ -509,7 +509,7 @@ public final class Tensor {
 
   @recordCaller
   private func _item() async throws -> Float {
-    alwaysAssert(shape.product() == 1, "cannot call item() on Tensor of shape \(shape)")
+    #alwaysAssert(shape.product() == 1, "cannot call item() on Tensor of shape \(shape)")
     let data = try await floats()
     return data[0]
   }
@@ -603,7 +603,7 @@ public final class Tensor {
 
   @recordCaller
   private func _onGrad(_ action: @escaping ((Tensor) -> Void)) -> Tensor {
-    alwaysAssert(dtype.supportsGrad, "cannot compute gradients for dtype \(dtype)")
+    #alwaysAssert(dtype.supportsGrad, "cannot compute gradients for dtype \(dtype)")
     if !Tensor.isGradEnabled {
       return Tensor(dataTask: dataTask, shape: shape, dtype: dtype)
     }
@@ -623,7 +623,7 @@ public final class Tensor {
       return self
     }
     let useShape = fillNegativeOneInShape(newShape)
-    alwaysAssert(
+    #alwaysAssert(
       shape.product() == useShape.product(), "invalid reshape from \(shape) to \(newShape)")
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: dataTask, shape: useShape, dtype: dtype)
@@ -646,13 +646,13 @@ public final class Tensor {
     guard let idx = newShape.firstIndex(of: -1) else {
       return newShape
     }
-    alwaysAssert(newShape.filter({ x in x < 0 }).count == 1, "invalid shape: \(newShape)")
+    #alwaysAssert(newShape.filter({ x in x < 0 }).count == 1, "invalid shape: \(newShape)")
     let otherProduct = newShape[..<idx].product() * newShape[(idx + 1)...].product()
-    alwaysAssert(
+    #alwaysAssert(
       otherProduct != 0,
       "cannot infer axis \(idx) for shape \(newShape) because value is ambiguous")
     let fullProduct = shape.product()
-    alwaysAssert(
+    #alwaysAssert(
       fullProduct % otherProduct == 0,
       "shape \(newShape) is incompatible with tensor shape \(shape)")
     var result = newShape
@@ -667,7 +667,7 @@ public final class Tensor {
     if startAxis == 0 && endAxis == 0 && shape.count == 0 {
       return reshape([1])
     }
-    alwaysAssert(endAxis >= startAxis, "invalid axes for flatten(): [\(startAxis), \(endAxis)]")
+    #alwaysAssert(endAxis >= startAxis, "invalid axes for flatten(): [\(startAxis), \(endAxis)]")
     return reshape(
       shape[..<startAxis] + [shape[startAxis...endAxis].product()] + shape[(endAxis + 1)...])
   }
@@ -675,7 +675,7 @@ public final class Tensor {
   @recordCaller
   private func _squeeze(axis: Int) -> Tensor {
     let posAxis = positiveAxis(axis)
-    alwaysAssert(shape[posAxis] == 1, "cannot squeeze axis \(axis) for shape \(shape)")
+    #alwaysAssert(shape[posAxis] == 1, "cannot squeeze axis \(axis) for shape \(shape)")
     var newShape = shape
     newShape.remove(at: posAxis)
     return reshape(newShape)
@@ -684,7 +684,7 @@ public final class Tensor {
   @recordCaller
   private func _unsqueeze(axis: Int) -> Tensor {
     let posAxis = axis < 0 ? axis + shape.count + 1 : axis
-    alwaysAssert(posAxis >= 0, "axis \(axis) out of bounds for shape \(shape)")
+    #alwaysAssert(posAxis >= 0, "axis \(axis) out of bounds for shape \(shape)")
     var newShape = shape
     newShape.insert(1, at: posAxis)
     return reshape(newShape)
@@ -716,10 +716,10 @@ public final class Tensor {
   }
 
   public static func + <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       lhs.dtype.canUseScalarType(T.self),
       "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
-    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
+    #alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
     let backend = Backend.current
     let newData = createDataTask(lhs) { lhs in
       try await backend.binaryOp(
@@ -740,8 +740,8 @@ public final class Tensor {
   }
 
   public static func + (lhs: Tensor, rhs: Tensor) -> Tensor {
-    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
-    alwaysAssert(
+    #alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
+    #alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for + operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
     let (outputShape, (lhsStrides, rhsStrides)) = Tensor.lazyBroadcast(lhs, rhs)
@@ -768,7 +768,7 @@ public final class Tensor {
   }
 
   public static func * <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       lhs.dtype.canUseScalarType(T.self),
       "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
     let backend = Backend.current
@@ -791,8 +791,8 @@ public final class Tensor {
   }
 
   public static func * (lhs: Tensor, rhs: Tensor) -> Tensor {
-    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with * operator")
-    alwaysAssert(
+    #alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with * operator")
+    #alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for * operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
     let (outputShape, (lhsStrides, rhsStrides)) = Tensor.lazyBroadcast(lhs, rhs)
@@ -819,10 +819,10 @@ public final class Tensor {
   }
 
   public static func - <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       lhs.dtype.canUseScalarType(T.self),
       "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
-    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with - operator")
+    #alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with - operator")
     let backend = Backend.current
     let newData = createDataTask(lhs) { lhs in
       try await backend.binaryOp(
@@ -841,7 +841,7 @@ public final class Tensor {
   }
 
   public static func - <T: NumericTensorElement>(lhs: T, rhs: Tensor) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       rhs.dtype.canUseScalarType(T.self),
       "scalar type \(T.self) cannot be used with dtype \(rhs.dtype)")
     let backend = Backend.current
@@ -860,8 +860,8 @@ public final class Tensor {
   }
 
   public static func - (lhs: Tensor, rhs: Tensor) -> Tensor {
-    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
-    alwaysAssert(
+    #alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
+    #alwaysAssert(
       lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
     let (outputShape, (lhsStrides, rhsStrides)) = Tensor.lazyBroadcast(lhs, rhs)
@@ -888,15 +888,15 @@ public final class Tensor {
   }
 
   prefix public static func - (t: Tensor) -> Tensor {
-    alwaysAssert(t.dtype.isNumeric, "dtype \(t.dtype) cannot be used with - operator")
+    #alwaysAssert(t.dtype.isNumeric, "dtype \(t.dtype) cannot be used with - operator")
     return t * -1
   }
 
   public static func / <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       lhs.dtype.canUseScalarType(T.self),
       "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
-    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with / operator")
+    #alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with / operator")
     let backend = Backend.current
     let newData = createDataTask(lhs) { lhs in
       try await backend.binaryOp(
@@ -913,10 +913,10 @@ public final class Tensor {
   }
 
   public static func / <T: NumericTensorElement>(lhs: T, rhs: Tensor) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       rhs.dtype.canUseScalarType(T.self),
       "scalar type \(T.self) cannot be used with dtype \(rhs.dtype)")
-    alwaysAssert(rhs.dtype.isNumeric, "dtype \(rhs.dtype) cannot be used with / operator")
+    #alwaysAssert(rhs.dtype.isNumeric, "dtype \(rhs.dtype) cannot be used with / operator")
     let backend = Backend.current
     let newData = createDataTask(rhs) { rhs in
       try await backend.binaryOp(
@@ -933,9 +933,9 @@ public final class Tensor {
   }
 
   public static func / (lhs: Tensor, rhs: Tensor) -> Tensor {
-    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
-    alwaysAssert(
-      lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+    #alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
+    #alwaysAssert(
+      lhs.dtype == rhs.dtype, "dtypes for / operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
     let (outputShape, (lhsStrides, rhsStrides)) = Tensor.lazyBroadcast(lhs, rhs)
 
@@ -963,10 +963,10 @@ public final class Tensor {
   }
 
   public static func % <T: NumericTensorElement>(lhs: Tensor, rhs: T) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       lhs.dtype.canUseScalarType(T.self),
       "scalar type \(T.self) cannot be used with dtype \(lhs.dtype)")
-    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with % operator")
+    #alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with % operator")
     let backend = Backend.current
     let newData = createDataTask(lhs) { lhs in
       try await backend.binaryOp(
@@ -985,7 +985,7 @@ public final class Tensor {
   }
 
   public static func % <T: NumericTensorElement>(lhs: T, rhs: Tensor) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       rhs.dtype.canUseScalarType(T.self),
       "scalar type \(T.self) cannot be used with dtype \(rhs.dtype)")
     let backend = Backend.current
@@ -1004,9 +1004,9 @@ public final class Tensor {
   }
 
   public static func % (lhs: Tensor, rhs: Tensor) -> Tensor {
-    alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
-    alwaysAssert(
-      lhs.dtype == rhs.dtype, "dtypes for - operator do not match: \(lhs.dtype) and \(rhs.dtype)")
+    #alwaysAssert(lhs.dtype.isNumeric, "dtype \(lhs.dtype) cannot be used with + operator")
+    #alwaysAssert(
+      lhs.dtype == rhs.dtype, "dtypes for % operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
     let (outputShape, (lhsStrides, rhsStrides)) = Tensor.lazyBroadcast(lhs, rhs)
 
@@ -1036,7 +1036,7 @@ public final class Tensor {
 
   @recordCaller
   private func _pow<T: NumericTensorElement>(_ exponent: T) -> Tensor {
-    alwaysAssert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
+    #alwaysAssert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
     let backend = Backend.current
     let newData = createDataTask { t in
       try await backend.pow(
@@ -1059,11 +1059,11 @@ public final class Tensor {
 
   @recordCaller
   internal func _powGrad<T: NumericTensorElement>(_ exponent: T, grad: Tensor) -> Tensor {
-    alwaysAssert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
-    alwaysAssert(
+    #alwaysAssert(dtype.isNumeric, "cannot use pow() with dtype \(dtype)")
+    #alwaysAssert(
       grad.dtype == dtype,
       "dtype of self \(dtype) does not match dtype of gradient \(grad.dtype)")
-    alwaysAssert(!self.needsGrad && !grad.needsGrad, "second derivatives are not supported")
+    #alwaysAssert(!self.needsGrad && !grad.needsGrad, "second derivatives are not supported")
     let backend = Backend.current
     let newData = Tensor.createDataTask(self, grad) { t, grad in
       try await backend.pow(
@@ -1075,8 +1075,8 @@ public final class Tensor {
 
   @recordCaller
   private func _clamp<T: NumericTensorElement>(min: T? = nil, max: T? = nil) -> Tensor {
-    alwaysAssert(dtype.isNumeric, "cannot use clamp() with dtype \(dtype)")
-    alwaysAssert(min != nil || max != nil, "cannot use clamp() without bounds")
+    #alwaysAssert(dtype.isNumeric, "cannot use clamp() with dtype \(dtype)")
+    #alwaysAssert(min != nil || max != nil, "cannot use clamp() without bounds")
     let backend = Backend.current
     let newData = createDataTask { t in
       try await backend.clamp(
@@ -1095,7 +1095,7 @@ public final class Tensor {
 
   @recordCaller
   private func _backward(_ grad: Tensor? = nil) {
-    alwaysAssert(needsGrad, "backward called on Tensor that does not need grad")
+    #alwaysAssert(needsGrad, "backward called on Tensor that does not need grad")
     let grad =
       if let grad = grad {
         grad
@@ -1103,7 +1103,7 @@ public final class Tensor {
         Tensor(onesLike: self)
       }
 
-    alwaysAssert(
+    #alwaysAssert(
       backwardState.numBackwardHandles == 0,
       "cannot call backward() on tensor that is used elsewhere")
     Tensor.withGrad(enabled: true) { self.saveForBackward() }.backward(Backend.current) { grad }
@@ -1111,12 +1111,12 @@ public final class Tensor {
 
   @recordCaller
   private func _saveForBackward() -> BackwardHandle {
-    alwaysAssert(Tensor.isGradEnabled, "backward handle cannot be saved while grads are disabled")
+    #alwaysAssert(Tensor.isGradEnabled, "backward handle cannot be saved while grads are disabled")
     if !self.needsGrad {
       return BackwardHandle()
     } else if backwardState.backwardImpl == nil {
       return BackwardHandle(
-        addGrad: { _ in alwaysAssert(false, "cannot backward a second time") }, cancel: {})
+        addGrad: { _ in #alwaysAssert(false, "cannot backward a second time") }, cancel: {})
     }
     return backwardState.createHandle()
   }
@@ -1135,7 +1135,7 @@ public final class Tensor {
   @recordCaller
   internal func _positiveAxis(_ axis: Int) -> Int {
     let result = axis < 0 ? axis + shape.count : axis
-    alwaysAssert(result >= 0, "axis \(axis) out of bounds for shape \(shape)")
+    #alwaysAssert(result >= 0, "axis \(axis) out of bounds for shape \(shape)")
     return result
   }
 

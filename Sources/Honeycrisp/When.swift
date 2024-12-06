@@ -3,8 +3,8 @@ import HCBacktrace
 extension Tensor {
   @recordCaller
   private func _when(isTrue: Tensor, isFalse: Tensor) -> Tensor {
-    alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
-    alwaysAssert(
+    #alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
+    #alwaysAssert(
       isTrue.dtype == isFalse.dtype,
       "when() argument dtypes differ: \(isTrue.dtype) vs \(isFalse.dtype)")
 
@@ -40,7 +40,7 @@ extension Tensor {
 
   @recordCaller
   private func _when<T: TensorElement>(isTrue: Tensor, isFalse: T) -> Tensor {
-    alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
+    #alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
 
     let (newShape, (tStrides, isTrueStrides)) = Tensor.lazyBroadcast(self, isTrue)
 
@@ -67,7 +67,7 @@ extension Tensor {
 
   @recordCaller
   private func _when<T: TensorElement>(isTrue: T, isFalse: Tensor) -> Tensor {
-    alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
+    #alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
 
     let (newShape, (tStrides, isFalseStrides)) = Tensor.lazyBroadcast(self, isFalse)
 
@@ -94,7 +94,7 @@ extension Tensor {
 
   @recordCaller
   private func _when<T: TensorElement>(isTrue: T, isFalse: T, dtype outDType: DType) -> Tensor {
-    alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
+    #alwaysAssert(dtype == .bool, "can only call when() on boolean Tensor")
     let backend = Backend.current
     let newData = createDataTask { t in
       try await backend.when(

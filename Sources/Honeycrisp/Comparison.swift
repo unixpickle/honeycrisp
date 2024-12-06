@@ -27,7 +27,7 @@ public enum ComparisonOp {
 extension Tensor {
   @recordCaller
   internal static func _compare(lhs: Tensor, rhs: Tensor, op: ComparisonOp) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       lhs.dtype == rhs.dtype,
       "dtypes for comparison operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 

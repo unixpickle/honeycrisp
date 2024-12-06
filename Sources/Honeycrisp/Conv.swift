@@ -498,20 +498,20 @@ extension Tensor {
   internal static func _convND<Dim: SpatialDim>(
     _ conv: ConvConfig<Dim>, image: Tensor, kernel: Tensor
   ) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       image.dtype == kernel.dtype,
       "image and kernel dtypes differ: \(image.dtype) vs \(kernel.dtype)")
-    alwaysAssert(image.shape.count == 2 + Dim.dimCount, "invalid image shape: \(image.shape)")
-    alwaysAssert(kernel.shape.count == 2 + Dim.dimCount, "invalid kernel shape: \(kernel.shape)")
+    #alwaysAssert(image.shape.count == 2 + Dim.dimCount, "invalid image shape: \(image.shape)")
+    #alwaysAssert(kernel.shape.count == 2 + Dim.dimCount, "invalid kernel shape: \(kernel.shape)")
 
     let expectedImageShape = conv.imageTensorShape(batch: image.shape[0])
-    alwaysAssert(
+    #alwaysAssert(
       image.shape == expectedImageShape,
       "invalid image shape \(image.shape), expected \(expectedImageShape)")
 
     let outShape = conv.outputTensorShape(batch: image.shape[0])
     let kernelShape = conv.kernelTensorShape()
-    alwaysAssert(
+    #alwaysAssert(
       kernel.shape == kernelShape,
       "kernel argument shape \(kernel.shape) does not match expected shape \(kernelShape)")
 
@@ -552,12 +552,12 @@ extension Tensor {
   internal static func _convNDTranspose<Dim: SpatialDim>(
     _ conv: ConvConfig<Dim>, image: Tensor, kernel: Tensor
   ) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       image.dtype == kernel.dtype,
       "image and kernel dtypes differ: \(image.dtype) vs \(kernel.dtype)")
-    alwaysAssert(image.shape.count == 2 + Dim.dimCount, "invalid image shape: \(image.shape)")
-    alwaysAssert(kernel.shape.count == 2 + Dim.dimCount, "invalid image shape: \(kernel.shape)")
-    alwaysAssert(
+    #alwaysAssert(image.shape.count == 2 + Dim.dimCount, "invalid image shape: \(image.shape)")
+    #alwaysAssert(kernel.shape.count == 2 + Dim.dimCount, "invalid image shape: \(kernel.shape)")
+    #alwaysAssert(
       kernel.shape == conv.kernelTensorShape(),
       "invalid kernel shape \(kernel.shape) for conv \(conv)")
 
@@ -565,7 +565,7 @@ extension Tensor {
     let inShape: [Int]
     inShape = conv.outputTensorShape(batch: image.shape[0])
     outShape = conv.imageTensorShape(batch: image.shape[0])
-    alwaysAssert(
+    #alwaysAssert(
       image.shape == inShape,
       "invalid input shape for transposed conv2D: \(image.shape) (expected \(inShape))")
 
@@ -606,18 +606,19 @@ extension Tensor {
   )
     -> Tensor
   {
-    alwaysAssert(
+    #alwaysAssert(
       image.dtype == outGrad.dtype,
       "image and outGrad dtypes differ: \(image.dtype) vs \(outGrad.dtype)")
-    alwaysAssert(image.shape.count == 2 + Dim.dimCount, "invalid image shape: \(image.shape)")
-    alwaysAssert(outGrad.shape.count == 2 + Dim.dimCount, "invalid outGrad shape: \(outGrad.shape)")
-    alwaysAssert(
+    #alwaysAssert(image.shape.count == 2 + Dim.dimCount, "invalid image shape: \(image.shape)")
+    #alwaysAssert(
+      outGrad.shape.count == 2 + Dim.dimCount, "invalid outGrad shape: \(outGrad.shape)")
+    #alwaysAssert(
       image.shape == conv.imageTensorShape(batch: image.shape[0]),
       "invalid image shape \(image.shape) for conv \(conv)")
 
     let kernelShape = conv.kernelTensorShape()
     let outShape = conv.outputTensorShape(batch: image.shape[0])
-    alwaysAssert(
+    #alwaysAssert(
       outGrad.shape == outShape, "unexpected outGrad shape \(outGrad.shape), expected \(outShape)"
     )
 

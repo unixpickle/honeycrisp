@@ -263,7 +263,7 @@ open class MPSBackend: CPUBackend {
         sample: Tensor.Data, state: Tensor.Data
       )
     {
-      alwaysAssert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
+      #alwaysAssert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
 
       let functionName =
         "\(dist == .normal ? "randn" : "rand")_\(MPSBackend.CastTypes[dtype]!)"
@@ -296,7 +296,7 @@ open class MPSBackend: CPUBackend {
         sample: Tensor.Data, state: Tensor.Data
       )
     {
-      alwaysAssert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
+      #alwaysAssert(count <= 0xffff_ffff, "count exceeds UInt32 size: \(count)")
 
       let (inState, inStateCb) = try await mpsBackend.gpuBuffer(state)
       let (output, outputCb) = try await mpsBackend.allocateBuf(count * Tensor.DType.int64.byteSize)
@@ -599,7 +599,7 @@ open class MPSBackend: CPUBackend {
       return try await super.pow(a, b, scale: scale, scales: scales, count: count, dtype: dtype)
     }
 
-    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    #alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
     let (aBuf, aCb) = try await gpuBuffer(a)
     let (scalesBuf, scalesCb) = try await gpuBuffer(scales)
     let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
@@ -646,7 +646,7 @@ open class MPSBackend: CPUBackend {
 
     let typeName = MPSBackend.CastTypes[dtype]!
 
-    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    #alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let namePrefix =
       switch op {
@@ -751,7 +751,7 @@ open class MPSBackend: CPUBackend {
       return try await super.binaryOp(a, b, op: op, dtype: dtype)
     }
     let count = a.strides.shape.product()
-    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    #alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.binaryOpName(op)
     let functionName = "\(opName)_vv_\(typeName)"
@@ -790,7 +790,7 @@ open class MPSBackend: CPUBackend {
       return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
     }
 
-    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    #alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.binaryOpName(op)
     let functionName = "\(opName)_vs_\(typeName)"
@@ -821,7 +821,7 @@ open class MPSBackend: CPUBackend {
       return try await super.binaryOp(a, b, op: op, count: count, dtype: dtype)
     }
 
-    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    #alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.binaryOpName(op)
     let functionName = "\(opName)_sv_\(typeName)"
@@ -868,7 +868,7 @@ open class MPSBackend: CPUBackend {
     }
 
     let count = a.strides.shape.product()
-    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    #alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.comparisonOpName(op)
     let functionName = "\(opName)_vv_\(typeName)"
@@ -904,7 +904,7 @@ open class MPSBackend: CPUBackend {
       return try await super.compare(a, b, op: op, count: count, dtype: dtype)
     }
 
-    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    #alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.comparisonOpName(op)
     let functionName = "\(opName)_vs_\(typeName)"
@@ -935,7 +935,7 @@ open class MPSBackend: CPUBackend {
       return try await super.compare(a, b, op: op, count: count, dtype: dtype)
     }
 
-    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    #alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.comparisonOpName(op)
     let functionName = "\(opName)_sv_\(typeName)"
@@ -974,7 +974,7 @@ open class MPSBackend: CPUBackend {
     -> Tensor.Data
   {
     let count = a.strides.shape.product()
-    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    #alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.bitwiseOpName(op)
     let functionName = "\(opName)_\(dtype.metalSizeType)"
@@ -1006,14 +1006,14 @@ open class MPSBackend: CPUBackend {
     async throws
     -> Tensor.Data
   {
-    alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
+    #alwaysAssert(count <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let opName = Self.bitwiseOpName(op)
     let functionName = "\(opName)_\(dtype.metalSizeType)"
 
     let (aBuf, aCb) = try await gpuBuffer(a)
     let bData = b.bitsForBitwiseOp
-    alwaysAssert(bData.count == dtype.byteSize)
+    #alwaysAssert(bData.count == dtype.byteSize)
     let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
 
     return try await serialize { [self] in
@@ -1062,7 +1062,7 @@ open class MPSBackend: CPUBackend {
     -> Tensor.Data
   {
     let count = input.strides.shape.product()
-    alwaysAssert(count <= UInt32.max, "\(method) cannot operate on as many as \(count) values")
+    #alwaysAssert(count <= UInt32.max, "\(method) cannot operate on as many as \(count) values")
     guard let typeName = MPSBackend.CastTypes[dtype] else {
       if method == "mul_add" {
         return try await super.mulAdd(input: input, coeff: a, bias: b, dtype: dtype)
@@ -1116,7 +1116,7 @@ open class MPSBackend: CPUBackend {
     async throws
     -> (param: Tensor.Data, moment1: Tensor.Data, moment2: Tensor.Data)
   {
-    alwaysAssert(count <= UInt32.max, "normalize cannot operate on as many as \(count) values")
+    #alwaysAssert(count <= UInt32.max, "normalize cannot operate on as many as \(count) values")
     guard let typeName = MPSBackend.CastTypes[dtype] else {
       return try await super.adamW(
         param: param,
@@ -1178,7 +1178,7 @@ open class MPSBackend: CPUBackend {
         input: input, mean: mean, variance: variance, epsilon: epsilon, dtype: dtype)
     }
     let count = input.strides.shape.product()
-    alwaysAssert(count <= UInt32.max, "normalize cannot operate on as many as \(count) values")
+    #alwaysAssert(count <= UInt32.max, "normalize cannot operate on as many as \(count) values")
     let functionName = "normalize_\(typeName)"
 
     let (inBuf, inCb) = try await gpuBuffer(input.data)
@@ -1225,7 +1225,7 @@ open class MPSBackend: CPUBackend {
         variance: variance, outGrad: outGrad, epsilon: epsilon, sign: sign, dtype: dtype)
     }
     let count = variance.strides.shape.product()
-    alwaysAssert(
+    #alwaysAssert(
       count <= UInt32.max, "normalizeXGrad cannot operate on as many as \(count) values")
     let functionName = "normalize_x_grad_\(typeName)"
 
@@ -1270,7 +1270,7 @@ open class MPSBackend: CPUBackend {
         input: input, mean: mean, variance: variance, epsilon: epsilon, dtype: dtype)
     }
     let count = input.strides.shape.product()
-    alwaysAssert(
+    #alwaysAssert(
       count <= UInt32.max, "normalizeVarianceGrad cannot operate on as many as \(count) values")
     let functionName = "normalize_var_grad_\(typeName)"
 
@@ -1347,7 +1347,7 @@ open class MPSBackend: CPUBackend {
     guard let typeName = MPSBackend.CastTypes[dtype] else {
       return try await super.clamp(a, min: min, max: max, count: count, dtype: dtype)
     }
-    alwaysAssert(count <= UInt32.max, "cannot apply clamp() to \(count) values")
+    #alwaysAssert(count <= UInt32.max, "cannot apply clamp() to \(count) values")
 
     let functionName = "clamp_\(typeName)"
 
@@ -1401,7 +1401,7 @@ open class MPSBackend: CPUBackend {
     -> Tensor.Data
   {
     let count = mask.strides.shape.product()
-    alwaysAssert(count < UInt32.max, "cannot apply when() to \(count) elements")
+    #alwaysAssert(count < UInt32.max, "cannot apply when() to \(count) elements")
 
     let (maskBuf, maskCb) = try await gpuBuffer(mask.data)
     let (aBuf, aCb) = try await tensorOrScalarBuffer(a, dtype)
@@ -1442,7 +1442,7 @@ open class MPSBackend: CPUBackend {
   override open func broadcast(_ a: BroadcastData, dtype: Tensor.DType) async throws -> Tensor.Data
   {
     let outCount = a.strides.shape.product()
-    alwaysAssert(
+    #alwaysAssert(
       outCount <= Int(UInt32.max),
       "cannot apply repeat kernel to this many values")
 
@@ -1477,7 +1477,7 @@ open class MPSBackend: CPUBackend {
     -> Tensor.Data
   {
     let outCount = dims.outCount
-    alwaysAssert(
+    #alwaysAssert(
       outCount <= Int(UInt32.max),
       "cannot apply repeat kernel to this many values")
 
@@ -1509,7 +1509,7 @@ open class MPSBackend: CPUBackend {
     async throws
     -> Tensor.Data
   {
-    alwaysAssert(inputs.count == innerCounts.count)
+    #alwaysAssert(inputs.count == innerCounts.count)
     var inBufs = [MTLBuffer]()
     var inDeallocators = [Deallocator]()
     for input in inputs {
@@ -1733,7 +1733,7 @@ open class MPSBackend: CPUBackend {
 
   override open func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data {
     let outputCount = shape.product()
-    alwaysAssert(outputCount <= Int(UInt32.max), "cannot apply kernel to this many values")
+    #alwaysAssert(outputCount <= Int(UInt32.max), "cannot apply kernel to this many values")
 
     let (buffer, bufferCb) = try await allocateBuf(outputCount * Tensor.DType.int64.byteSize)
     return try await serialize { [self] in
@@ -2076,14 +2076,14 @@ open class MPSBackend: CPUBackend {
       let completion = completionBuffer(
         label: "batchedMatmul", deallocators: [aCb, bCb]
       ) { buf in
-        alwaysAssert(
+        #alwaysAssert(
           aBuf.allocatedSize >= matrixCount * aShape.0 * aShape.1 * dtype.byteSize,
           "matrix A buffer underflow")
-        alwaysAssert(
+        #alwaysAssert(
           bBuf.allocatedSize >= matrixCount * bShape.0 * bShape.1 * dtype.byteSize,
           "matrix B buffer underflow \(matrixCount) * \(bShape) * \(dtype.byteSize) vs \(bBuf.allocatedSize)"
         )
-        alwaysAssert(
+        #alwaysAssert(
           output.allocatedSize >= matrixCount * rows * cols * dtype.byteSize,
           "output matrix buffer underflow")
         mm.graph.encode(
@@ -2190,10 +2190,10 @@ open class MPSBackend: CPUBackend {
       let completion = completionBuffer(
         label: "conv2D", deallocators: [imageCb, kernelCb]
       ) { buf in
-        alwaysAssert(
+        #alwaysAssert(
           imageBuf.allocatedSize >= imageShape.product() * dtype.byteSize,
           "input image buffer underflow")
-        alwaysAssert(
+        #alwaysAssert(
           kernelBuf.allocatedSize >= kernelShape.product() * dtype.byteSize,
           "kernel buffer underflow")
         op.graph.encode(
@@ -2305,10 +2305,10 @@ open class MPSBackend: CPUBackend {
       let completion = completionBuffer(
         label: "conv2DKernelGrad", deallocators: [imageCb, outGradCb]
       ) { buf in
-        alwaysAssert(
+        #alwaysAssert(
           imageBuf.allocatedSize >= imageShape.product() * dtype.byteSize,
           "input image buffer underflow")
-        alwaysAssert(
+        #alwaysAssert(
           outGradBuf.allocatedSize >= outShape.product() * dtype.byteSize,
           "output gradient buffer underflow")
         op.graph.encode(
@@ -2641,7 +2641,7 @@ func nextAllocatorBucket(_ length: Int) -> Int {
     while i < length && i >= 4096 {
       i *= 2
     }
-    alwaysAssert(i >= 4096, "allocation size overflow: \(length)")
+    #alwaysAssert(i >= 4096, "allocation size overflow: \(length)")
     return i
   }
 }

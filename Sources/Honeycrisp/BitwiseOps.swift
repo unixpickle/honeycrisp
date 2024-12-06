@@ -59,7 +59,7 @@ extension Tensor {
 
   @recordCaller
   internal static func _bitwise(lhs: Tensor, rhs: Tensor, op: BitwiseOp) -> Tensor {
-    alwaysAssert(
+    #alwaysAssert(
       lhs.dtype == rhs.dtype,
       "dtypes for bitwise operator do not match: \(lhs.dtype) and \(rhs.dtype)")
 
@@ -81,7 +81,7 @@ extension Tensor {
   internal static func _bitwise<T: TensorElementBitPattern>(lhs: Tensor, rhs: T, op: BitwiseOp)
     -> Tensor
   {
-    alwaysAssert(
+    #alwaysAssert(
       rhs.bitsForBitwiseOp.count == lhs.dtype.byteSize,
       "dtype \(lhs.dtype) cannot be used with scalar type \(T.self) in bitwise operations because they are different sizes"
     )
@@ -98,7 +98,7 @@ extension Tensor {
   internal static func _bitwise<T: TensorElementBitPattern>(lhs: T, rhs: Tensor, op: BitwiseOp)
     -> Tensor
   {
-    alwaysAssert(
+    #alwaysAssert(
       lhs.bitsForBitwiseOp.count == rhs.dtype.byteSize,
       "dtype \(rhs.dtype) cannot be used with scalar type \(T.self) in bitwise operations because they are different sizes"
     )

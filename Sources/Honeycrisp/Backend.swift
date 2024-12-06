@@ -86,7 +86,7 @@ open class Backend {
     /// This should never be called after close().
     public func put(_ x: T) {
       lock.lock()
-      alwaysAssert(!closed, "cannot put() on queue after closing")
+      #alwaysAssert(!closed, "cannot put() on queue after closing")
       items.insert(x, at: 0)
       lock.unlock()
       sem.signal()

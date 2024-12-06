@@ -16,27 +16,27 @@ extension Tensor {
     step: Float
   ) -> (param: Tensor, moment1: Tensor, moment2: Tensor) {
     if Tensor.isGradEnabled {
-      alwaysAssert(!param.needsGrad, "adamW does not support gradients")
-      alwaysAssert(!grad.needsGrad, "adamW does not support gradients")
-      alwaysAssert(!moment1.needsGrad, "adamW does not support gradients")
-      alwaysAssert(!moment2.needsGrad, "adamW does not support gradients")
+      #alwaysAssert(!param.needsGrad, "adamW does not support gradients")
+      #alwaysAssert(!grad.needsGrad, "adamW does not support gradients")
+      #alwaysAssert(!moment1.needsGrad, "adamW does not support gradients")
+      #alwaysAssert(!moment2.needsGrad, "adamW does not support gradients")
     }
-    alwaysAssert(
+    #alwaysAssert(
       grad.dtype == param.dtype,
       "mismatching dtypes for param \(param.dtype) and grad \(grad.dtype)")
-    alwaysAssert(
+    #alwaysAssert(
       grad.dtype == moment1.dtype,
       "mismatching dtypes for param \(param.dtype) and moment1 \(moment1.dtype)")
-    alwaysAssert(
+    #alwaysAssert(
       grad.dtype == moment2.dtype,
       "mismatching dtypes for param \(param.dtype) and moment2 \(moment2.dtype)")
-    alwaysAssert(
+    #alwaysAssert(
       grad.shape == param.shape,
       "mismatching shapes for param \(param.shape) and grad \(grad.shape)")
-    alwaysAssert(
+    #alwaysAssert(
       grad.shape == moment1.shape,
       "mismatching shapes for param \(param.shape) and moment1 \(moment1.shape)")
-    alwaysAssert(
+    #alwaysAssert(
       grad.shape == moment2.shape,
       "mismatching shapes for param \(param.shape) and moment2 \(moment2.shape)")
 

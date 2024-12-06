@@ -146,7 +146,7 @@ extension Tensor {
 
   @recordCaller
   internal func _expandStrides(shape newShape: [Int]) -> BroadcastStrides {
-    alwaysAssert(
+    #alwaysAssert(
       newShape.count >= shape.count,
       "cannot broadcast shape \(shape) to shorter shape \(newShape)"
     )
@@ -156,7 +156,7 @@ extension Tensor {
     for (i, (oldSize, oldStride)) in zip(shape, stridesForShape(shape)).enumerated() {
       let newSize = newShape[i + extraAxes]
       if newSize != oldSize {
-        alwaysAssert(
+        #alwaysAssert(
           oldSize == 1,
           "axis \(i) cannot expand from size \(oldSize) to \(newSize): old shape \(shape), new shape \(newShape)"
         )

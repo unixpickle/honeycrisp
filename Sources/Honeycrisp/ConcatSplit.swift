@@ -20,19 +20,19 @@ extension Tensor {
       Backtrace.record(fn, function: function, file: file, line: line)
     }
 
-    record { alwaysAssert(tensors.count > 0, "cannot concatenate zero tensors") }
+    record { #alwaysAssert(tensors.count > 0, "cannot concatenate zero tensors") }
 
     let axis = record { tensors[0].positiveAxis(axis) }
     record {
-      alwaysAssert(
+      #alwaysAssert(
         axis >= 0 && axis < tensors[0].shape.count,
         "axis \(axis) out of bounds for shape \(tensors[0].shape)")
 
       for (i, t) in tensors.enumerated() {
-        alwaysAssert(
+        #alwaysAssert(
           t.dtype == tensors[0].dtype,
           "tensor at index \(i) has different dtype \(t.dtype) than tensor 0 \(tensors[0].dtype)")
-        alwaysAssert(
+        #alwaysAssert(
           t.shape.count == tensors[0].shape.count && t.shape[..<axis] == tensors[0].shape[..<axis]
             && t.shape[(axis + 1)...] == tensors[0].shape[(axis + 1)...],
           "tensor at index \(i) has shape \(t.shape) which is incompatible with shape at index 0 \(tensors[0].shape)"
@@ -88,8 +88,8 @@ extension Tensor {
   @recordCaller
   private func _split(axis: Int, counts: [Int]) -> [Tensor] {
     let axis = positiveAxis(axis)
-    alwaysAssert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
-    alwaysAssert(
+    #alwaysAssert(axis >= 0 && axis < shape.count, "axis \(axis) out of bounds for shape \(shape)")
+    #alwaysAssert(
       shape[axis] == counts.sum(),
       "split counts \(counts) do not sum to axis \(axis) of shape \(shape)")
     var results: [Tensor] = []
@@ -104,10 +104,10 @@ extension Tensor {
   @recordCaller
   private func _chunk(axis: Int, count: Int) -> [Tensor] {
     let axis = positiveAxis(axis)
-    alwaysAssert(
+    #alwaysAssert(
       shape[axis] >= count,
       "shape \(shape) incompatible with chunk of count \(count) on axis \(axis)")
-    alwaysAssert(
+    #alwaysAssert(
       shape[axis] % count == 0,
       "shape \(shape) incompatible with chunk of count \(count) on axis \(axis)")
     let sizes = [Int](repeating: shape[axis] / count, count: count)

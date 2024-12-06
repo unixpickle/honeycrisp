@@ -95,7 +95,7 @@ extension Tensor {
 
   @recordCaller
   internal func _elemwiseGrad(op: ElemwiseOp, grad: Tensor) -> Tensor {
-    alwaysAssert(!self.needsGrad && !grad.needsGrad, "second derivatives are not supported")
+    #alwaysAssert(!self.needsGrad && !grad.needsGrad, "second derivatives are not supported")
     let backend = Backend.current
     let newData = Tensor.createDataTask(self, grad) { t, grad in
       try await backend.elemwise(

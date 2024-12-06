@@ -69,8 +69,8 @@ extension Tensor {
 
   @recordCaller
   private func _gather(axis: Int, indices: Tensor, indicesAreUnique: Bool = false) -> Tensor {
-    alwaysAssert(shape.count > 0, "cannot gather() on a zero-dimensional tensor")
-    alwaysAssert(
+    #alwaysAssert(shape.count > 0, "cannot gather() on a zero-dimensional tensor")
+    #alwaysAssert(
       indices.dtype == .int64,
       "can only gather with indices of dtype int64, but got \(indices.dtype)")
 
@@ -113,8 +113,8 @@ extension Tensor {
   private func _scatter(axis: Int, count: Int, indices: Tensor, indicesAreUnique: Bool = false)
     -> Tensor
   {
-    alwaysAssert(shape.count > 0, "cannot scatter() on a zero-dimensional tensor")
-    alwaysAssert(
+    #alwaysAssert(shape.count > 0, "cannot scatter() on a zero-dimensional tensor")
+    #alwaysAssert(
       indices.dtype == .int64,
       "can only scatter with indices of dtype int64, but got \(indices.dtype)")
 

@@ -54,7 +54,7 @@ extension Tensor {
 
   @recordCaller
   private func _checkNaN(onForward: String? = nil, onGrad: String? = nil) -> Tensor {
-    alwaysAssert(dtype == .float32)
+    #alwaysAssert(dtype == .float32)
     if onForward == nil && onGrad == nil {
       return self
     }

@@ -794,7 +794,7 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    alwaysAssert(min != nil || max != nil, "cannot use clamp() without bounds")
+    #alwaysAssert(min != nil || max != nil, "cannot use clamp() without bounds")
 
     return try await withBuffers(count * dtype.byteSize, a) { buffer, aBuf in
       func apply<T1: NumericTensorElement>(_ min: T1?, _ max: T1?) async throws {
@@ -1457,7 +1457,7 @@ open class CPUBackend: Backend {
     async throws
     -> Tensor.Data
   {
-    alwaysAssert(inputs.count == innerCounts.count)
+    #alwaysAssert(inputs.count == innerCounts.count)
     let totalInner = innerCounts.sum()
     return try await withBuffers(outerCount * totalInner * dtype.byteSize, inputs) {
       buffer, inBufs in
