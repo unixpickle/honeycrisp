@@ -24,7 +24,9 @@ open class MPSBackend: CPUBackend {
       self.trace = Backtrace.current + [CodeLocation(function: function, file: file, line: line)]
     }
 
-    public func callAsFunction() {
+    @recordCaller
+    private func _callAsFunction() {
+      #alwaysAssert(!called, "double free")
       called = true
       fn()
     }

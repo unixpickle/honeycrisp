@@ -814,3 +814,7 @@ open class Backend {
   }
 
 }
+
+public protocol DataAllocator {
+  func allocate(_ byteCount: Int) async throws -> Tensor.Data
+}

@@ -6,7 +6,7 @@ import HCBacktrace
 ///
 /// This may use accelerated APIs to speed up computation, but all computations will still
 /// be done on the CPU (rather than the GPU or the ANE).
-open class CPUBackend: Backend {
+open class CPUBackend: Backend, DataAllocator {
 
   public class CPUData: Tensor.Data {
     public let data: UnsafeMutableRawPointer
