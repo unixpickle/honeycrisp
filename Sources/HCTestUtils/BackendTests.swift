@@ -162,34 +162,24 @@ open class BackendTests {
     for dtype: Tensor.DType in [.float32, .float16] {
       let atol: Float = dtype == .float32 ? 1e-4 : 2e-2
       let rtol: Float = dtype == .float32 ? 1e-4 : 2e-2
-      for xShape in [[6], [3, 6], [5, 3, 6]] {
-        for meanShape in [[6], [1, 6], [3, 6], [5, 1, 6], [5, 3, 6], [3, 1], [5, 1, 1]] {
-          for varianceShape in [
-            [6], [1, 6], [3, 6], [5, 1, 6], [5, 3, 6], [3, 1], [5, 1, 1],
-          ] {
-            let x = Tensor(randn: xShape, dtype: dtype)
-            let mean = Tensor(randn: meanShape, dtype: dtype)
-            let variance = Tensor(rand: varianceShape, dtype: dtype)
-            var actualXGrad: Tensor?
-            var actualMeanGrad: Tensor?
-            var actualVarGrad: Tensor?
-            var expectedXGrad: Tensor?
-            var expectedMeanGrad: Tensor?
-            var expectedVarGrad: Tensor?
-            let actualOutput = x.onGrad { actualXGrad = $0 }.normalize(
-              mean: mean.onGrad { actualMeanGrad = $0 },
-              variance: variance.onGrad { actualVarGrad = $0 }, epsilon: epsilon)
-            let expectedOutput =
-              (x.onGrad { expectedXGrad = $0 } - mean.onGrad { expectedMeanGrad = $0 })
-              * (variance.onGrad { expectedVarGrad = $0 } + epsilon).rsqrt()
-            try await assertClose(actualOutput, expectedOutput, atol: atol, rtol: rtol)
-            let outGrad = Tensor(randLike: actualOutput)
-            actualOutput.backward(outGrad)
-            expectedOutput.backward(outGrad)
-            try await assertClose(actualXGrad!, expectedXGrad!, atol: atol, rtol: rtol)
-            try await assertClose(actualMeanGrad!, expectedMeanGrad!, atol: atol, rtol: rtol)
-            try await assertClose(actualVarGrad!, expectedVarGrad!, atol: atol, rtol: rtol)
-          }
+      for shape in [[6, 1025], [1, 1025], [6, 8], [256, 4], [256, 256], [1025, 4]] {
+        for axis in 0..<shape.count {
+          let xData = Tensor(randn: shape, dtype: dtype)
+          let outGrad = Tensor(randn: shape, dtype: dtype)
+          var xGradExpected: Tensor? = nil
+          var x = xData.onGrad { g in xGradExpected = g }.cast(.float32)
+          let mean = x.mean(axis: axis, keepdims: true)
+          let variance = (x - mean).pow(2).mean(axis: axis, keepdims: true)
+          let normed = (x - mean) / (variance + epsilon).sqrt()
+          normed.backward(outGrad.cast(as: normed))
+
+          var xGradActual: Tensor? = nil
+          x = xData.onGrad { g in xGradActual = g }
+          let normedFused = x.normalize(axis: axis, eps: epsilon)
+          normedFused.backward(outGrad)
+
+          try await assertClose(normed, normedFused.cast(dtype), atol: atol, rtol: rtol)
+          try await assertClose(xGradExpected!, xGradActual!, atol: atol, rtol: rtol)
         }
       }
     }

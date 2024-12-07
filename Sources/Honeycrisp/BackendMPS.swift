@@ -397,7 +397,7 @@ open class MPSBackend: CPUBackend {
       for op in [
         "vector_pow", "vector_pow_scaled", "log", "recip", "exp", "sigmoid", "sigmoid_grad", "gelu",
         "gelu_grad", "sin", "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "rand",
-        "randn", "normalize", "normalize_var_grad", "normalize_x_grad", "log_softmax",
+        "randn", "normalize_inner", "normalize_inner_grad", "log_softmax",
         "log_softmax_grad", "adamw",
       ] {
         names.append("\(op)_\(type)")
@@ -1166,146 +1166,74 @@ open class MPSBackend: CPUBackend {
     }
   }
 
-  override open func normalize<T: TensorElement>(
-    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T,
-    dtype: Tensor.DType
+  override open func normalize<T: NumericTensorElement>(
+    input: Tensor.Data, dims: ReduceDims, eps: T, dtype: Tensor.DType
   )
-    async throws
-    -> Tensor.Data
+    async throws -> Tensor.Data
   {
-    guard let typeName = MPSBackend.CastTypes[dtype] else {
-      return try await super.normalize(
-        input: input, mean: mean, variance: variance, epsilon: epsilon, dtype: dtype)
-    }
-    let count = input.strides.shape.product()
-    #alwaysAssert(count <= UInt32.max, "normalize cannot operate on as many as \(count) values")
-    let functionName = "normalize_\(typeName)"
-
-    let (inBuf, inCb) = try await gpuBuffer(input.data)
-    let (meanBuf, meanCb) = try await gpuBuffer(mean.data)
-    let (varianceBuf, varianceCb) = try await gpuBuffer(variance.data)
-    let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
-
-    let inputStrides = try MPSBackend.createStrides(input.strides)
-    let meanStrides = try MPSBackend.createStrides(mean.strides)
-    let varianceStrides = try MPSBackend.createStrides(variance.strides)
-
-    return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder(
-        label: "normalize", deallocators: [inCb, meanCb, varianceCb]
-      ) { buf, enc in
-        let state = try getFunction(name: functionName)
-        try setArguments(
-          enc, .buffer(inBuf), .buffer(meanBuf), .buffer(varianceBuf),
-          .buffer(output),
-          .opaque(
-            (
-              epsilon.toFloat(),
-              inputStrides,
-              meanStrides,
-              varianceStrides,
-              UInt32(count)
-            ))
-        )
-        dispatch1D(enc, state: state, threadCount: count)
+    if dims.innerCount == 1 && (dtype == .float16 || dtype == .float32) {
+      let totalCount = dims.outerCount * dims.reduceCount * dims.innerCount
+      let (aBuf, aCb) = try await gpuBuffer(input)
+      let (output, outputCb) = try await allocateBuf(totalCount * dtype.byteSize)
+      return try await serialize { [self] in
+        let completion = try completionBufferAndEncoder(
+          label: "normalize", deallocators: [aCb]
+        ) { buf, enc in
+          try setArguments(
+            enc,
+            .buffer(aBuf),
+            .buffer(output),
+            .float(eps.toFloat()),
+            .uint(UInt32(dims.reduceCount))
+          )
+          let functionName = "normalize_inner_\(MPSBackend.CastTypes[dtype]!)"
+          let state = try getFunction(name: functionName)
+          let gridSize = MTLSize(width: dims.outerCount * 256, height: 1, depth: 1)
+          let threadGroupSize = MTLSize(width: 256, height: 1, depth: 1)
+          enc.setComputePipelineState(state)
+          enc.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        }
+        return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
       }
-      return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
+    } else {
+      return try await super.normalize(input: input, dims: dims, eps: eps, dtype: dtype)
     }
   }
 
-  override open func normalizeXGrad<T: TensorElement>(
-    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float,
-    dtype: Tensor.DType
+  override open func normalizeGrad<T: NumericTensorElement>(
+    input: Tensor.Data, outGrad: Tensor.Data, dims: ReduceDims, eps: T, dtype: Tensor.DType
   )
-    async throws
-    -> Tensor.Data
+    async throws -> Tensor.Data
   {
-    guard let typeName = MPSBackend.CastTypes[dtype] else {
-      return try await super.normalizeXGrad(
-        variance: variance, outGrad: outGrad, epsilon: epsilon, sign: sign, dtype: dtype)
-    }
-    let count = variance.strides.shape.product()
-    #alwaysAssert(
-      count <= UInt32.max, "normalizeXGrad cannot operate on as many as \(count) values")
-    let functionName = "normalize_x_grad_\(typeName)"
-
-    let (varianceBuf, varianceCb) = try await gpuBuffer(variance.data)
-    let (outGradBuf, outGradCb) = try await gpuBuffer(outGrad.data)
-    let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
-
-    let varianceStrides = try MPSBackend.createStrides(variance.strides)
-    let outGradStrides = try MPSBackend.createStrides(outGrad.strides)
-
-    return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder(
-        label: "normalizeXGrad", deallocators: [varianceCb, outGradCb]
-      ) { buf, enc in
-        let state = try getFunction(name: functionName)
-        try setArguments(
-          enc, .buffer(varianceBuf), .buffer(outGradBuf),
-          .buffer(output),
-          .opaque(
-            (
-              epsilon.toFloat(),
-              sign.toFloat(),
-              varianceStrides,
-              outGradStrides,
-              UInt32(count)
-            )))
-        dispatch1D(enc, state: state, threadCount: count)
+    if dims.innerCount == 1 && (dtype == .float16 || dtype == .float32) {
+      let totalCount = dims.outerCount * dims.reduceCount * dims.innerCount
+      let (aBuf, aCb) = try await gpuBuffer(input)
+      let (gradBuf, gradCb) = try await gpuBuffer(outGrad)
+      let (output, outputCb) = try await allocateBuf(totalCount * dtype.byteSize)
+      return try await serialize { [self] in
+        let completion = try completionBufferAndEncoder(
+          label: "normalizeGrad", deallocators: [aCb, gradCb]
+        ) { buf, enc in
+          try setArguments(
+            enc,
+            .buffer(aBuf),
+            .buffer(gradBuf),
+            .buffer(output),
+            .float(eps.toFloat()),
+            .uint(UInt32(dims.reduceCount))
+          )
+          let functionName = "normalize_inner_grad_\(MPSBackend.CastTypes[dtype]!)"
+          let state = try getFunction(name: functionName)
+          let gridSize = MTLSize(width: dims.outerCount * 256, height: 1, depth: 1)
+          let threadGroupSize = MTLSize(width: 256, height: 1, depth: 1)
+          enc.setComputePipelineState(state)
+          enc.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+        }
+        return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
       }
-      return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
-    }
-  }
-
-  override open func normalizeVarianceGrad<T: TensorElement>(
-    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
-    epsilon: T, dtype: Tensor.DType
-  )
-    async throws
-    -> Tensor.Data
-  {
-    guard let typeName = MPSBackend.CastTypes[dtype] else {
-      return try await super.normalize(
-        input: input, mean: mean, variance: variance, epsilon: epsilon, dtype: dtype)
-    }
-    let count = input.strides.shape.product()
-    #alwaysAssert(
-      count <= UInt32.max, "normalizeVarianceGrad cannot operate on as many as \(count) values")
-    let functionName = "normalize_var_grad_\(typeName)"
-
-    let (inBuf, inCb) = try await gpuBuffer(input.data)
-    let (meanBuf, meanCb) = try await gpuBuffer(mean.data)
-    let (varianceBuf, varianceCb) = try await gpuBuffer(variance.data)
-    let (outGradBuf, outGradCb) = try await gpuBuffer(outGrad.data)
-    let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
-
-    let inputStrides = try MPSBackend.createStrides(input.strides)
-    let meanStrides = try MPSBackend.createStrides(mean.strides)
-    let varianceStrides = try MPSBackend.createStrides(variance.strides)
-    let outGradStrides = try MPSBackend.createStrides(outGrad.strides)
-
-    return try await serialize { [self] in
-      let completion = try completionBufferAndEncoder(
-        label: "normalizeVarianceGrad", deallocators: [inCb, meanCb, varianceCb, outGradCb]
-      ) { buf, enc in
-        let state = try getFunction(name: functionName)
-        try setArguments(
-          enc, .buffer(inBuf), .buffer(meanBuf), .buffer(varianceBuf),
-          .buffer(outGradBuf),
-          .buffer(output),
-          .opaque(
-            (
-              epsilon.toFloat(),
-              inputStrides,
-              meanStrides,
-              varianceStrides,
-              outGradStrides,
-              UInt32(count)
-            )))
-        dispatch1D(enc, state: state, threadCount: count)
-      }
-      return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
+    } else {
+      return try await super.normalizeGrad(
+        input: input, outGrad: outGrad, dims: dims, eps: eps, dtype: dtype)
     }
   }
 

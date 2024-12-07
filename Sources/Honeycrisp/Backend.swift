@@ -244,51 +244,200 @@ open class Backend {
     throw BackendError.notImplemented("addMul")
   }
 
-  /// Normalize an input given a (broadcasted) mean and variance.
+  /// Normalize an input along a given axis.
   ///
-  /// Computes
+  /// Uses the formula `(x - mu) / sqrt(sigma^2 + eps)`
+  /// where sigma^2 is estimated without bias correction.
   ///
-  /// ```swift
-  /// (input - mean) / (variance + epsilson).sqrt()
-  /// ````
-  open func normalize<T: TensorElement>(
-    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T,
-    dtype: Tensor.DType
+  /// Defaults to using other primitives to implement this operation.
+  open func normalize<T: NumericTensorElement>(
+    input: Tensor.Data, dims: ReduceDims, eps: T, dtype: Tensor.DType
   )
-    async throws
-    -> Tensor.Data
+    async throws -> Tensor.Data
   {
-    throw BackendError.notImplemented("normalize")
+    let fullStrides = BroadcastStrides(contiguousForShape: [
+      dims.outerCount, dims.reduceCount, dims.innerCount,
+    ])
+    let reducedStrides = BroadcastStrides(
+      shape: fullStrides.shape, strides: [dims.innerCount, 0, 1])
+    let mean = try await binaryOp(
+      try await reduce(input, op: .sum, dims: dims, dtype: dtype),
+      1.0 / Float(dims.reduceCount),
+      op: .mul,
+      count: reducedStrides.dataCount,
+      dtype: dtype
+    )
+    let centered = try await binaryOp(
+      BroadcastData(strides: fullStrides, data: input),
+      BroadcastData(strides: reducedStrides, data: mean),
+      op: .sub,
+      dtype: dtype
+    )
+    let variance = try await binaryOp(
+      try await reduce(
+        try await pow(
+          centered,
+          2.0,
+          scale: 1.0,
+          scales: nil,
+          count: fullStrides.dataCount,
+          dtype: dtype
+        ),
+        op: .sum,
+        dims: dims,
+        dtype: dtype
+      ),
+      1.0 / Float(dims.reduceCount),
+      op: .mul,
+      count: reducedStrides.dataCount,
+      dtype: dtype
+    )
+    let normalizer = try await pow(
+      try await binaryOp(
+        variance,
+        eps,
+        op: .add,
+        count: reducedStrides.dataCount,
+        dtype: dtype
+      ),
+      -0.5,
+      scale: 1.0,
+      scales: nil,
+      count: reducedStrides.dataCount,
+      dtype: dtype
+    )
+    return try await binaryOp(
+      BroadcastData(strides: fullStrides, data: centered),
+      BroadcastData(strides: reducedStrides, data: normalizer),
+      op: .mul,
+      dtype: dtype
+    )
   }
 
-  /// Compute the gradient of ``Backend/normalize(input:mean:variance:epsilon:count:dtype:)``
-  /// with respect to the input or the mean (depending on `sign`).
+  /// Compute the gradient of the normalize() operation.
   ///
-  /// The result is the same shape as the output of the operation, not necessarily the shape
-  /// of the (pre-broadcasted) input.
-  open func normalizeXGrad<T: TensorElement>(
-    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float,
-    dtype: Tensor.DType
+  /// Defaults to using other primitives to implement this operation.
+  open func normalizeGrad<T: NumericTensorElement>(
+    input: Tensor.Data, outGrad: Tensor.Data, dims: ReduceDims, eps: T, dtype: Tensor.DType
   )
-    async throws
-    -> Tensor.Data
+    async throws -> Tensor.Data
   {
-    throw BackendError.notImplemented("normalizeXGrad")
-  }
+    let fullStrides = BroadcastStrides(contiguousForShape: [
+      dims.outerCount, dims.reduceCount, dims.innerCount,
+    ])
+    let reducedStrides = BroadcastStrides(
+      shape: fullStrides.shape, strides: [dims.innerCount, 0, 1])
+    let mean = try await binaryOp(
+      try await reduce(input, op: .sum, dims: dims, dtype: dtype),
+      1.0 / Float(dims.reduceCount),
+      op: .mul,
+      count: reducedStrides.dataCount,
+      dtype: dtype
+    )
+    let centered = try await binaryOp(
+      BroadcastData(strides: fullStrides, data: input),
+      BroadcastData(strides: reducedStrides, data: mean),
+      op: .sub,
+      dtype: dtype
+    )
+    let variance = try await binaryOp(
+      try await reduce(
+        try await pow(
+          centered,
+          2.0,
+          scale: 1.0,
+          scales: nil,
+          count: fullStrides.dataCount,
+          dtype: dtype
+        ),
+        op: .sum,
+        dims: dims,
+        dtype: dtype
+      ),
+      1.0 / Float(dims.reduceCount),
+      op: .mul,
+      count: reducedStrides.dataCount,
+      dtype: dtype
+    )
+    let stableVariance = try await binaryOp(
+      variance,
+      eps,
+      op: .add,
+      count: reducedStrides.dataCount,
+      dtype: dtype
+    )
+    let normalizer1 = try await pow(
+      stableVariance,
+      -0.5,
+      scale: 1.0,
+      scales: nil,
+      count: reducedStrides.dataCount,
+      dtype: dtype
+    )
+    let normalizer2 = try await pow(
+      stableVariance,
+      -1.5,
+      scale: 1 / Float(dims.reduceCount),
+      scales: nil,
+      count: reducedStrides.dataCount,
+      dtype: dtype
+    )
 
-  /// Compute the gradient of ``Backend/normalize(input:mean:variance:epsilon:count:dtype:)``
-  /// with respect to the variance.
-  ///
-  /// The result is the same shape as the output of the operation, not necessarily the shape
-  /// of the (pre-broadcasted) variance.
-  open func normalizeVarianceGrad<T: TensorElement>(
-    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
-    epsilon: T, dtype: Tensor.DType
-  )
-    async throws
-    -> Tensor.Data
-  {
-    throw BackendError.notImplemented("normalizeVarianceGrad")
+    let meanGrad = try await binaryOp(
+      try await reduce(
+        outGrad,
+        op: .sum,
+        dims: dims,
+        dtype: dtype
+      ),
+      1 / Float(dims.reduceCount),
+      op: .mul,
+      count: reducedStrides.dataCount,
+      dtype: dtype
+    )
+    let centeredGrad = try await binaryOp(
+      BroadcastData(strides: fullStrides, data: outGrad),
+      BroadcastData(strides: reducedStrides, data: meanGrad),
+      op: .sub,
+      dtype: dtype
+    )
+
+    let covTerm = try await reduce(
+      try await binaryOp(
+        BroadcastData(strides: fullStrides, data: centered),
+        BroadcastData(strides: fullStrides, data: outGrad),
+        op: .mul,
+        dtype: dtype
+      ),
+      op: .sum,
+      dims: dims,
+      dtype: dtype
+    )
+
+    let term1 = try await binaryOp(
+      BroadcastData(strides: fullStrides, data: centeredGrad),
+      BroadcastData(strides: reducedStrides, data: normalizer1),
+      op: .mul,
+      dtype: dtype
+    )
+    let covTermTimesCentered = try await binaryOp(
+      BroadcastData(strides: fullStrides, data: centered),
+      BroadcastData(strides: reducedStrides, data: covTerm),
+      op: .mul,
+      dtype: dtype
+    )
+    let term2 = try await binaryOp(
+      BroadcastData(strides: fullStrides, data: covTermTimesCentered),
+      BroadcastData(strides: reducedStrides, data: normalizer2),
+      op: .mul,
+      dtype: dtype
+    )
+    return try await binaryOp(
+      BroadcastData(strides: fullStrides, data: term1),
+      BroadcastData(strides: fullStrides, data: term2),
+      op: .sub,
+      dtype: dtype
+    )
   }
 
   /// Perform a broadcasted, elementwise comparison between two tensors, computing an

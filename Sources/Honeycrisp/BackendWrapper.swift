@@ -127,39 +127,21 @@ open class BackendWrapper: Backend {
     try await wrapped.addMul(input: input, bias: bias, coeff: coeff, dtype: dtype)
   }
 
-  override public func normalize<T: TensorElement>(
-    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, epsilon: T,
-    dtype: Tensor.DType
+  override open func normalize<T: NumericTensorElement>(
+    input: Tensor.Data, dims: ReduceDims, eps: T, dtype: Tensor.DType
   )
-    async throws
-    -> Tensor.Data
+    async throws -> Tensor.Data
   {
-    try await wrapped.normalize(
-      input: input, mean: mean, variance: variance, epsilon: epsilon, dtype: dtype)
+    try await wrapped.normalize(input: input, dims: dims, eps: eps, dtype: dtype)
   }
 
-  override public func normalizeXGrad<T: TensorElement>(
-    variance: BroadcastData, outGrad: BroadcastData, epsilon: T, sign: Float,
-    dtype: Tensor.DType
+  override open func normalizeGrad<T: NumericTensorElement>(
+    input: Tensor.Data, outGrad: Tensor.Data, dims: ReduceDims, eps: T, dtype: Tensor.DType
   )
-    async throws
-    -> Tensor.Data
+    async throws -> Tensor.Data
   {
-    try await wrapped.normalizeXGrad(
-      variance: variance, outGrad: outGrad, epsilon: epsilon, sign: sign, dtype: dtype
-    )
-  }
-
-  override public func normalizeVarianceGrad<T: TensorElement>(
-    input: BroadcastData, mean: BroadcastData, variance: BroadcastData, outGrad: BroadcastData,
-    epsilon: T, dtype: Tensor.DType
-  )
-    async throws
-    -> Tensor.Data
-  {
-    try await wrapped.normalizeVarianceGrad(
-      input: input, mean: mean, variance: variance, outGrad: outGrad, epsilon: epsilon,
-      dtype: dtype)
+    try await wrapped.normalizeGrad(
+      input: input, outGrad: outGrad, dims: dims, eps: eps, dtype: dtype)
   }
 
   override public func compare(

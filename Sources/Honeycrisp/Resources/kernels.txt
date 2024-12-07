@@ -1134,3 +1134,111 @@ DEFINE_CAST(long, half)
 
 DEFINE_LOG_SOFTMAX(half)
 DEFINE_LOG_SOFTMAX(float)
+
+inline float reduceSumLocal(uint blockSize, uint iters, threadgroup float* reduceBuffer, uint idxInBlock, float value) {
+    for (uint i = 0; i < iters; i++) {
+        reduceBuffer[idxInBlock] = value;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        uint otherIdx = idxInBlock ^ (1 << i);
+        float otherValue = reduceBuffer[otherIdx];
+        value += otherValue;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    return value;
+}
+
+#define DEFINE_NORMALIZE_INNER(type) \
+    kernel void normalize_inner_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant float &epsilon [[buffer(2)]], \
+        constant uint &numCols [[buffer(3)]], \
+        uint blockIdx [[threadgroup_position_in_grid]], \
+        uint idxInBlock [[thread_position_in_threadgroup]] \
+    ) { \
+        const uint blockSize = 256; \
+        threadgroup float reduceBuffer[256]; \
+        \
+        uint rowOffset = blockIdx * numCols; \
+        float localSum = 0.0; \
+        float localSumSq = 0.0; \
+        for (uint i = 0; i * blockSize < numCols; i++) { \
+            uint col = i * blockSize + idxInBlock; \
+            if (col < numCols) { \
+                float x = (float)input[rowOffset + col]; \
+                localSum += x; \
+                localSumSq += x * x; \
+            } \
+        } \
+        localSum = reduceSumLocal(blockSize, 8, reduceBuffer, idxInBlock, localSum); \
+        localSumSq = reduceSumLocal(blockSize, 8, reduceBuffer, idxInBlock, localSumSq); \
+        float mean = localSum / (float)numCols; \
+        float variance = (localSumSq / (float)numCols) - mean * mean; \
+        if (variance < 0) { \
+            variance = 0; \
+        } \
+        float factor = 1 / sqrt(variance + epsilon); \
+        for (uint i = 0; i * blockSize < numCols; i++) { \
+            uint col = i * blockSize + idxInBlock; \
+            if (col < numCols) { \
+                float x = (float)input[rowOffset + col]; \
+                float y = (x - mean) * factor; \
+                output[rowOffset + col] = y; \
+            } \
+        } \
+    } \
+    kernel void normalize_inner_grad_##type( \
+        device const type* input [[buffer(0)]], \
+        device const type* outGrad [[buffer(1)]], \
+        device type* output [[buffer(2)]], \
+        constant float &epsilon [[buffer(3)]], \
+        constant uint &numCols [[buffer(4)]], \
+        uint blockIdx [[threadgroup_position_in_grid]], \
+        uint idxInBlock [[thread_position_in_threadgroup]] \
+    ) { \
+        const uint blockSize = 256; \
+        threadgroup float reduceBuffer[256]; \
+        \
+        uint rowOffset = blockIdx * numCols; \
+        float localSum = 0.0; \
+        float localSumSq = 0.0; \
+        float localGradSum = 0.0; \
+        float localCov = 0.0; \
+        for (uint i = 0; i * blockSize < numCols; i++) { \
+            uint col = i * blockSize + idxInBlock; \
+            if (col < numCols) { \
+                float x = (float)input[rowOffset + col]; \
+                float y = (float)outGrad[rowOffset + col]; \
+                localSum += x; \
+                localSumSq += x * x; \
+                localGradSum += y; \
+                localCov += x * y; \
+            } \
+        } \
+        localSum = reduceSumLocal(blockSize, 8, reduceBuffer, idxInBlock, localSum); \
+        localSumSq = reduceSumLocal(blockSize, 8, reduceBuffer, idxInBlock, localSumSq); \
+        localGradSum = reduceSumLocal(blockSize, 8, reduceBuffer, idxInBlock, localGradSum); \
+        localCov = reduceSumLocal(blockSize, 8, reduceBuffer, idxInBlock, localCov); \
+        float mean = localSum / (float)numCols; \
+        float variance = (localSumSq / (float)numCols) - mean * mean; \
+        float gradMean = localGradSum / (float)numCols; \
+        localCov -= localGradSum * mean; \
+        localCov /= (float)numCols; \
+        if (variance < 0) { \
+            variance = 0; \
+        } \
+        float factor = 1 / sqrt(variance + epsilon); \
+        float factor3 = factor * factor * factor; \
+        for (uint i = 0; i * blockSize < numCols; i++) { \
+            uint col = i * blockSize + idxInBlock; \
+            if (col < numCols) { \
+                float x = (float)input[rowOffset + col]; \
+                float g = (float)outGrad[rowOffset + col]; \
+                float y = (g - gradMean) * factor - (x - mean) * localCov * factor3; \
+                output[rowOffset + col] = y; \
+            } \
+        } \
+    }
+
+DEFINE_NORMALIZE_INNER(float)
+DEFINE_NORMALIZE_INNER(half)

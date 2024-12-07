@@ -763,11 +763,7 @@ public class LayerNorm: Trainable {
     let batchShape = x.shape[..<(x.shape.count - shape.count)]
     let innerCount = shape.product()
     let tmpShape = [batchShape.product(), innerCount]
-    let normedShape = Array(batchShape + Array(repeating: 1, count: shape.count))
-    let (rawMean, rawVariance) = x.reshape(tmpShape).meanAndVariance(axis: 1)
-    let mean = rawMean.reshape(normedShape)
-    let variance = rawVariance.reshape(normedShape)
-    let normalized = x.normalize(mean: mean, variance: variance, epsilon: eps)
+    let normalized = x.reshape(tmpShape).normalize(axis: 1, eps: eps).reshape(x.shape)
     if let gain = gain, let bias = bias {
       return normalized.mul((gain + 1), thenAdd: bias).cast(inType)
     } else {
@@ -824,12 +820,10 @@ public class GroupNorm: Trainable {
         x
       }
 
-    let grouped = cFirst.reshape(
-      [cFirst.shape[0], groupCount, cFirst.shape[1] / groupCount, cFirst.shape[2...].product()])
-    let mean = grouped.mean(axis: -1, keepdims: true)
-    let variance = grouped.variance(axis: -1, keepdims: true)
-    let cFirstNormed = grouped.normalize(mean: mean, variance: variance, epsilon: eps).reshape(
-      as: cFirst)
+    let grouped = cFirst.reshape([
+      cFirst.shape[0], groupCount, cFirst.shape[1] / groupCount, cFirst.shape[2...].product(),
+    ])
+    let cFirstNormed = grouped.normalize(axis: -1, eps: eps).reshape(as: cFirst)
 
     let normalized =
       if channelsLast {

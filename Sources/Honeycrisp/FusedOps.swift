@@ -74,106 +74,51 @@ extension Tensor {
   }
 
   @recordCaller
-  private func _normalize<T: TensorElement>(mean: Tensor, variance: Tensor, epsilon: T) -> Tensor {
+  private func _normalize<T: NumericTensorElement>(axis: Int, eps: T) -> Tensor {
     #alwaysAssert(dtype.isFloat, "cannot apply normalize() to dtype \(dtype)")
-    #alwaysAssert(dtype == mean.dtype, "dtype \(dtype) does not match mean \(mean.dtype)")
-    #alwaysAssert(
-      dtype == variance.dtype, "dtype \(dtype) does not match variance \(variance.dtype)")
-
-    let (outputShape, allStrides) = Tensor.lazyBroadcast([self, mean, variance])
-    let tStrides = allStrides[0]
-    let meanStrides = allStrides[1]
-    let varianceStrides = allStrides[2]
 
     let backend = Backend.current
-    let newData = Tensor.createDataTask(self, mean, variance) { t, mean, variance in
+    let newData = createDataTask { t in
       try await backend.normalize(
-        input: BroadcastData(strides: tStrides, data: try await t.data),
-        mean: BroadcastData(strides: meanStrides, data: try await mean.data),
-        variance: BroadcastData(strides: varianceStrides, data: try await variance.data),
-        epsilon: epsilon,
-        dtype: t.dtype)
+        input: try await t.data,
+        dims: t.reduceDims(axis),
+        eps: eps,
+        dtype: t.dtype
+      )
     }
-    if (needsGrad || mean.needsGrad || variance.needsGrad) && Tensor.isGradEnabled {
+    if needsGrad && Tensor.isGradEnabled {
       let handle = self.saveForBackward()
-      let meanHandle = mean.saveForBackward()
-      let varianceHandle = variance.saveForBackward()
-      return Tensor(dataTask: newData, shape: outputShape, dtype: dtype) { grad in
+      return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
         handle.backward(backend) {
-          Tensor.normalizeXGrad(
-            variance: variance.noGrad(), outGrad: grad, epsilon: epsilon, sign: 1.0
-          )
-          .reduceBroadcast(tStrides, as: self)
-        }
-        meanHandle.backward(backend) {
-          Tensor.normalizeXGrad(
-            variance: variance.noGrad(), outGrad: grad, epsilon: epsilon, sign: -1.0
-          )
-          .reduceBroadcast(meanStrides, as: mean)
-        }
-        varianceHandle.backward(backend) {
-          Tensor.normalizeVarianceGrad(
-            input: self.noGrad(), mean: mean.noGrad(), variance: variance.noGrad(), outGrad: grad,
-            epsilon: epsilon
-          ).reduceBroadcast(varianceStrides, as: variance)
+          self.noGrad().normalizeGrad(axis: axis, outGrad: grad, eps: eps)
         }
       }
     } else {
-      return Tensor(dataTask: newData, shape: outputShape, dtype: dtype)
+      return Tensor(dataTask: newData, shape: shape, dtype: dtype)
     }
   }
 
   @recordCaller
-  private static func _normalizeXGrad<T: TensorElement>(
-    variance: Tensor, outGrad: Tensor, epsilon: T, sign: Float
-  ) -> Tensor {
-    #alwaysAssert(!variance.needsGrad && !outGrad.needsGrad)
+  private func _normalizeGrad<T: NumericTensorElement>(axis: Int, outGrad: Tensor, eps: T)
+    -> Tensor
+  {
+    #alwaysAssert(dtype.isFloat, "cannot apply normalizeGrad() to dtype \(dtype)")
+    #alwaysAssert(dtype == outGrad.dtype, "gradient dtype \(outGrad.dtype) does not match \(dtype)")
+    #alwaysAssert(shape == outGrad.shape, "gradient shape \(outGrad.shape) does not match \(shape)")
     #alwaysAssert(
-      variance.dtype.isFloat, "cannot apply normalizeXGrad() to dtype \(variance.dtype)")
-    #alwaysAssert(
-      variance.dtype == outGrad.dtype, "dtype \(variance.dtype) does not match \(outGrad.dtype)")
-
-    let (outputShape, (varianceStrides, outGradStrides)) = Tensor.lazyBroadcast(variance, outGrad)
+      !Tensor.isGradEnabled || (!needsGrad && !outGrad.needsGrad),
+      "gradients of normalizeGrad() are not supported")
 
     let backend = Backend.current
-    let newData = Tensor.createDataTask(variance, outGrad) { variance, outGrad in
-      try await backend.normalizeXGrad(
-        variance: BroadcastData(strides: varianceStrides, data: try await variance.data),
-        outGrad: BroadcastData(strides: outGradStrides, data: try await outGrad.data),
-        epsilon: epsilon,
-        sign: sign,
-        dtype: variance.dtype)
+    let newData = Tensor.createDataTask(self, outGrad) { t, outGrad in
+      try await backend.normalizeGrad(
+        input: try await t.data,
+        outGrad: try await outGrad.data,
+        dims: t.reduceDims(axis),
+        eps: eps,
+        dtype: t.dtype
+      )
     }
-    return Tensor(dataTask: newData, shape: outputShape, dtype: variance.dtype)
-  }
-
-  @recordCaller
-  private static func _normalizeVarianceGrad<T: TensorElement>(
-    input: Tensor, mean: Tensor, variance: Tensor, outGrad: Tensor, epsilon: T
-  ) -> Tensor {
-    #alwaysAssert(!input.needsGrad && !mean.needsGrad && !variance.needsGrad && !outGrad.needsGrad)
-    #alwaysAssert(input.dtype.isFloat, "cannot apply normalizeXGrad() to dtype \(variance.dtype)")
-    #alwaysAssert(input.dtype == mean.dtype)
-    #alwaysAssert(input.dtype == variance.dtype)
-    #alwaysAssert(input.dtype == outGrad.dtype)
-
-    let (outputShape, allStrides) = Tensor.lazyBroadcast([input, mean, variance, outGrad])
-    let inputStrides = allStrides[0]
-    let meanStrides = allStrides[1]
-    let varianceStrides = allStrides[2]
-    let outGradStrides = allStrides[3]
-
-    let backend = Backend.current
-    let newData = Tensor.createDataTask(input, mean, variance, outGrad) {
-      input, mean, variance, outGrad in
-      try await backend.normalizeVarianceGrad(
-        input: BroadcastData(strides: inputStrides, data: try await input.data),
-        mean: BroadcastData(strides: meanStrides, data: try await mean.data),
-        variance: BroadcastData(strides: varianceStrides, data: try await variance.data),
-        outGrad: BroadcastData(strides: outGradStrides, data: try await outGrad.data),
-        epsilon: epsilon,
-        dtype: input.dtype)
-    }
-    return Tensor(dataTask: newData, shape: outputShape, dtype: variance.dtype)
+    return Tensor(dataTask: newData, shape: shape, dtype: dtype)
   }
 }
