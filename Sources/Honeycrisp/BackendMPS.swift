@@ -397,8 +397,9 @@ open class MPSBackend: CPUBackend {
     var names = ["axis_permutation"]
     for type in ["half", "float"] {
       for op in [
-        "vector_pow", "vector_pow_scaled", "log", "recip", "exp", "sigmoid", "sigmoid_grad", "gelu",
-        "gelu_grad", "sin", "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "rand",
+        "vector_pow", "vector_pow_scaled", "log", "recip", "exp", "sigmoid", "sigmoid_grad",
+        "gelu_approx", "gelu_approx_grad", "gelu_exact", "gelu_exact_grad", "erf", "erf_grad",
+        "sin", "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "rand",
         "randn", "normalize_inner", "normalize_inner_grad", "log_softmax",
         "log_softmax_grad", "adamw",
       ] {
@@ -670,10 +671,18 @@ open class MPSBackend: CPUBackend {
         "log"
       case .recip:
         "recip"
-      case .gelu:
-        "gelu"
-      case .geluGrad:
-        "gelu_grad"
+      case .geluApprox:
+        "gelu_approx"
+      case .geluApproxGrad:
+        "gelu_approx_grad"
+      case .geluExact:
+        "gelu_exact"
+      case .geluExactGrad:
+        "gelu_exact_grad"
+      case .erf:
+        "erf"
+      case .erfGrad:
+        "erf_grad"
       case .exp:
         "exp"
       case .sigmoid:

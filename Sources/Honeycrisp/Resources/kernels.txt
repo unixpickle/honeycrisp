@@ -391,327 +391,253 @@ DEFINE_WHEN(long)
 DEFINE_POW(half)
 DEFINE_POW(float)
 
-kernel void log_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = log(input[id]);
-    }
-}
-
-kernel void log_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = log(input[id]);
-    }
-}
-
-kernel void recip_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = 1 / input[id];
-    }
-}
-
-kernel void recip_float(device const float* input [[buffer(0)]],
-                        device float* output [[buffer(1)]],
-                        constant uint &N [[buffer(2)]],
-                        uint id [[thread_position_in_grid]]) {
-    if (id < N) {
-        output[id] = 1 / input[id];
-    }
-}
-
-kernel void exp_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = exp(input[id]);
-    }
-}
-
-kernel void exp_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = exp(input[id]);
-    }
-}
-
-kernel void sigmoid_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = (safe_tanh(input[id] / 2) + 1) / 2;
-    }
-}
-
-kernel void sigmoid_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = (safe_tanh(input[id] / 2) + 1) / 2;
-    }
-}
-
-kernel void sigmoid_grad_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        half s = (safe_tanh(input[id] / 2) + 1) / 2;
-        output[id] = s * (1 - s);
+float erf(float a) {
+  // https://github.com/ml-explore/mlx/blob/0d5e7716ad0adadae215ece6eb70861a6a8b55a3/mlx/backend/common/ops.h#L47
+  float r, s, t, u;
+  t = abs(a);
+  s = a * a;
+  if (t > 0.927734375f) {
+    // maximum error 0.99527 ulp
+    r = fma(
+        -1.72853470e-5f, t, 3.83197126e-4f); // -0x1.220000p-16,0x1.91cfb2p-12
+    u = fma(
+        -3.88396438e-3f, t, 2.42546219e-2f); // -0x1.fd1438p-9, 0x1.8d6342p-6
+    r = fma(r, s, u);
+    r = fma(r, t, -1.06777877e-1f); // -0x1.b55cb8p-4
+    r = fma(r, t, -6.34846687e-1f); // -0x1.450aa0p-1
+    r = fma(r, t, -1.28717512e-1f); // -0x1.079d0cp-3
+    r = fma(r, t, -t);
+    r = 1.0f - exp(r);
+    r = copysign(r, a);
+  } else {
+    // maximum error 0.98929 ulp
+    r = -5.96761703e-4f; // -0x1.38e000p-11
+    r = fma(r, s, 4.99119423e-3f); //  0x1.471a58p-8
+    r = fma(r, s, -2.67681349e-2f); // -0x1.b691b2p-6
+    r = fma(r, s, 1.12819925e-1f); //  0x1.ce1c44p-4
+    r = fma(r, s, -3.76125336e-1f); // -0x1.812700p-2
+    r = fma(r, s, 1.28379166e-1f); //  0x1.06eba8p-3
+    r = fma(r, a, a);
   }
+  return r;
 }
 
-kernel void sigmoid_grad_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        half s = (safe_tanh(input[id] / 2) + 1) / 2;
-        output[id] = s * (1 - s);
-  }
+float erf_grad(float x) {
+    return abs(x) > 20 ? 0 : 1.1283791670955126 * exp(-x * x);
 }
 
-kernel void gelu_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        float x = input[id];
-        output[id] = 0.5 * x * (1.0 + safe_tanh(0.797884561 * (x + 0.044715 * pow(x, 3.0))));
+#define ELEMWISE_KERNELS(type) \
+    kernel void log_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = log(input[id]); \
+        } \
+    } \
+    \
+    kernel void recip_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = 1 / input[id]; \
+        } \
+    } \
+    \
+    kernel void exp_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = exp(input[id]); \
+        } \
+    } \
+    \
+    kernel void sigmoid_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = type((safe_tanh(float(input[id]) / 2) + 1) / 2); \
+        } \
+    } \
+    \
+    kernel void sigmoid_grad_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            float s = (safe_tanh((float)input[id] / 2) + 1) / 2; \
+            output[id] = type(s * (1 - s)); \
+        } \
+    } \
+    \
+    kernel void gelu_approx_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            float x = (float)input[id]; \
+            output[id] = type(0.5 * x * (1.0 + safe_tanh(0.797884561 * (x + 0.044715 * pow(x, 3.0))))); \
+        } \
+    } \
+    \
+    kernel void erf_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            float x = (float)input[id]; \
+            output[id] = type(erf(x)); \
+        } \
+    } \
+    \
+    kernel void erf_grad_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            float x = (float)input[id]; \
+            output[id] = (type)erf_grad(x); \
+        } \
+    } \
+    \
+    kernel void gelu_approx_grad_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            float x = (float)input[id]; \
+            float tanhTerm = safe_tanh(0.035677408145115 * pow(x, 3.0) + 0.797884561 * x); \
+            output[id] = type(0.5 * x * (1.0 - pow(tanhTerm, 2.0)) * (0.107032224435345 * pow(x, 2.0) + 0.797884561) + 0.5 * tanhTerm + 0.5); \
+        } \
+    } \
+    \
+    kernel void gelu_exact_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            float x = (float)input[id]; \
+            output[id] = type(x * 0.5 * (1 + erf(x * 0.7071067811865475))); \
+        } \
+    } \
+    \
+    kernel void gelu_exact_grad_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            float x = (float)input[id]; \
+            float c = 0.7071067811865475; \
+            output[id] = type(0.5 * (1 + erf(x * c)) + 0.5 * x * c * erf_grad(x * c)); \
+        } \
+    } \
+    \
+    kernel void sin_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = sin(input[id]); \
+        } \
+    } \
+    \
+    kernel void cos_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = cos(input[id]); \
+        } \
+    } \
+    \
+    kernel void minus_sin_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = -sin(input[id]); \
+        } \
+    } \
+    \
+    kernel void relu_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            float x = input[id]; \
+            output[id] = x > 0.0f ? x : 0.0f; \
+        } \
+    } \
+    \
+    kernel void relu_grad_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            float x = input[id]; \
+            output[id] = x > 0.0f ? 1.0f : 0.0f; \
+        } \
+    } \
+    \
+    kernel void abs_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = abs(input[id]); \
+        } \
+    } \
+    \
+    kernel void abs_grad_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = input[id] < 0 ? -1 : 1; \
+        } \
     }
-}
 
-kernel void gelu_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        float x = float(input[id]);
-        output[id] = half(0.5 * x * (1.0 + safe_tanh(0.797884561 * (x + 0.044715 * pow(x, 3.0)))));
-    }
-}
-
-kernel void gelu_grad_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        float x = input[id];
-        float tanhTerm = safe_tanh(0.035677408145115 * pow(x, 3.0) + 0.797884561 * x);
-        output[id] = 0.5 * x * (1.0 - pow(tanhTerm, 2.0)) * (0.107032224435345 * pow(x, 2.0) + 0.797884561) + 0.5 * tanhTerm + 0.5;
-    }
-}
-
-kernel void gelu_grad_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        float x = float(input[id]);
-        float tanhTerm = safe_tanh(0.035677408145115 * pow(x, 3.0) + 0.797884561 * x);
-        output[id] = half(0.5 * x * (1.0 - pow(tanhTerm, 2.0)) * (0.107032224435345 * pow(x, 2.0) + 0.797884561) + 0.5 * tanhTerm + 0.5);
-    }
-}
-
-kernel void sin_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = sin(input[id]);
-    }
-}
-
-kernel void sin_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = sin(input[id]);
-    }
-}
-
-kernel void cos_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = cos(input[id]);
-    }
-}
-
-kernel void cos_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = cos(input[id]);
-    }
-}
-
-kernel void minus_sin_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = -sin(input[id]);
-    }
-}
-
-
-kernel void minus_sin_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = -sin(input[id]);
-    }
-}
-
-kernel void relu_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        float x = input[id];
-        output[id] = x > 0.0f ? x : 0.0f;
-    }
-}
-
-kernel void relu_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        half x = input[id];
-        output[id] = x > half(0.0) ? x : half(0.0);
-    }
-}
-
-kernel void relu_grad_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        float x = input[id];
-        output[id] = x > 0.0f ? 1.0f : 0.0f;
-    }
-}
-
-
-kernel void relu_grad_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        half x = input[id];
-        output[id] = x > half(0.0) ? half(1.0) : half(0.0);
-    }
-}
-
-kernel void abs_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = abs(input[id]);
-    }
-}
-
-
-kernel void abs_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = abs(input[id]);
-    }
-}
-
-kernel void abs_grad_float(
-    device const float* input [[buffer(0)]],
-    device float* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = input[id] < 0 ? -1 : 1;
-    }
-}
-
-
-kernel void abs_grad_half(
-    device const half* input [[buffer(0)]],
-    device half* output [[buffer(1)]],
-    constant uint &N [[buffer(2)]],
-    uint id [[thread_position_in_grid]]
-) {
-    if (id < N) {
-        output[id] = input[id] < 0 ? -1 : 1;
-    }
-}
+ELEMWISE_KERNELS(float)
+ELEMWISE_KERNELS(half)
 
 #define DEFINE_REPEAT(type) \
     struct repeat_args_##type { \
