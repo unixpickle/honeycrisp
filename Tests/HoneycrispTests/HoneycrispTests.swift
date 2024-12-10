@@ -419,7 +419,7 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testNoGrad() async throws {
-    let x = Tensor(ones: [3]).onGrad { grad in assert(false) }
+    let x = Tensor(ones: [3]).onGradUnsafe { grad in assert(false) }
     XCTAssert(!Tensor.withGrad(enabled: false) { x.sum() }.needsGrad)
     Tensor.withGrad(enabled: false) {
       XCTAssert(!Tensor.isGradEnabled)
@@ -439,7 +439,7 @@ final class HoneycrispTests: XCTestCase {
     func testArithmetic() async throws {
       return try await runInBackends {
         var xGrad: Tensor?
-        let x = Tensor(ones: [1]).onGrad { grad in xGrad = grad }
+        let x = Tensor(ones: [1]).onGradUnsafe { grad in xGrad = grad }
         let y1 = x / 3.0
         let y2 = 3.0 / x
         let y3 = y1 / y2
@@ -462,7 +462,7 @@ final class HoneycrispTests: XCTestCase {
     func testMatrixMul() async throws {
       return try await runInBackends {
         var xGrad: Tensor?
-        let x = Tensor(ones: [3, 3]).onGrad { grad in xGrad = grad }
+        let x = Tensor(ones: [3, 3]).onGradUnsafe { grad in xGrad = grad }
         let y = (x &* x) + (x &* x.t())
         let outGrad = Tensor(onesLike: y)
         unusedBackend.use { y.backward(outGrad) }
@@ -474,7 +474,7 @@ final class HoneycrispTests: XCTestCase {
     func testTril() async throws {
       return try await runInBackends {
         var xGrad: Tensor?
-        let x = Tensor(ones: [3, 3]).onGrad { grad in xGrad = grad }
+        let x = Tensor(ones: [3, 3]).onGradUnsafe { grad in xGrad = grad }
         let y = x.tril()
         let outGrad = Tensor(onesLike: y)
         unusedBackend.use { y.backward(outGrad) }
@@ -486,7 +486,7 @@ final class HoneycrispTests: XCTestCase {
     func testReduceRepeat() async throws {
       return try await runInBackends {
         var xGrad: Tensor?
-        let x = Tensor(ones: [3, 3]).onGrad { grad in xGrad = grad }
+        let x = Tensor(ones: [3, 3]).onGradUnsafe { grad in xGrad = grad }
         let y = x + x.sum(axis: 1).reshape([3, 1]).repeating(axis: 1, count: 3)
         let outGrad = Tensor(onesLike: y)
         unusedBackend.use { y.backward(outGrad) }
@@ -498,7 +498,7 @@ final class HoneycrispTests: XCTestCase {
     func testConcatSplit() async throws {
       return try await runInBackends {
         var xGrad: Tensor?
-        let x = Tensor(ones: [3, 6]).onGrad { grad in xGrad = grad }
+        let x = Tensor(ones: [3, 6]).onGradUnsafe { grad in xGrad = grad }
         let ys = x.split(axis: 1, counts: [2, 2, 2])
         let y = Tensor(concat: ys, axis: 1)
         let outGrad = Tensor(onesLike: y)
@@ -511,7 +511,7 @@ final class HoneycrispTests: XCTestCase {
     func testElemwise() async throws {
       return try await runInBackends {
         var xGrad: Tensor?
-        let x = Tensor(ones: [3, 6]).onGrad { grad in xGrad = grad }
+        let x = Tensor(ones: [3, 6]).onGradUnsafe { grad in xGrad = grad }
         let y = x.gelu().pow(2)
         let outGrad = Tensor(onesLike: y)
         unusedBackend.use { y.backward(outGrad) }
@@ -523,7 +523,7 @@ final class HoneycrispTests: XCTestCase {
     func testScatterGather() async throws {
       return try await runInBackends {
         var xGrad: Tensor?
-        let x = Tensor(ones: [3, 6]).onGrad { grad in xGrad = grad }
+        let x = Tensor(ones: [3, 6]).onGradUnsafe { grad in xGrad = grad }
         let inds = Tensor(data: [1, 0, 5], shape: [3])
         let y = x.gather(axis: 1, indices: inds).scatter(axis: 1, count: 6, indices: inds)
         let outGrad = Tensor(onesLike: y)
@@ -540,6 +540,32 @@ final class HoneycrispTests: XCTestCase {
     try await testConcatSplit()
     try await testElemwise()
     try await testScatterGather()
+  }
+
+  func testConcurrentBackward() async throws {
+    let x = Tensor(ones: [128, 16])
+    let param: Trainable.Param<Tensor> = .init(name: "foo")
+    param.data = x
+    let xWithGrad = x.onGrad { g in param.addGrad(g) }
+    let lastResult = xWithGrad * 0
+
+    var tasks: [Task<(), Error>] = []
+    for _ in 0..<100 {
+      tasks.append(
+        Task.detached {
+          let y = xWithGrad &* Tensor(ones: [16, 1])
+          y.sum().backward()
+        })
+    }
+    for task in tasks {
+      let _ = try await task.value
+    }
+
+    // We want to make sure backward doesn't complete before all
+    // the other tasks complete.
+    lastResult.backward()
+
+    try await assertDataEqual(param.grad!, Tensor(onesLike: x) * 100)
   }
 
 }

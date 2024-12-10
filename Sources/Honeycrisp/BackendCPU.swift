@@ -6,9 +6,9 @@ import HCBacktrace
 ///
 /// This may use accelerated APIs to speed up computation, but all computations will still
 /// be done on the CPU (rather than the GPU or the ANE).
-open class CPUBackend: Backend, DataAllocator {
+open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
 
-  public class CPUData: Tensor.Data {
+  public class CPUData: Tensor.Data, @unchecked Sendable {
     public let data: UnsafeMutableRawPointer
 
     public init(byteCount: Int) throws {
@@ -44,7 +44,7 @@ open class CPUBackend: Backend, DataAllocator {
     }
   }
 
-  public class CPURandomGenerator: RandomGenerator {
+  public class CPURandomGenerator: RandomGenerator, @unchecked Sendable {
 
     private let PHILOX_ROUND_A: UInt32 = 0xD251_1F53
     private let PHILOX_ROUND_B: UInt32 = 0xCD9E_8D57
@@ -172,11 +172,12 @@ open class CPUBackend: Backend, DataAllocator {
     }
 
     internal func philox(
-      _ state: Tensor.Data, f: @escaping (@escaping () -> [UInt32]) async throws -> Tensor.Data
+      _ state: Tensor.Data,
+      f: @escaping (@escaping @Sendable () -> [UInt32]) async throws -> Tensor.Data
     )
       async throws -> (sample: Tensor.Data, state: Tensor.Data)
     {
-      func philoxInner(seed: UInt64, offset: inout UInt64) -> [UInt32] {
+      @Sendable func philoxInner(seed: UInt64, offset: inout UInt64) -> [UInt32] {
         var c = [UInt32(offset & 0xffff_ffff), UInt32(offset >> 32), 0, 0]
         var k0 = UInt32(seed & 0xffff_ffff)
         var k1 = UInt32(seed >> 32)
@@ -194,25 +195,30 @@ open class CPUBackend: Backend, DataAllocator {
         return c
       }
       return try await state.onCPU { stateIn in
-        let states = stateIn.bindMemory(to: UInt64.self, capacity: 2)
+        let stateIn = SendableRawPointer(stateIn)
+
         let resultState = try await cpuBackend.allocate(16)
         let sample: Tensor.Data = try await resultState.mutateOnCPU { stateOut in
-          var offset: UInt64 = states[1]
-          let sample: Tensor.Data = try await f {
-            philoxInner(seed: states[0], offset: &offset)
-          }
+          let stateOut = SendableMutableRawPointer(stateOut)
+
+          let states = stateIn.bindMemory(to: UInt64.self, capacity: 2)
           let outArr = stateOut.bindMemory(to: UInt64.self, capacity: 2)
           outArr[0] = states[0]
-          outArr[1] = offset
-          return sample
+          outArr[1] = states[1]
+
+          return try await f {
+            // We must re-bind due to Sendable constraints
+            let outArr = stateOut.bindMemory(to: UInt64.self, capacity: 2)
+
+            return philoxInner(seed: outArr[0], offset: &outArr[1])
+          }
         }
         return (sample: sample, state: resultState)
       }
     }
   }
 
-  private static var _global = CPUBackend()
-  public static var global: CPUBackend { CPUBackend._global }
+  public static let global = CPUBackend()
 
   internal var worker = Backend.WorkerThread()
   internal var _defaultRandom: CPURandomGenerator? = nil
@@ -223,7 +229,7 @@ open class CPUBackend: Backend, DataAllocator {
       cpuBackend: self, seed: Int.random(in: 0..<1_000_000_000))
   }
 
-  open func serialize<T>(_ work: @escaping () throws -> T) async throws -> T {
+  open func serialize<T>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { continuation in
       worker.schedule {
         var result: Result<T, Error>?
@@ -624,8 +630,8 @@ open class CPUBackend: Backend, DataAllocator {
       func apply<T: TensorElement>(_: T.Type) async throws {
         try await serialize {
           var arr = [T](repeating: T(0.0), count: count)
-          try pointerToArray(aBuf, output: &arr, dtype: inType)
-          try arrayToPointer(arr, output: buffer, dtype: outType)
+          try pointerToArray(aBuf.ptr, output: &arr, dtype: inType)
+          try arrayToPointer(arr, output: buffer.ptr, dtype: outType)
         }
       }
       if inType == .int64 {
@@ -996,7 +1002,7 @@ open class CPUBackend: Backend, DataAllocator {
                   }
                 }
               }
-              try arrayToPointer(outArr, output: buffer, dtype: dtype)
+              try arrayToPointer(outArr, output: buffer.ptr, dtype: dtype)
             }
           }
         }
@@ -1410,7 +1416,7 @@ open class CPUBackend: Backend, DataAllocator {
     let count = arr.count
     return try await withBuffers(count * dtype.byteSize) { buffer in
       try await serialize {
-        try arrayToPointer(arr, output: buffer, dtype: dtype)
+        try arrayToPointer(arr, output: buffer.ptr, dtype: dtype)
       }
     }
   }
@@ -1430,7 +1436,7 @@ open class CPUBackend: Backend, DataAllocator {
           }
           newIndices[i] = flatIndex
         }
-        try arrayToPointer(newIndices, output: buffer, dtype: .int64)
+        try arrayToPointer(newIndices, output: buffer.ptr, dtype: .int64)
       }
     }
   }
@@ -1455,11 +1461,11 @@ open class CPUBackend: Backend, DataAllocator {
   }
 
   func withMaybeBuffer<T>(
-    _ buf: Tensor.Data?, _ fn: (UnsafeRawPointer?) async throws -> T
+    _ buf: Tensor.Data?, _ fn: (SendableRawPointer?) async throws -> T
   ) async throws -> T {
     if let buf = buf {
       try await buf.onCPU { ptr in
-        try await fn(ptr)
+        try await fn(SendableRawPointer(ptr))
       }
     } else {
       try await fn(nil)
@@ -1467,23 +1473,24 @@ open class CPUBackend: Backend, DataAllocator {
   }
 
   func withBuffers(
-    _ outputSize: Int, _ fn: (UnsafeMutableRawPointer) async throws -> Void
+    _ outputSize: Int, _ fn: (SendableMutableRawPointer) async throws -> Void
   ) async throws -> Tensor.Data {
     let result = try await allocate(outputSize)
     try await result.mutateOnCPU { out in
-      try await fn(out)
+      try await fn(SendableMutableRawPointer(out))
     }
     return result
   }
 
   func withBuffers(
     _ outputSize: Int, _ in1: Tensor.Data,
-    _ fn: (UnsafeMutableRawPointer, UnsafeRawPointer) async throws -> Void
+    _ fn: (SendableMutableRawPointer, SendableRawPointer) async throws -> Void
   ) async throws -> Tensor.Data {
     try await in1.onCPU { buf1 in
+      let buf1 = SendableRawPointer(buf1)
       let result = try await allocate(outputSize)
       try await result.mutateOnCPU { out in
-        try await fn(out, buf1)
+        try await fn(SendableMutableRawPointer(out), buf1)
       }
       return result
     }
@@ -1491,13 +1498,15 @@ open class CPUBackend: Backend, DataAllocator {
 
   func withBuffers(
     _ outputSize: Int, _ in1: Tensor.Data, _ in2: Tensor.Data,
-    _ fn: (UnsafeMutableRawPointer, UnsafeRawPointer, UnsafeRawPointer) async throws -> Void
+    _ fn: (SendableMutableRawPointer, SendableRawPointer, SendableRawPointer) async throws -> Void
   ) async throws -> Tensor.Data {
     try await in1.onCPU { buf1 in
-      try await in2.onCPU { buf2 in
+      let buf1 = SendableRawPointer(buf1)
+      return try await in2.onCPU { buf2 in
+        let buf2 = SendableRawPointer(buf2)
         let result = try await allocate(outputSize)
         try await result.mutateOnCPU { out in
-          try await fn(out, buf1, buf2)
+          try await fn(SendableMutableRawPointer(out), buf1, buf2)
         }
         return result
       }
@@ -1506,15 +1515,18 @@ open class CPUBackend: Backend, DataAllocator {
 
   func withBuffers(
     _ outputSize: Int, _ in1: Tensor.Data, _ in2: Tensor.Data, _ in3: Tensor.Data,
-    _ fn: (UnsafeMutableRawPointer, UnsafeRawPointer, UnsafeRawPointer, UnsafeRawPointer)
+    _ fn: (SendableMutableRawPointer, SendableRawPointer, SendableRawPointer, SendableRawPointer)
       async throws -> Void
   ) async throws -> Tensor.Data {
     try await in1.onCPU { buf1 in
-      try await in2.onCPU { buf2 in
-        try await in3.onCPU { buf3 in
+      let buf1 = SendableRawPointer(buf1)
+      return try await in2.onCPU { buf2 in
+        let buf2 = SendableRawPointer(buf2)
+        return try await in3.onCPU { buf3 in
+          let buf3 = SendableRawPointer(buf3)
           let result = try await allocate(outputSize)
           try await result.mutateOnCPU { out in
-            try await fn(out, buf1, buf2, buf3)
+            try await fn(SendableMutableRawPointer(out), buf1, buf2, buf3)
           }
           return result
         }
@@ -1526,17 +1538,21 @@ open class CPUBackend: Backend, DataAllocator {
     _ outputSize: Int, _ in1: Tensor.Data, _ in2: Tensor.Data, _ in3: Tensor.Data,
     _ in4: Tensor.Data,
     _ fn: (
-      UnsafeMutableRawPointer, UnsafeRawPointer, UnsafeRawPointer, UnsafeRawPointer,
-      UnsafeRawPointer
+      SendableMutableRawPointer, SendableRawPointer, SendableRawPointer, SendableRawPointer,
+      SendableRawPointer
     ) async throws -> Void
   ) async throws -> Tensor.Data {
     try await in1.onCPU { buf1 in
-      try await in2.onCPU { buf2 in
-        try await in3.onCPU { buf3 in
-          try await in4.onCPU { buf4 in
+      let buf1 = SendableRawPointer(buf1)
+      return try await in2.onCPU { buf2 in
+        let buf2 = SendableRawPointer(buf2)
+        return try await in3.onCPU { buf3 in
+          let buf3 = SendableRawPointer(buf3)
+          return try await in4.onCPU { buf4 in
+            let buf4 = SendableRawPointer(buf4)
             let result = try await allocate(outputSize)
             try await result.mutateOnCPU { out in
-              try await fn(out, buf1, buf2, buf3, buf4)
+              try await fn(SendableMutableRawPointer(out), buf1, buf2, buf3, buf4)
             }
             return result
           }
@@ -1547,16 +1563,17 @@ open class CPUBackend: Backend, DataAllocator {
 
   func withBuffers(
     _ outputSize: Int, _ ins: [Tensor.Data],
-    _ fn: (UnsafeMutableRawPointer, [UnsafeRawPointer]) async throws -> Void
+    _ fn: (SendableMutableRawPointer, [SendableRawPointer]) async throws -> Void
   ) async throws -> Tensor.Data {
-    func inner(_ ins: [Tensor.Data], _ fn: ([UnsafeRawPointer]) async throws -> Tensor.Data)
+    func inner(_ ins: [Tensor.Data], _ fn: ([SendableRawPointer]) async throws -> Tensor.Data)
       async throws -> Tensor.Data
     {
       if ins.isEmpty {
         try await fn([])
       } else {
         try await ins[0].onCPU { ptr in
-          try await inner(Array(ins[1...])) { otherPtrs in
+          let ptr = SendableRawPointer(ptr)
+          return try await inner(Array(ins[1...])) { otherPtrs in
             try await fn([ptr] + otherPtrs)
           }
         }
@@ -1565,7 +1582,7 @@ open class CPUBackend: Backend, DataAllocator {
     return try await inner(ins) { allPtrs in
       let result = try await allocate(outputSize)
       try await result.mutateOnCPU { outPtr in
-        try await fn(outPtr, allPtrs)
+        try await fn(SendableMutableRawPointer(outPtr), allPtrs)
       }
       return result
     }
@@ -1574,7 +1591,7 @@ open class CPUBackend: Backend, DataAllocator {
 }
 
 func readBuffer<T, T1: TensorElement>(
-  _: T1.Type, _ buf: UnsafeRawPointer, count: Int, dtype: Tensor.DType,
+  _: T1.Type, _ buf: SendableRawPointer, count: Int, dtype: Tensor.DType,
   _ fn: (UnsafeBufferPointer<T1>) throws -> T
 ) throws -> T {
   if dtype == T1.dtype {
@@ -1583,12 +1600,12 @@ func readBuffer<T, T1: TensorElement>(
         start: buf.bindMemory(to: T1.self, capacity: count), count: count))
   }
   var arr = [T1](repeating: T1(0.0), count: count)
-  try pointerToArray(buf, output: &arr, dtype: dtype)
+  try pointerToArray(buf.ptr, output: &arr, dtype: dtype)
   return try arr.withUnsafeBufferPointer(fn)
 }
 
 func maybeReadBuffer<T, T1: TensorElement>(
-  _: T1.Type, _ buf: UnsafeRawPointer?, count: Int, dtype: Tensor.DType,
+  _: T1.Type, _ buf: SendableRawPointer?, count: Int, dtype: Tensor.DType,
   _ fn: (UnsafeBufferPointer<T1>?) throws -> T
 ) throws -> T {
   if let buf = buf {
@@ -1601,7 +1618,7 @@ func maybeReadBuffer<T, T1: TensorElement>(
 }
 
 func writeBuffer<T, T1: TensorElement>(
-  _: T1.Type, _ buf: UnsafeMutableRawPointer, count: Int, dtype: Tensor.DType,
+  _: T1.Type, _ buf: SendableMutableRawPointer, count: Int, dtype: Tensor.DType,
   _ fn: (inout UnsafeMutableBufferPointer<T1>) throws -> T
 ) throws -> T {
   if dtype == T1.dtype {
@@ -1611,6 +1628,44 @@ func writeBuffer<T, T1: TensorElement>(
   }
   var arr = [T1](repeating: T1(0.0), count: count)
   let result = try arr.withUnsafeMutableBufferPointer(fn)
-  try arrayToPointer(arr, output: buf, dtype: dtype)
+  try arrayToPointer(arr, output: buf.ptr, dtype: dtype)
   return result
+}
+
+struct SendableRawPointer: @unchecked Sendable {
+  let ptr: UnsafeRawPointer
+
+  init(_ ptr: UnsafeRawPointer) {
+    self.ptr = ptr
+  }
+
+  func bindMemory<T>(
+    to type: T.Type,
+    capacity count: Int
+  ) -> UnsafePointer<T> where T: ~Copyable {
+    ptr.bindMemory(to: type, capacity: count)
+  }
+
+  func advanced(by n: Int) -> UnsafeRawPointer {
+    ptr.advanced(by: n)
+  }
+}
+
+struct SendableMutableRawPointer: @unchecked Sendable {
+  public let ptr: UnsafeMutableRawPointer
+
+  init(_ ptr: UnsafeMutableRawPointer) {
+    self.ptr = ptr
+  }
+
+  func bindMemory<T>(
+    to type: T.Type,
+    capacity count: Int
+  ) -> UnsafeMutablePointer<T> where T: ~Copyable {
+    ptr.bindMemory(to: type, capacity: count)
+  }
+
+  func advanced(by n: Int) -> UnsafeMutableRawPointer {
+    ptr.advanced(by: n)
+  }
 }

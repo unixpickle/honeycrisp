@@ -3,7 +3,7 @@ import Foundation
 /// Make a new copy of the method which records the caller in the current ``Backtrace``.
 ///
 /// In general, a Swift function can only record its caller by adding extra arguments with
-/// defaults like `#file`, `#line`, and `#function`. It would be quite tedious to manually add
+/// defaults like `#filePath`, `#line`, and `#function`. It would be quite tedious to manually add
 /// these arguments to every method of a class.
 ///
 /// Instead, we can use a macro to make this easier. For example, we might start with this class:

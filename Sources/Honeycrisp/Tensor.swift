@@ -18,10 +18,10 @@ import HCBacktrace
 /// may instead be stored in a place specific to the ``Backend`` which produced it. However,
 /// all implementations of ``Tensor/Data`` must provide the ability to access the data on the
 /// CPU via the ``Tensor/Data/onCPU(_:)`` and ``Tensor/Data/mutateOnCPU(_:)`` methods.
-public final class Tensor {
+public final class Tensor: Sendable {
 
   /// A type of numeric or boolean data stored in a ``Tensor`` object.
-  public enum DType: Codable {
+  public enum DType: Codable, Sendable {
     case int64
     case bool
     case float16
@@ -66,7 +66,7 @@ public final class Tensor {
 
   /// An abstract protocol representing a glob of tensor data that may be stored anywhere and/or
   /// computed lazily.
-  public protocol Data {
+  public protocol Data: Sendable {
     /// Get the amount of allocated bytes. Note that the actual amount of data which is used
     /// by a tensor might be less than the size of the data.
     var byteCount: Int { get }
@@ -86,10 +86,11 @@ public final class Tensor {
   ///
   /// When a `BackwardHandle` is created but never used, its `deinit` implementation will inform
   /// the underlying ``Tensor`` that one fewer operation is waiting for gradients.
-  public final class BackwardHandle {
-    private var addGrad: ((Tensor) -> Void)?
-    private var cancel: (() -> Void)?
-    private var canSkip: Bool
+  public final class BackwardHandle: Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var addGrad: (@Sendable (Tensor) -> Void)?
+    nonisolated(unsafe) private var cancel: (@Sendable () -> Void)?
+    private let canSkip: Bool
 
     private static let BackwardStackKey = "HONEYCRISP_BACKWARD_STACK"
 
@@ -99,19 +100,22 @@ public final class Tensor {
       canSkip = true
     }
 
-    init(addGrad: @escaping (Tensor) -> Void, cancel: @escaping () -> Void) {
+    init(addGrad: @escaping @Sendable (Tensor) -> Void, cancel: @escaping @Sendable () -> Void) {
       self.addGrad = addGrad
       self.cancel = cancel
       canSkip = false
     }
 
     @recordCaller
-    private func _backward(_ backend: Backend, _ gradFn: @escaping () -> Tensor) {
-      typealias StackType = (Backend, (() -> Tensor), ((Tensor) -> Void))
-      #alwaysAssert(addGrad != nil, "cannot re-use backward handle")
-      let ag = addGrad!
-      addGrad = nil
-      cancel = nil
+    private func _backward(_ backend: Backend, _ gradFn: @escaping @Sendable () -> Tensor) {
+      typealias StackType = (Backend, (@Sendable () -> Tensor), (@Sendable (Tensor) -> Void))
+      let ag = lock.withLock {
+        let result = addGrad
+        #alwaysAssert(result != nil, "cannot re-use backward handle")
+        addGrad = nil
+        cancel = nil
+        return result!
+      }
       if canSkip {
         return
       }
@@ -186,9 +190,9 @@ public final class Tensor {
   public func asDependency<T>(waitForCPU: Bool = true, _ fn: () async throws -> T) async rethrows
     -> T
   {
-    let t = self.noGrad()
+    let t = self.dataTask
     let task = Task {
-      let data = try await t.data
+      let data = try await t.value
       if waitForCPU {
         try await data.onCPU { _ in () }
       }
@@ -215,9 +219,9 @@ public final class Tensor {
   /// helpers, which should be used internally whenever a backend method is
   /// called.
   public func asDependency<T>(waitForCPU: Bool = true, _ fn: () throws -> T) rethrows -> T {
-    let t = self.noGrad()
+    let t = self.dataTask
     let task = Task {
-      let data = try await t.data
+      let data = try await t.value
       if waitForCPU {
         try await data.onCPU { _ in () }
       }
@@ -259,19 +263,22 @@ public final class Tensor {
     }
   }
 
-  private class BackwardState {
-    public var backwardImpl: (((Tensor) -> Void))?
-    public var shape: [Int]
-    public var dtype: DType
+  private final class BackwardState: Sendable {
+    // Protects all the mutable properties.
+    private let lock = NSLock()
+
+    nonisolated(unsafe) public var backwardImpl: (@Sendable (Tensor) -> Void)?
+    public let shape: [Int]
+    public let dtype: DType
 
     // State used during backward pass to accumulate gradients.
-    public var curGrad: Tensor? = nil
+    nonisolated(unsafe) public var curGrad: Tensor? = nil
 
     // Incremented when references are created, and decremented when
     // references are destroyed.
-    public var numBackwardHandles: Int = 0
+    nonisolated(unsafe) public var numBackwardHandles: Int = 0
 
-    public init(backwardImpl: (((Tensor) -> Void))?, shape: [Int], dtype: DType) {
+    public init(backwardImpl: (@Sendable (Tensor) -> Void)?, shape: [Int], dtype: DType) {
       self.backwardImpl = backwardImpl
       self.shape = shape
       self.dtype = dtype
@@ -279,7 +286,7 @@ public final class Tensor {
 
     @recordCaller
     private func _createHandle() -> BackwardHandle {
-      numBackwardHandles += 1
+      lock.withLock { numBackwardHandles += 1 }
 
       let backend = Backend.current
 
@@ -288,36 +295,45 @@ public final class Tensor {
       return BackwardHandle(
         addGrad: { [self] grad in addGrad(backend, grad) },
         cancel: { [self] in
-          numBackwardHandles -= 1
-          if curGrad != nil && numBackwardHandles == 0 {
-            #alwaysAssert(
-              false,
-              "backward pass was incompleted due to an unused reference.\n\nTraceback of reference creation:\n\n\(Backtrace.format(creationTrace))"
-            )
+          lock.withLock {
+            numBackwardHandles -= 1
+            if curGrad != nil && numBackwardHandles == 0 {
+              #alwaysAssert(
+                false,
+                "backward pass was incompleted due to an unused reference.\n\nTraceback of reference creation:\n\n\(Backtrace.format(creationTrace))"
+              )
+            }
           }
         })
     }
 
     @recordCaller
     internal func _addGrad(_ backend: Backend, _ grad: Tensor) {
-      #alwaysAssert(numBackwardHandles > 0)
       #alwaysAssert(
         grad.shape == shape,
         "gradient shape \(grad.shape) must match tensor shape \(shape)"
       )
       #alwaysAssert(
         grad.dtype == dtype, "gradient dtype \(grad.dtype) must match tensor dtype \(dtype)")
-      if let cg = curGrad {
-        curGrad = backend.use { cg + grad }
-      } else {
-        curGrad = grad
+      let doBwd = lock.withLock {
+        #alwaysAssert(numBackwardHandles > 0)
+        if let cg = curGrad {
+          curGrad = backend.use { cg + grad }
+        } else {
+          curGrad = grad
+        }
+        numBackwardHandles -= 1
+        return numBackwardHandles == 0
       }
-      numBackwardHandles -= 1
-      if let grad = curGrad, numBackwardHandles == 0 {
-        let bwd = backwardImpl!
-        backwardImpl = nil
-        bwd(grad)
-        curGrad = nil
+      if doBwd {
+        // This can only end up executing from one thread, so we should be safe
+        // to avoid using locks.
+        if let grad = curGrad {
+          let bwd = backwardImpl!
+          backwardImpl = nil
+          bwd(grad)
+          curGrad = nil
+        }
       }
     }
   }
@@ -328,9 +344,9 @@ public final class Tensor {
     dataTask: Task<Data, Error>,
     shape: [Int],
     dtype: DType,
-    backwardImpl: (((Tensor) -> Void))? = nil,
+    backwardImpl: (@Sendable (Tensor) -> Void)? = nil,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     #if DEBUG
@@ -371,16 +387,16 @@ public final class Tensor {
   /// Otherwise, the default 1-dimensional shape `[data.count]` is used.
   ///
   /// The `reverse` argument may be used to flip the order of the data in the collection.
-  convenience public init<T: TensorElement>(
-    data: some Collection<T>,
+  convenience public init<T: TensorElement, C>(
+    data: C,
     shape: [Int]? = nil,
     dtype: DType? = nil,
     reverse: Bool = false,
-    backwardImpl: ((Tensor) -> Void)? = nil,
+    backwardImpl: (@Sendable (Tensor) -> Void)? = nil,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
-  ) {
+  ) where C: Collection<T>, C: Sendable {
     let shape = shape ?? [data.count]
     let dtype = dtype ?? T.dtype
     if !dtype.supportsGrad {
@@ -403,7 +419,7 @@ public final class Tensor {
   public convenience init(
     zerosLike: Tensor,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     self.init(constant: 0, like: zerosLike, function: function, file: file, line: line)
@@ -412,7 +428,7 @@ public final class Tensor {
   public convenience init(
     onesLike: Tensor,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     self.init(constant: 1, like: onesLike, function: function, file: file, line: line)
@@ -422,7 +438,7 @@ public final class Tensor {
     zeros shape: [Int],
     dtype: DType = .float32,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     self.init(constant: 0, shape: shape, dtype: dtype, function: function, file: file, line: line)
@@ -432,7 +448,7 @@ public final class Tensor {
     ones shape: [Int],
     dtype: DType = .float32,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     self.init(constant: 1, shape: shape, dtype: dtype, function: function, file: file, line: line)
@@ -442,7 +458,7 @@ public final class Tensor {
     constant: T,
     like: Tensor,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     self.init(
@@ -455,7 +471,7 @@ public final class Tensor {
     shape: [Int],
     dtype: DType? = nil,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     let dtype = dtype ?? T.dtype
@@ -524,14 +540,16 @@ public final class Tensor {
   }
 
   @recordCaller
-  private func _createDataTask(_ fn: @escaping (Tensor) async throws -> Data) -> Task<Data, Error> {
+  private func _createDataTask(_ fn: @escaping @Sendable (Tensor) async throws -> Data) -> Task<
+    Data, Error
+  > {
     Tensor.createDataTask(self, fn)
   }
 
   static public func createDataTask<T>(
-    _ fn: @escaping () async throws -> T,
+    _ fn: @escaping @Sendable () async throws -> T,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) -> Task<T, Error> {
     let callers = Backtrace.current + [CodeLocation(function: function, file: file, line: line)]
@@ -555,7 +573,7 @@ public final class Tensor {
 
   @recordCaller
   static private func _createDataTask(
-    _ x: Tensor, _ fn: @escaping (Tensor) async throws -> Data
+    _ x: Tensor, _ fn: @escaping @Sendable (Tensor) async throws -> Data
   ) -> Task<Data, Error> {
     let safeRef1 = x.noGrad()
     return createDataTask {
@@ -565,7 +583,7 @@ public final class Tensor {
 
   @recordCaller
   static private func _createDataTask(
-    _ x: Tensor, _ y: Tensor, _ fn: @escaping (Tensor, Tensor) async throws -> Data
+    _ x: Tensor, _ y: Tensor, _ fn: @escaping @Sendable (Tensor, Tensor) async throws -> Data
   ) -> Task<Data, Error> {
     let safeRef1 = x.noGrad()
     let safeRef2 = y.noGrad()
@@ -577,7 +595,7 @@ public final class Tensor {
   @recordCaller
   static private func _createDataTask(
     _ x: Tensor, _ y: Tensor, _ z: Tensor,
-    _ fn: @escaping (Tensor, Tensor, Tensor) async throws -> Data
+    _ fn: @escaping @Sendable (Tensor, Tensor, Tensor) async throws -> Data
   ) -> Task<Data, Error> {
     let safeRef1 = x.noGrad()
     let safeRef2 = y.noGrad()
@@ -590,7 +608,7 @@ public final class Tensor {
   @recordCaller
   static private func _createDataTask(
     _ w: Tensor, _ x: Tensor, _ y: Tensor, _ z: Tensor,
-    _ fn: @escaping (Tensor, Tensor, Tensor, Tensor) async throws -> Data
+    _ fn: @escaping @Sendable (Tensor, Tensor, Tensor, Tensor) async throws -> Data
   ) -> Task<Data, Error> {
     let safeRef1 = w.noGrad()
     let safeRef2 = x.noGrad()
@@ -602,7 +620,7 @@ public final class Tensor {
   }
 
   @recordCaller
-  private func _onGrad(_ action: @escaping ((Tensor) -> Void)) -> Tensor {
+  private func _onGrad(_ action: @escaping @Sendable (Tensor) -> Void) -> Tensor {
     #alwaysAssert(dtype.supportsGrad, "cannot compute gradients for dtype \(dtype)")
     if !Tensor.isGradEnabled {
       return Tensor(dataTask: dataTask, shape: shape, dtype: dtype)

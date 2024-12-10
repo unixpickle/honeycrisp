@@ -4,7 +4,7 @@ extension Tensor {
 
   public convenience init(
     oneHot: Int, count: Int, dtype: DType = .float32, function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) {
     Backtrace.record(function: function, file: file, line: line) {
       #alwaysAssert(oneHot >= 0 && oneHot < count, "oneHot \(oneHot) out of range [0, \(count))")
@@ -16,7 +16,7 @@ extension Tensor {
 
   public convenience init(
     oneHot: [Int], count: Int, dtype: DType = .float32, function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) {
     var data = Array(repeating: Float(0), count: count * oneHot.count)
     Backtrace.record(function: function, file: file, line: line) {

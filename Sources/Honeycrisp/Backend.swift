@@ -23,7 +23,7 @@ public enum BackendError: Error {
 /// On a given thread, there is a current default backend, accessible via ``Backend/current``.
 /// You can call ``Backend/use(_:)-79uzk`` to override the backend on the current thread, or else
 /// the global ``Backend/defaultBackend`` will be used.
-open class Backend {
+open class Backend: @unchecked Sendable {
 
   public enum TensorOrScalar<T: TensorElement> {
     case tensor(BroadcastData)
@@ -42,9 +42,19 @@ open class Backend {
   @TaskLocal
   private static var taskCurrentBackend: Backend? = nil
 
+  nonisolated(unsafe) private static var _defaultBackend: Backend = CPUBackend()
+  private static let _defaultBackendLock = NSLock()
+
   /// The ``Backend`` that is used by default but can be overriden on a
   /// per-thread basis by ``Backend/use(_:)-79uzk``.
-  public static var defaultBackend: Backend = CPUBackend()
+  public static var defaultBackend: Backend {
+    get {
+      _defaultBackendLock.withLock { _defaultBackend }
+    }
+    set {
+      _defaultBackendLock.withLock { _defaultBackend = newValue }
+    }
+  }
 
   /// The current backend in use on this thread.
   ///
@@ -76,7 +86,7 @@ open class Backend {
   }
 
   /// A lightweight thread-safe FIFO queue.
-  public class Queue<T: Sendable> {
+  public final class Queue<T: Sendable>: @unchecked Sendable {
     private var items: [T] = []
     private var lock: NSLock = NSLock()
     private var closed: Bool = false
@@ -121,7 +131,7 @@ open class Backend {
   /// Once this is deinitialized, the background thread will complete its
   /// remaining work and then exit.
   public class WorkerThread {
-    public typealias Job = () -> Void
+    public typealias Job = @Sendable () -> Void
 
     private let queue = Queue<Job>()
     private var thread: Thread? = nil

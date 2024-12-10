@@ -8,7 +8,7 @@ enum ConversionError: Error {
 }
 
 /// A native numeric or boolean value which can represent a single element of a ``Tensor``.
-public protocol TensorElement: Comparable {
+public protocol TensorElement: Comparable, Sendable {
   /// If true, then ``TensorElement/toFloat()`` may lose information.
   static var isFloatLossy: Bool { get }
 
@@ -132,6 +132,24 @@ extension Float: NumericTensorElement {
   }
 }
 
+extension Bool: @retroactive Comparable {
+  public static func < (lhs: Self, rhs: Self) -> Bool {
+    lhs == false && rhs == true
+  }
+
+  public static func <= (lhs: Self, rhs: Self) -> Bool {
+    lhs == false
+  }
+
+  public static func >= (lhs: Self, rhs: Self) -> Bool {
+    lhs == true
+  }
+
+  public static func > (lhs: Self, rhs: Self) -> Bool {
+    lhs == true && rhs == false
+  }
+}
+
 extension Bool: TensorElement {
   public static var isInt64Lossy: Bool { false }
   public static var isFloatLossy: Bool { false }
@@ -152,22 +170,6 @@ extension Bool: TensorElement {
 
   public func toInt64() -> Int64 {
     return self ? 1 : 0
-  }
-
-  public static func < (lhs: Self, rhs: Self) -> Bool {
-    lhs == false && rhs == true
-  }
-
-  public static func <= (lhs: Self, rhs: Self) -> Bool {
-    lhs == false
-  }
-
-  public static func >= (lhs: Self, rhs: Self) -> Bool {
-    lhs == true
-  }
-
-  public static func > (lhs: Self, rhs: Self) -> Bool {
-    lhs == true && rhs == false
   }
 }
 

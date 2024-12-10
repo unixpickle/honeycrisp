@@ -1,9 +1,9 @@
-import CoreML
+@preconcurrency import CoreML
 import CoreMLBuilder
 
 /// A ``Backend`` which replaces certain operations with CoreML programs,
 /// possibly allowing the use of the Apple Neural Engine (ANE).
-open class CoreMLBackend: BackendWrapper, DataAllocator {
+open class CoreMLBackend: BackendWrapper, DataAllocator, @unchecked Sendable {
   internal struct MatmulKey: Hashable {
     public let sizeA0: Int
     public let sizeA1: Int
@@ -14,16 +14,17 @@ open class CoreMLBackend: BackendWrapper, DataAllocator {
     public let isFloat32: Bool
   }
 
-  internal class ModelCache {
+  private final class ModelCache: @unchecked Sendable {
     private let computeUnits: MLComputeUnits
     private var matmuls: [MatmulKey: MLModel] = [:]
+    private let lock = NSLock()
 
     public init(computeUnits: MLComputeUnits) {
       self.computeUnits = computeUnits
     }
 
     public func matmul(_ key: MatmulKey) async throws -> MLModel {
-      if let model = matmuls[key] {
+      if let model = lock.withLock({ matmuls[key] }) {
         return model
       }
 
@@ -35,13 +36,18 @@ open class CoreMLBackend: BackendWrapper, DataAllocator {
         dtype: key.isFloat32 ? .float32 : .float16
       )
       let model = try await matmul.model(computeUnits: computeUnits)
-      matmuls[key] = model
+      lock.withLock {
+        matmuls[key] = model
+      }
       return model
     }
   }
 
-  internal typealias Job = ((ModelCache) async throws -> MLModel, (Result<MLModel, Error>) -> Void)
-  internal let queue: Queue<Job> = Queue()
+  private typealias Job = (
+    @Sendable (ModelCache) async throws -> MLModel,
+    @Sendable (Result<MLModel, Error>) -> Void
+  )
+  private let queue: Queue<Job> = Queue()
   public let computeUnits: MLComputeUnits
 
   deinit {
@@ -56,18 +62,25 @@ open class CoreMLBackend: BackendWrapper, DataAllocator {
     for i in 0..<threads {
       let thread = Thread { [queue = self.queue] in
         let cache = ModelCache(computeUnits: computeUnits)
+
+        // I'm not sure why we need this wrapper type to make this compile
+        // in Swift 6.0.2.
+        struct ResultType: Sendable {
+          let value: Result<MLModel, Error>
+        }
+
         while let (buildModel, useModel) = queue.get() {
-          let q1 = Queue<Result<MLModel, Error>>()
+          let q1: Queue<ResultType> = .init()
           Task.detached {
             do {
               let model = try await buildModel(cache)
-              q1.put(.success(model))
+              q1.put(ResultType(value: .success(model)))
             } catch {
-              q1.put(.failure(error))
+              q1.put(ResultType(value: .failure(error)))
             }
           }
           autoreleasepool {
-            useModel(q1.get()!)
+            useModel(q1.get()!.value)
           }
         }
       }
@@ -76,9 +89,9 @@ open class CoreMLBackend: BackendWrapper, DataAllocator {
     }
   }
 
-  internal func runModel<T: Sendable>(
-    buildModel: @escaping (ModelCache) async throws -> MLModel,
-    useModel: @escaping (MLModel) throws -> T
+  private func runModel<T: Sendable>(
+    buildModel: @escaping @Sendable (ModelCache) async throws -> MLModel,
+    useModel: @escaping @Sendable (MLModel) throws -> T
   ) async throws -> T {
     try await withCheckedThrowingContinuation { continuation in
       queue.put(

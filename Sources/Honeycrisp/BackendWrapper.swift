@@ -6,9 +6,9 @@ import MetalPerformanceShadersGraph
 
 /// A ``Backend`` which wraps another `Backend`, intended to be sub-classed to override
 /// a selection of methods from a wrapped implementation.
-open class BackendWrapper: Backend {
+open class BackendWrapper: Backend, @unchecked Sendable {
 
-  public class WrappedRandomGenerator<B: BackendWrapper>: RandomGenerator {
+  public class WrappedRandomGenerator<B: BackendWrapper>: RandomGenerator, @unchecked Sendable {
     public let wrappedBackend: B
     public let wrapped: RandomGenerator
 
@@ -399,7 +399,7 @@ open class BackendWrapper: Backend {
 }
 
 /// A backend wrapper that counts floating-point operations in an atomic counter.
-open class BackendFLOPCounter: BackendWrapper {
+open class BackendFLOPCounter: BackendWrapper, @unchecked Sendable {
   internal var lock = NSLock()
   internal var counter: Int64 = 0
 

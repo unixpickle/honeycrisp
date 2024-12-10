@@ -42,6 +42,9 @@ extension Tensor {
 
     let backend = Backend.current
 
+    let shape = param.shape
+    let dtype = param.dtype
+
     let param = param.noGrad()
     let grad = grad.noGrad()
     let moment1 = moment1.noGrad()
@@ -58,17 +61,17 @@ extension Tensor {
         weightDecay: weightDecay,
         lr: lr,
         step: step,
-        count: param.shape.product(),
-        dtype: param.dtype
+        count: shape.product(),
+        dtype: dtype
       )
     }
     return (
       param: Tensor(
-        dataTask: Task { try await newData.value.param }, shape: param.shape, dtype: param.dtype),
+        dataTask: Task { try await newData.value.param }, shape: shape, dtype: dtype),
       moment1: Tensor(
-        dataTask: Task { try await newData.value.moment1 }, shape: param.shape, dtype: param.dtype),
+        dataTask: Task { try await newData.value.moment1 }, shape: shape, dtype: dtype),
       moment2: Tensor(
-        dataTask: Task { try await newData.value.moment2 }, shape: param.shape, dtype: param.dtype)
+        dataTask: Task { try await newData.value.moment2 }, shape: shape, dtype: dtype)
     )
   }
 }
@@ -159,19 +162,33 @@ public class Adam: Optimizer {
 
   /// An encodable object that contains all of the values that this optimizer
   /// tracks during optimization trajectories.
-  public struct State: Codable {
-    public var stepIndex: [String: Int] = [:]
-    public var moment1: [String: TensorState] = [:]
-    public var moment2: [String: TensorState] = [:]
+  public struct State: Codable, Sendable {
+    public let stepIndex: [String: Int]
+    public let moment1: [String: TensorState]
+    public let moment2: [String: TensorState]
+
+    public init(
+      stepIndex: [String: Int] = [:],
+      moment1: [String: TensorState] = [:],
+      moment2: [String: TensorState] = [:]
+    ) {
+      self.stepIndex = stepIndex
+      self.moment1 = moment1
+      self.moment2 = moment2
+    }
   }
 
-  @recordCaller
-  private func _state() async throws -> State {
-    State(
-      stepIndex: stepIndex,
-      moment1: try await tensorsToStates(moment1),
-      moment2: try await tensorsToStates(moment2)
-    )
+  public var state: TracedBlock<State> {
+    let moment1 = moment1
+    let moment2 = moment2
+    let stepIndex = stepIndex
+    return TracedBlock {
+      State(
+        stepIndex: stepIndex,
+        moment1: try await tensorsToStates(moment1),
+        moment2: try await tensorsToStates(moment2)
+      )
+    }
   }
 
   @recordCaller

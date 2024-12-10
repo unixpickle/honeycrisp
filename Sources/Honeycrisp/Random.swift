@@ -2,7 +2,7 @@ import Foundation
 import HCBacktrace
 
 /// A probability distribution over continuous values.
-public enum RandomDist {
+public enum RandomDist: Sendable {
   case uniform
   case normal
 }
@@ -19,7 +19,7 @@ public enum RandomDist {
 /// initializers like ``Tensor/init(rand:dtype:generator:function:file:line:)``.
 /// These calls with synchronously update ``RandomGenerator/state``, ensuring that the generator
 /// is used in a deterministic order.
-open class RandomGenerator {
+open class RandomGenerator: @unchecked Sendable {
   public let backend: Backend
   private var _state: Tensor
   private let _opLock: NSLock = NSLock()
@@ -129,7 +129,7 @@ extension Tensor {
     dtype: DType = .float32,
     generator: RandomGenerator? = nil,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     self.init(
@@ -143,7 +143,7 @@ extension Tensor {
     dtype: DType = .float32,
     generator: RandomGenerator? = nil,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     self.init(
@@ -157,7 +157,7 @@ extension Tensor {
     dtype: DType = .float32,
     generator: RandomGenerator? = nil,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     let backend = Backend.current
@@ -176,7 +176,7 @@ extension Tensor {
     randnLike other: Tensor,
     generator: RandomGenerator? = nil,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     self.init(
@@ -189,7 +189,7 @@ extension Tensor {
     randLike other: Tensor,
     generator: RandomGenerator? = nil,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     self.init(
@@ -203,7 +203,7 @@ extension Tensor {
     in range: Range<Int64>,
     generator: RandomGenerator? = nil,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     let dataTask = Backtrace.record(function: function, file: file, line: line) {

@@ -5,8 +5,8 @@ import HCBacktrace
 ///
 /// This is intended to be used with ``Tensor/init(state:)`` and obtained via
 /// ``Tensor/state(function:file:line:)``.
-public struct TensorState: Codable {
-  public enum TensorData {
+public struct TensorState: Codable, Sendable {
+  public enum TensorData: Sendable {
     case floats([Float])
     case ints([Int64])
     case bools([Bool])
@@ -16,7 +16,7 @@ public struct TensorState: Codable {
     case invalidDataSize
   }
 
-  enum CodingKeys: String, CodingKey {
+  enum CodingKeys: String, CodingKey, Sendable {
     case data
     case shape
     case dtype

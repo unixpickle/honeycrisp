@@ -9,7 +9,7 @@ extension Tensor {
     concat tensors: [Tensor],
     axis: Int = 0,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     let backend = Backend.current
@@ -76,7 +76,7 @@ extension Tensor {
     stack tensors: [Tensor],
     axis: Int = 0,
     function: StaticString = #function,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
   ) {
     let args = Backtrace.record(function: function, file: file, line: line) {

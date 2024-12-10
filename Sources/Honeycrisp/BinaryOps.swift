@@ -1,5 +1,5 @@
 /// A binary operator which can be performed on numeric ``Tensor``s.
-public enum NumericBinaryOp {
+public enum NumericBinaryOp: Sendable {
   case add
   case mul
   case sub

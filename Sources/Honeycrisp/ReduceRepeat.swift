@@ -9,7 +9,7 @@ import HCBacktrace
 /// The `reduceCount` would be `shape[2]`, i.e. `7`.
 /// The `outerCount` would be `3 * 5`, i.e. `15`.
 /// The `innerCount` would be `1 * 9`, i.e. `9`.
-public struct ReduceDims: Hashable {
+public struct ReduceDims: Hashable, Sendable {
   public let outerCount: Int
   public let reduceCount: Int
   public let innerCount: Int
@@ -32,7 +32,7 @@ public struct ReduceDims: Hashable {
 }
 
 /// A structure representing the inverse of a ``ReduceDims``.
-public struct RepeatDims: Hashable {
+public struct RepeatDims: Hashable, Sendable {
   public let outerCount: Int
   public let repeatCount: Int
   public let innerCount: Int
@@ -51,7 +51,7 @@ public struct RepeatDims: Hashable {
 }
 
 /// A reduction operation which can be applied to a ``Tensor``.
-public enum ReduceOp {
+public enum ReduceOp: Sendable {
   case sum
   case argmax
   case argmin

@@ -114,7 +114,7 @@ open class BackendTests {
 
     var xGrad: Tensor?
     var yGrad: Tensor?
-    let divided = (x.onGrad { g in xGrad = g }) / (y.onGrad { g in yGrad = g })
+    let divided = (x.onGradUnsafe { g in xGrad = g }) / (y.onGradUnsafe { g in yGrad = g })
     divided.backward(Tensor(data: [-1.0, 2.0, 3.0, 4.0], shape: [4]))
     try await assertClose(xGrad!, [1.0, 1.0, 1.5, 1.3333333333])
     try await assertClose(yGrad!, [1.0, -1.0, -4.5, -0.0])
@@ -141,9 +141,11 @@ open class BackendTests {
           try await assertDataEqual(out1, out2)
         } else {
           let out1 = a(
-            x.onGrad { realXGrad = $0 }, y.onGrad { realYGrad = $0 }, z.onGrad { realZGrad = $0 })
+            x.onGradUnsafe { realXGrad = $0 }, y.onGradUnsafe { realYGrad = $0 },
+            z.onGradUnsafe { realZGrad = $0 })
           let out2 = b(
-            x.onGrad { expXGrad = $0 }, y.onGrad { expYGrad = $0 }, z.onGrad { expZGrad = $0 })
+            x.onGradUnsafe { expXGrad = $0 }, y.onGradUnsafe { expYGrad = $0 },
+            z.onGradUnsafe { expZGrad = $0 })
           try await assertDataEqual(out1, out2)
           out1.backward(Tensor(onesLike: out1))
           out2.backward(Tensor(onesLike: out2))
@@ -167,14 +169,14 @@ open class BackendTests {
           let xData = Tensor(randn: shape, dtype: dtype)
           let outGrad = Tensor(randn: shape, dtype: dtype)
           var xGradExpected: Tensor? = nil
-          var x = xData.onGrad { g in xGradExpected = g }.cast(.float32)
+          var x = xData.onGradUnsafe { g in xGradExpected = g }.cast(.float32)
           let mean = x.mean(axis: axis, keepdims: true)
           let variance = (x - mean).pow(2).mean(axis: axis, keepdims: true)
           let normed = (x - mean) / (variance + epsilon).sqrt()
           normed.backward(outGrad.cast(as: normed))
 
           var xGradActual: Tensor? = nil
-          x = xData.onGrad { g in xGradActual = g }
+          x = xData.onGradUnsafe { g in xGradActual = g }
           let normedFused = x.normalize(axis: axis, eps: epsilon)
           normedFused.backward(outGrad)
 
@@ -220,7 +222,7 @@ open class BackendTests {
 
     var xGrad: Tensor?
     var yGrad: Tensor?
-    let modded = (x.onGrad { g in xGrad = g }) % (y.onGrad { g in yGrad = g })
+    let modded = (x.onGradUnsafe { g in xGrad = g }) % (y.onGradUnsafe { g in yGrad = g })
     modded.backward(Tensor(data: [-1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], shape: [7]))
     try await assertClose(xGrad!, [-1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
     try await assertClose(yGrad!, [0.0, -2.0, -0, -0, -5.0, -0, -0])
@@ -232,8 +234,8 @@ open class BackendTests {
 
     var xGrad: Tensor?
     var yGrad: Tensor?
-    let xWithGrad = x.onGrad { grad in xGrad = grad }
-    let yWithGrad = y.onGrad { grad in yGrad = grad }
+    let xWithGrad = x.onGradUnsafe { grad in xGrad = grad }
+    let yWithGrad = y.onGradUnsafe { grad in yGrad = grad }
     let product = (xWithGrad * 2) * yWithGrad
     try await assertDataEqual(product, [-2.0, 8.0, -0.0])
     product.backward()
@@ -245,7 +247,7 @@ open class BackendTests {
     let x = Tensor(data: [1.0, 2.0, 3.0], shape: [3])
     let y = Tensor(data: [2.0, 0.0, -3.0], shape: [3])
     var xGrad: Tensor?
-    let diff = x.onGrad({ grad in xGrad = grad }) - y
+    let diff = x.onGradUnsafe({ grad in xGrad = grad }) - y
     let sqDiff = diff * diff
     sqDiff.backward(Tensor(onesLike: x))
     try await assertDataEqual(xGrad!, [-2, 4, 12])
@@ -304,7 +306,7 @@ open class BackendTests {
     var xGrad: Tensor?
 
     func useX() -> Tensor {
-      x.onGrad { xGrad = $0 }
+      x.onGradUnsafe { xGrad = $0 }
     }
 
     var sum = useX().sum(axis: 2)
@@ -369,13 +371,13 @@ open class BackendTests {
 
     let input = Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9], shape: [3, 3], dtype: .float32)
     var gradA: Tensor?
-    let sumA = input.onGrad({ g in gradA = g }).sum(axis: 1)
+    let sumA = input.onGradUnsafe({ g in gradA = g }).sum(axis: 1)
     try await assertDataEqual(sumA, [6, 15, 24])
     sumA.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
     try await assertDataEqual(gradA!, [-1, -1, -1, -2, -2, -2, -3, -3, -3])
 
     var gradB: Tensor?
-    let sumB = input.onGrad({ g in gradB = g }).sum(axis: 0)
+    let sumB = input.onGradUnsafe({ g in gradB = g }).sum(axis: 0)
     try await assertDataEqual(sumB, [12, 15, 18])
     sumB.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
     try await assertDataEqual(gradB!, [-1, -2, -3, -1, -2, -3, -1, -2, -3])
@@ -383,13 +385,13 @@ open class BackendTests {
     let input1 = Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8], shape: [2, 2, 2], dtype: .float32)
 
     var gradC: Tensor?
-    let sumC = input1.onGrad({ g in gradC = g }).sum(axis: 1)
+    let sumC = input1.onGradUnsafe({ g in gradC = g }).sum(axis: 1)
     try await assertDataEqual(sumC, Array([1 + 3, 2 + 4, 5 + 7, 6 + 8].map { Float($0) }))
     sumC.backward(Tensor(data: [-1, -2, -3, -4], shape: [2, 2], dtype: .float32))
     try await assertDataEqual(gradC!, [-1, -2, -1, -2, -3, -4, -3, -4])
 
     var gradD: Tensor?
-    let sumD = input1.onGrad({ g in gradD = g }).sum()
+    let sumD = input1.onGradUnsafe({ g in gradD = g }).sum()
     try await assertDataEqual(sumD, [[1, 2, 3, 4, 5, 6, 7, 8].sum()])
     sumD.backward(Tensor(data: [-1], shape: [], dtype: .float32))
     try await assertDataEqual(gradD!, Array(repeating: Float(-1), count: 8))
@@ -405,7 +407,7 @@ open class BackendTests {
     var xGrad: Tensor?
 
     func useX() -> Tensor {
-      x.onGrad { xGrad = $0 }
+      x.onGradUnsafe { xGrad = $0 }
     }
 
     let repeated = useX().repeating(axis: 2, count: 2)
@@ -425,7 +427,7 @@ open class BackendTests {
       var xGrad: Tensor?
 
       func useX() -> Tensor {
-        x.onGrad { xGrad = $0 }
+        x.onGradUnsafe { xGrad = $0 }
       }
 
       // Unbroadcasted gather along inner axis
@@ -504,7 +506,7 @@ open class BackendTests {
       let indices = Tensor(data: (0..<20).map({ $0 % 4 }), shape: [1, 4, 5])
       let indicesBcast = indices.expand(shape: [3, 4, 5])
       func useY() -> Tensor {
-        y.onGrad { yGrad = $0 }
+        y.onGradUnsafe { yGrad = $0 }
       }
       let actualOut = useY().gather(axis: 1, indices: indices)
       let outGrad = Tensor(randLike: actualOut)
@@ -531,8 +533,8 @@ open class BackendTests {
             ).t()
             var aGrad: Tensor?
             var bGrad: Tensor?
-            let a = x.onGrad { grad in aGrad = grad }
-            let b = y.onGrad { grad in bGrad = grad }
+            let a = x.onGradUnsafe { grad in aGrad = grad }
+            let b = y.onGradUnsafe { grad in bGrad = grad }
             let subOut = Tensor.matmul(
               a: transA ? a.t() : a, transA: transA,
               b: transB ? b.t() : b, transB: transB, transOut: transOut)
@@ -571,8 +573,8 @@ open class BackendTests {
             let y = Tensor(rand: [3, 3, 4], dtype: dtype)
             var xGrad: Tensor?
             var yGrad: Tensor?
-            let a = x.onGrad { grad in xGrad = grad }
-            let b = y.onGrad { grad in yGrad = grad }
+            let a = x.onGradUnsafe { grad in xGrad = grad }
+            let b = y.onGradUnsafe { grad in yGrad = grad }
             let preOut = Tensor.batchedMatmul(
               a: transA ? a.t() : a, transA: transA,
               b: transB ? b.t() : b, transB: transB, transOut: transOut)
@@ -585,8 +587,8 @@ open class BackendTests {
               let eps = Float(dtype == .float32 ? 1e-4 : 1e-2)
               var subXGrad: Tensor?
               var subYGrad: Tensor?
-              let a = x[i].onGrad { grad in subXGrad = grad }
-              let b = y[i].onGrad { grad in subYGrad = grad }
+              let a = x[i].onGradUnsafe { grad in subXGrad = grad }
+              let b = y[i].onGradUnsafe { grad in subYGrad = grad }
               let singleOut = Tensor.matmul(
                 a: transA ? a.t() : a, transA: transA,
                 b: transB ? b.t() : b, transB: transB, transOut: transOut)
@@ -608,8 +610,8 @@ open class BackendTests {
     let y = Tensor(data: [-1, -3, 2], shape: [3, 1], dtype: .float32)
     var xGrad: Tensor?
     var yGrad: Tensor?
-    let xParam = x.onGrad { grad in xGrad = grad }
-    let yParam = y.onGrad { grad in yGrad = grad }
+    let xParam = x.onGradUnsafe { grad in xGrad = grad }
+    let yParam = y.onGradUnsafe { grad in yGrad = grad }
     let product = xParam &* yParam
     try await assertDataEqual(product, [-1, -7])
     product.backward()
@@ -633,7 +635,7 @@ open class BackendTests {
 
     let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2], dtype: .float32)
     var xGrad: Tensor?
-    x.onGrad { g in xGrad = g }.tril().backward(
+    x.onGradUnsafe { g in xGrad = g }.tril().backward(
       Tensor(data: [-1, -2, -3, -4, -5, -6], shape: [3, 2], dtype: .float32))
     try await assertDataEqual(xGrad!, [-1, 0, -3, -4, -5, -6])
   }
@@ -687,13 +689,13 @@ open class BackendTests {
     XCTAssertEqual(y[..., 0, 3].shape, [3])
 
     var yGrad: Tensor?
-    let yParam = y.onGrad { grad in yGrad = grad }
+    let yParam = y.onGradUnsafe { grad in yGrad = grad }
     yParam[1...2, ..., 2...3].backward(
       Tensor(data: [1, 2, 3, 4], shape: [2, 1, 2], dtype: .float32))
     XCTAssertEqual(yGrad!.shape, y.shape)
     try await assertDataEqual(yGrad!, [0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 4])
 
-    let yParam1 = y.onGrad { grad in yGrad = grad }
+    let yParam1 = y.onGradUnsafe { grad in yGrad = grad }
     yParam1[..., 0, 3].backward(Tensor(data: [1, 2, 3], shape: [3], dtype: .float32))
     XCTAssertEqual(yGrad!.shape, y.shape)
     try await assertDataEqual(yGrad!, [0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3])
@@ -767,7 +769,7 @@ open class BackendTests {
         let outputGrad = Tensor(rand: [input.count], dtype: dtype) + 1.0
 
         var actualGrad: Tensor?
-        let tensorIn = Tensor(data: input, shape: [input.count], dtype: dtype) { g in
+        let tensorIn = Tensor(data: input, shape: [input.count], dtype: dtype).onGradUnsafe { g in
           actualGrad = g / outputGrad
         }
         assert(tensorIn.needsGrad, "\(tensorIn.dtype) \(tensorIn.needsGrad)")
@@ -894,32 +896,32 @@ open class BackendTests {
   public static func testMinMax() async throws {
     let input = Tensor(data: [1, 10, 2, 7, 8, 9, 6, 4, 5], shape: [3, 3], dtype: .float32)
     var gradA: Tensor?
-    let maxA = input.onGrad({ g in gradA = g }).max(axis: 1)
+    let maxA = input.onGradUnsafe({ g in gradA = g }).max(axis: 1)
     try await assertDataEqual(maxA, [10, 9, 6])
     maxA.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
     try await assertDataEqual(gradA!, [0, -1, 0, 0, 0, -2, -3, 0, 0])
 
     var gradB: Tensor?
-    let maxB = input.onGrad({ g in gradB = g }).max(axis: 0)
+    let maxB = input.onGradUnsafe({ g in gradB = g }).max(axis: 0)
     try await assertDataEqual(maxB, [7, 10, 9])
     maxB.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
     try await assertDataEqual(gradB!, [0, -2, 0, -1, 0, -3, 0, 0, 0])
 
     var gradC: Tensor?
-    let minC = input.onGrad({ g in gradC = g }).min(axis: 0)
+    let minC = input.onGradUnsafe({ g in gradC = g }).min(axis: 0)
     try await assertDataEqual(minC, [1, 4, 2])
     minC.backward(Tensor(data: [-1, -2, -3], shape: [3], dtype: .float32))
     try await assertDataEqual(gradC!, [-1, 0, -3, 0, 0, 0, 0, -2, 0])
 
     var gradD: Tensor?
-    let maxD = input.onGrad({ g in gradD = g }).max()
+    let maxD = input.onGradUnsafe({ g in gradD = g }).max()
     XCTAssertEqual(maxD.shape, [])
     try await assertDataEqual(maxD, [10])
     maxD.backward(Tensor(data: [-1], shape: [], dtype: .float32))
     try await assertDataEqual(gradD!, [0, -1, 0, 0, 0, 0, 0, 0, 0])
 
     var gradE: Tensor?
-    let maxE = input.onGrad({ g in gradE = g }).min()
+    let maxE = input.onGradUnsafe({ g in gradE = g }).min()
     XCTAssertEqual(maxE.shape, [])
     try await assertDataEqual(maxE, [1])
     maxE.backward(Tensor(data: [-1], shape: [], dtype: .float32))
@@ -953,7 +955,7 @@ open class BackendTests {
       t2.expand(shape: [1, 2, 1, 3, 2]), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6])
 
     var grad: Tensor?
-    let repeated = t2.onGrad({ g in grad = g }).repeating(axis: 2, count: 2)
+    let repeated = t2.onGradUnsafe({ g in grad = g }).repeating(axis: 2, count: 2)
     repeated.backward(
       Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], shape: [1, 2, 2, 3, 1]).cast(as: t1))
     try await assertDataEqual(grad!, [5, 7, 9, 17, 19, 21])
@@ -997,9 +999,10 @@ open class BackendTests {
         var bcastRightGrad: Tensor?
         let outGrad = Tensor(rand: outputBcast.shape)
         let (bcastLeft1, bcastRight1) = Tensor.broadcast(
-          left.onGrad { bcastLeftGrad = $0 }, right.onGrad { bcastRightGrad = $0 })
+          left.onGradUnsafe { bcastLeftGrad = $0 }, right.onGradUnsafe { bcastRightGrad = $0 })
         op(bcastLeft1, bcastRight1).backward(outGrad)
-        op(left.onGrad { leftGrad = $0 }, right.onGrad { rightGrad = $0 }).backward(outGrad)
+        op(left.onGradUnsafe { leftGrad = $0 }, right.onGradUnsafe { rightGrad = $0 }).backward(
+          outGrad)
         try await assertClose(leftGrad!, bcastLeftGrad!)
         try await assertClose(rightGrad!, bcastRightGrad!)
       }
@@ -1037,12 +1040,15 @@ open class BackendTests {
         var bcastCGrad: Tensor?
         let outGrad = Tensor(rand: outputBcast.shape)
         let bcasts1 = Tensor.broadcast([
-          a.onGrad { bcastAGrad = $0 },
-          b.onGrad { bcastBGrad = $0 },
-          c.onGrad { bcastCGrad = $0 },
+          a.onGradUnsafe { bcastAGrad = $0 },
+          b.onGradUnsafe { bcastBGrad = $0 },
+          c.onGradUnsafe { bcastCGrad = $0 },
         ])
         op(bcasts1[0], bcasts1[1], bcasts1[2]).backward(outGrad)
-        op(a.onGrad { aGrad = $0 }, b.onGrad { bGrad = $0 }, c.onGrad { cGrad = $0 }).backward(
+        op(
+          a.onGradUnsafe { aGrad = $0 }, b.onGradUnsafe { bGrad = $0 },
+          c.onGradUnsafe { cGrad = $0 }
+        ).backward(
           outGrad)
         try await assertClose(aGrad!, bcastAGrad!)
         try await assertClose(bGrad!, bcastBGrad!)
@@ -1068,7 +1074,7 @@ open class BackendTests {
       ], shape: [3, 5])
 
     var axis0Grad: Tensor?
-    let axis0Out = x.onGrad({ g in axis0Grad = g }).logSoftmax(axis: 0)
+    let axis0Out = x.onGradUnsafe({ g in axis0Grad = g }).logSoftmax(axis: 0)
     try await assertClose(
       axis0Out,
       Tensor(
@@ -1090,7 +1096,7 @@ open class BackendTests {
         ], shape: [3, 5]))
 
     var axis1Grad: Tensor?
-    let axis1Out = x.onGrad({ g in axis1Grad = g }).logSoftmax(axis: 1)
+    let axis1Out = x.onGradUnsafe({ g in axis1Grad = g }).logSoftmax(axis: 1)
     try await assertClose(
       axis1Out,
       Tensor(
@@ -1118,8 +1124,8 @@ open class BackendTests {
       let outGrad = Tensor(randLike: input)
       var grad1: Tensor?
       var grad2: Tensor?
-      let out1 = input.onGrad { grad1 = $0 }.logSoftmax(axis: -1)
-      let out2 = input.onGrad { grad2 = $0 }.move(axis: -1, to: 1).logSoftmax(axis: 1).move(
+      let out1 = input.onGradUnsafe { grad1 = $0 }.logSoftmax(axis: -1)
+      let out2 = input.onGradUnsafe { grad2 = $0 }.move(axis: -1, to: 1).logSoftmax(axis: 1).move(
         axis: 1, to: -1)
       try await assertClose(out1, out2, atol: tol, rtol: tol)
       out1.backward(outGrad)
@@ -1133,8 +1139,8 @@ open class BackendTests {
     let y = Tensor(data: [7, 8, 9, 10], shape: [2, 2]).cast(.float32)
     var xGrad: Tensor?
     var yGrad: Tensor?
-    let xWithGrad = x.onGrad({ g in xGrad = g })
-    let yWithGrad = y.onGrad({ g in yGrad = g })
+    let xWithGrad = x.onGradUnsafe({ g in xGrad = g })
+    let yWithGrad = y.onGradUnsafe({ g in yGrad = g })
     let combined = Tensor(concat: [xWithGrad, yWithGrad], axis: 1)
     XCTAssertEqual(combined.shape, [2, 5])
     try await assertDataEqual(combined, [1, 2, 3, 7, 8, 4, 5, 6, 9, 10])
@@ -1148,8 +1154,8 @@ open class BackendTests {
     let y = Tensor(data: [7, 8, 9], shape: [1, 3]).cast(.float32)
     var xGrad: Tensor?
     var yGrad: Tensor?
-    let xWithGrad = x.onGrad({ g in xGrad = g })
-    let yWithGrad = y.onGrad({ g in yGrad = g })
+    let xWithGrad = x.onGradUnsafe({ g in xGrad = g })
+    let yWithGrad = y.onGradUnsafe({ g in yGrad = g })
     let combined = Tensor(concat: [xWithGrad, yWithGrad], axis: 0)
     XCTAssertEqual(combined.shape, [3, 3])
     try await assertDataEqual(combined, [1, 2, 3, 4, 5, 6, 7, 8, 9])
@@ -1164,7 +1170,8 @@ open class BackendTests {
     let mask = Tensor(data: [false, true, true, false], shape: [4])
     var xGrad: Tensor?
     var yGrad: Tensor?
-    let out = mask.when(isTrue: x.onGrad { g in xGrad = g }, isFalse: y.onGrad { g in yGrad = g })
+    let out = mask.when(
+      isTrue: x.onGradUnsafe { g in xGrad = g }, isFalse: y.onGradUnsafe { g in yGrad = g })
     try await assertDataEqual(out, [-1.0, 2.0, 3.0, -4.0])
     out.backward(Tensor(data: [5.0, 6.0, 7.0, 8.0], shape: [4]))
     try await assertDataEqual(xGrad!, [0, 6.0, 7.0, 0.0])
@@ -1186,13 +1193,14 @@ open class BackendTests {
             var isTrueGrad: Tensor?
             var isFalseGrad: Tensor?
             let actual = mask.when(
-              isTrue: isTrue.onGrad { g in isTrueGrad = g },
-              isFalse: isFalse.onGrad { g in isFalseGrad = g })
+              isTrue: isTrue.onGradUnsafe { g in isTrueGrad = g },
+              isFalse: isFalse.onGradUnsafe { g in isFalseGrad = g })
 
             var isTrueGradExp: Tensor?
             var isFalseGradExp: Tensor?
             let bcasted = Tensor.broadcast([
-              mask, isTrue.onGrad { isTrueGradExp = $0 }, isFalse.onGrad { isFalseGradExp = $0 },
+              mask, isTrue.onGradUnsafe { isTrueGradExp = $0 },
+              isFalse.onGradUnsafe { isFalseGradExp = $0 },
             ])
             let expected = bcasted[0].when(isTrue: bcasted[1], isFalse: bcasted[2])
 
@@ -1210,12 +1218,12 @@ open class BackendTests {
           let _ = try await {
             var isTrueGrad: Tensor?
             let actual = mask.when(
-              isTrue: isTrue.onGrad { g in isTrueGrad = g },
+              isTrue: isTrue.onGradUnsafe { g in isTrueGrad = g },
               isFalse: 3.1415)
 
             var isTrueGradExp: Tensor?
             let bcasted = Tensor.broadcast([
-              mask, isTrue.onGrad { isTrueGradExp = $0 },
+              mask, isTrue.onGradUnsafe { isTrueGradExp = $0 },
             ])
             let expected = bcasted[0].when(isTrue: bcasted[1], isFalse: 3.1415)
 
@@ -1233,11 +1241,11 @@ open class BackendTests {
             var isFalseGrad: Tensor?
             let actual = mask.when(
               isTrue: 3.1415,
-              isFalse: isFalse.onGrad { g in isFalseGrad = g })
+              isFalse: isFalse.onGradUnsafe { g in isFalseGrad = g })
 
             var isFalseGradExp: Tensor?
             let bcasted = Tensor.broadcast([
-              mask, isFalse.onGrad { isFalseGradExp = $0 },
+              mask, isFalse.onGradUnsafe { isFalseGradExp = $0 },
             ])
             let expected = bcasted[0].when(isTrue: 3.1415, isFalse: bcasted[1])
 
@@ -1380,8 +1388,8 @@ open class BackendTests {
       var imageGrad: Tensor?
       var kernelGrad: Tensor?
       let output = Tensor.conv2D(
-        conv, image: image.onGrad { g in imageGrad = g },
-        kernel: kernel.onGrad { g in kernelGrad = g })
+        conv, image: image.onGradUnsafe { g in imageGrad = g },
+        kernel: kernel.onGradUnsafe { g in kernelGrad = g })
       XCTAssertEqual(output.shape, testCase.outShape, "\(conv)")
       try await assertDataEqual(output, testCase.output, "\(conv)")
 
@@ -1395,8 +1403,8 @@ open class BackendTests {
       var transImageGrad: Tensor?
       var transKernelGrad: Tensor?
       let outputCLast = Tensor.conv2D(
-        convCLast, image: image.onGrad({ g in transImageGrad = g })[PermuteAxes(0, 2, 3, 1)],
-        kernel: kernel.onGrad { g in transKernelGrad = g })[PermuteAxes(0, 3, 1, 2)]
+        convCLast, image: image.onGradUnsafe({ g in transImageGrad = g })[PermuteAxes(0, 2, 3, 1)],
+        kernel: kernel.onGradUnsafe { g in transKernelGrad = g })[PermuteAxes(0, 3, 1, 2)]
       try await assertDataEqual(output, outputCLast)
       outputCLast.backward(outGrad)
       try await assertDataEqual(transImageGrad!, imageGrad!)
@@ -1404,10 +1412,10 @@ open class BackendTests {
 
       var batchedImageGrad: Tensor?
       var batchedKernelGrad: Tensor?
-      let batchedInput = image.onGrad({ g in batchedImageGrad = g })
+      let batchedInput = image.onGradUnsafe({ g in batchedImageGrad = g })
       let batchedOutput = Tensor.conv2D(
         conv, image: Tensor(concat: [Tensor(zerosLike: batchedInput), batchedInput], axis: 0),
-        kernel: kernel.onGrad { g in batchedKernelGrad = g })
+        kernel: kernel.onGradUnsafe { g in batchedKernelGrad = g })
       batchedOutput.backward(outGrad.repeating(axis: 0, count: 2))
       try await assertClose(batchedImageGrad!, imageGrad!)
       try await assertClose(batchedKernelGrad!, kernelGrad!)
@@ -1425,8 +1433,8 @@ open class BackendTests {
     var inputGrad: Tensor?
     var kernelGrad: Tensor?
     let output = Tensor.conv2DTranspose(
-      conv, image: input.onGrad { g in inputGrad = g },
-      kernel: kernel.onGrad { g in kernelGrad = g })
+      conv, image: input.onGradUnsafe { g in inputGrad = g },
+      kernel: kernel.onGradUnsafe { g in kernelGrad = g })
     let outGrad = Tensor(randLike: output)
     output.backward(outGrad)
 
@@ -1459,15 +1467,15 @@ open class BackendTests {
     var inputGrad: Tensor?
     var kernelGrad: Tensor?
     let output = Tensor.conv1D(
-      conv1d, image: input.onGrad { g in inputGrad = g },
-      kernel: kernel.onGrad { g in kernelGrad = g })
+      conv1d, image: input.onGradUnsafe { g in inputGrad = g },
+      kernel: kernel.onGradUnsafe { g in kernelGrad = g })
     let outGrad = Tensor(randLike: output)
     output.backward(outGrad)
 
     var inputGrad2D: Tensor?
     var kernelGrad2D: Tensor?
-    let image2D = input.onGrad { g in inputGrad2D = g }.unsqueeze(axis: -2)
-    let kernel2D = kernel.onGrad { g in kernelGrad2D = g }.unsqueeze(axis: -2)
+    let image2D = input.onGradUnsafe { g in inputGrad2D = g }.unsqueeze(axis: -2)
+    let kernel2D = kernel.onGradUnsafe { g in kernelGrad2D = g }.unsqueeze(axis: -2)
     let output2DRaw = Tensor.conv2D(conv2d, image: image2D, kernel: kernel2D)
     let output2D = output2DRaw.squeeze(axis: -2)
     output2D.backward(outGrad)

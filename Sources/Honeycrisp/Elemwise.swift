@@ -4,13 +4,13 @@ import HCBacktrace
 /// A flag which determines the implementation behind ``Tensor/gelu(mode:function:file:line:)``.
 ///
 /// When the mode is approx, a tanh-based approximation is used.
-public enum GeLUMode {
+public enum GeLUMode: Sendable {
   case approx
   case exact
 }
 
 /// An element-wise operation which can be applied to a numeric ``Tensor``.
-public enum ElemwiseOp {
+public enum ElemwiseOp: Sendable {
   case sin
   case cos
   case minusSin

@@ -6,7 +6,7 @@ import Metal
 ///
 /// The strides must correspond to contiguous data, i.e. each stride that
 /// is non-zero must be larger than the following strides.
-public struct BroadcastStrides: Hashable, Equatable {
+public struct BroadcastStrides: Hashable, Equatable, Sendable {
   public let shape: [Int]
   public let strides: [Int]
   public let dataCount: Int
@@ -95,7 +95,7 @@ public struct BroadcastStrides: Hashable, Equatable {
 ///
 /// Note that this structure does not include the dtype of the underlying
 /// data, which is crucial for actually performing operations on it.
-public struct BroadcastData {
+public struct BroadcastData: Sendable {
   public let strides: BroadcastStrides
   public let data: Tensor.Data
 

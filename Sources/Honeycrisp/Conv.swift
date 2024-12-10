@@ -16,7 +16,7 @@ public enum ConvConfigError: Error {
 /// of x equal corresponding ones in y. The same goes for (x != y), where it is
 /// only true if no elements are equal. As a result, (x != y) may be different
 /// than !(x == y).
-public protocol SpatialDim: Hashable, Comparable {
+public protocol SpatialDim: Hashable, Comparable, Sendable {
   static var dimCount: Int { get }
   var dims: [Int] { get }
   init(constant: Int)
@@ -180,7 +180,7 @@ public struct SpatialDim2D: SpatialDim {
 
 /// A description of an N-dimensional convolution operator.
 /// See ``Conv1DConfig`` and ``Conv2DConfig`` for concrete aliases.
-public struct ConvConfig<Dim: SpatialDim>: Hashable {
+public struct ConvConfig<Dim: SpatialDim>: Hashable, Sendable {
   public typealias Dim = Dim
 
   struct LazyTensor<T: NumericTensorElement> {
@@ -239,7 +239,7 @@ public struct ConvConfig<Dim: SpatialDim>: Hashable {
     }
   }
 
-  public struct Padding: Hashable {
+  public struct Padding: Hashable, Sendable {
     public let before: Dim
     public let after: Dim
 

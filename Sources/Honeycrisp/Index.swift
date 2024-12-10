@@ -215,7 +215,7 @@ public struct FlipAxis: TensorIndex {
 /// A ``TensorIndex`` which permutes axes in a ``Tensor``.
 ///
 /// For example, `tensor[PermuteAxes(0, 2, 1)]` will swap the second and third axes of `tensor`.
-public struct PermuteAxes: TensorIndex {
+public struct PermuteAxes: TensorIndex, Sendable {
   public let perm: [Int]
 
   public var minTensorIndexDims: Int { perm.count }
@@ -379,7 +379,7 @@ extension Tensor {
   }
 
   public subscript(index: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let result = Array(index).tensorIndex(forShape: shape)
@@ -414,7 +414,7 @@ extension Tensor {
                     use_args.append(f"arg{i}")
             print(
                 f"""
-        public subscript({', '.join(args)}, other: any TensorIndex..., function function: StaticString = #function, file: StaticString = #file, line: UInt = #line) -> Tensor {{
+        public subscript({', '.join(args)}, other: any TensorIndex..., function function: StaticString = #function, file: StaticString = #filePath, line: UInt = #line) -> Tensor {{
             Backtrace.record(function: function, file: file, line: line) {{
                 let idx = [{', '.join(use_args)}] + other
                 return self[idx]
@@ -425,7 +425,7 @@ extension Tensor {
       */
 
   public subscript(_: UnboundedRange, other: any TensorIndex...,
-    function function: StaticString = #function, file: StaticString = #file, line: UInt = #line
+    function function: StaticString = #function, file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [FullRange()] + other
@@ -434,7 +434,7 @@ extension Tensor {
   }
 
   public subscript(_: UnboundedRange, _: UnboundedRange, other: any TensorIndex...,
-    function function: StaticString = #function, file: StaticString = #file, line: UInt = #line
+    function function: StaticString = #function, file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [FullRange(), FullRange()] + other
@@ -443,7 +443,7 @@ extension Tensor {
   }
 
   public subscript(arg0: any TensorIndex, _: UnboundedRange, other: any TensorIndex...,
-    function function: StaticString = #function, file: StaticString = #file, line: UInt = #line
+    function function: StaticString = #function, file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [arg0, FullRange()] + other
@@ -453,7 +453,7 @@ extension Tensor {
 
   public subscript(_: UnboundedRange, _: UnboundedRange, _: UnboundedRange,
     other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [FullRange(), FullRange(), FullRange()] + other
@@ -463,7 +463,7 @@ extension Tensor {
 
   public subscript(arg0: any TensorIndex, _: UnboundedRange, _: UnboundedRange,
     other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [arg0, FullRange(), FullRange()] + other
@@ -473,7 +473,7 @@ extension Tensor {
 
   public subscript(_: UnboundedRange, arg1: any TensorIndex, _: UnboundedRange,
     other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [FullRange(), arg1, FullRange()] + other
@@ -483,7 +483,7 @@ extension Tensor {
 
   public subscript(arg0: any TensorIndex, arg1: any TensorIndex, _: UnboundedRange,
     other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [arg0, arg1, FullRange()] + other
@@ -493,7 +493,7 @@ extension Tensor {
 
   public subscript(_: UnboundedRange, _: UnboundedRange, _: UnboundedRange, _: UnboundedRange,
     other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [FullRange(), FullRange(), FullRange(), FullRange()] + other
@@ -503,7 +503,7 @@ extension Tensor {
 
   public subscript(arg0: any TensorIndex, _: UnboundedRange, _: UnboundedRange, _: UnboundedRange,
     other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [arg0, FullRange(), FullRange(), FullRange()] + other
@@ -513,7 +513,7 @@ extension Tensor {
 
   public subscript(_: UnboundedRange, arg1: any TensorIndex, _: UnboundedRange, _: UnboundedRange,
     other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [FullRange(), arg1, FullRange(), FullRange()] + other
@@ -523,7 +523,7 @@ extension Tensor {
 
   public subscript(arg0: any TensorIndex, arg1: any TensorIndex, _: UnboundedRange,
     _: UnboundedRange, other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [arg0, arg1, FullRange(), FullRange()] + other
@@ -533,7 +533,7 @@ extension Tensor {
 
   public subscript(_: UnboundedRange, _: UnboundedRange, arg2: any TensorIndex, _: UnboundedRange,
     other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [FullRange(), FullRange(), arg2, FullRange()] + other
@@ -543,7 +543,7 @@ extension Tensor {
 
   public subscript(arg0: any TensorIndex, _: UnboundedRange, arg2: any TensorIndex,
     _: UnboundedRange, other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [arg0, FullRange(), arg2, FullRange()] + other
@@ -553,7 +553,7 @@ extension Tensor {
 
   public subscript(_: UnboundedRange, arg1: any TensorIndex, arg2: any TensorIndex,
     _: UnboundedRange, other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [FullRange(), arg1, arg2, FullRange()] + other
@@ -563,7 +563,7 @@ extension Tensor {
 
   public subscript(arg0: any TensorIndex, arg1: any TensorIndex, arg2: any TensorIndex,
     _: UnboundedRange, other: any TensorIndex..., function function: StaticString = #function,
-    file: StaticString = #file, line: UInt = #line
+    file: StaticString = #filePath, line: UInt = #line
   ) -> Tensor {
     Backtrace.record(function: function, file: file, line: line) {
       let idx = [arg0, arg1, arg2, FullRange()] + other

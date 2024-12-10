@@ -1,7 +1,7 @@
 import Foundation
 
 /// A location in compiled code, which represents part of a backtrace.
-public struct CodeLocation: CustomStringConvertible {
+public struct CodeLocation: CustomStringConvertible, Sendable {
   public let function: StaticString
   public let file: StaticString
   public let line: UInt
@@ -81,7 +81,7 @@ final public class Backtrace {
     line: UInt,
     _ fn: () throws -> T,
     function1: StaticString = #function,
-    file1: StaticString = #file,
+    file1: StaticString = #filePath,
     line1: UInt = #line
   ) rethrows -> T {
     try $current.withValue(
@@ -104,7 +104,7 @@ final public class Backtrace {
     line: UInt,
     _ fn: () async throws -> T,
     function1: StaticString = #function,
-    file1: StaticString = #file,
+    file1: StaticString = #filePath,
     line1: UInt = #line
   ) async rethrows -> T {
     try await $current.withValue(
@@ -122,7 +122,7 @@ final public class Backtrace {
   /// Record the caller in the backtrace during the provided block.
   public static func record<T>(
     _ fn: () throws -> T,
-    function: StaticString = #function, file: StaticString = #file, line: UInt = #line
+    function: StaticString = #function, file: StaticString = #filePath, line: UInt = #line
   ) rethrows -> T {
     try $current.withValue(current + [CodeLocation(function: function, file: file, line: line)]) {
       try wrapErrors {
@@ -133,7 +133,7 @@ final public class Backtrace {
 
   /// Record the caller in the backtrace during the provided block.
   public static func record<T>(
-    _ fn: () async throws -> T, function: StaticString = #function, file: StaticString = #file,
+    _ fn: () async throws -> T, function: StaticString = #function, file: StaticString = #filePath,
     line: UInt = #line
   ) async rethrows -> T {
     try await $current.withValue(
@@ -180,7 +180,7 @@ private func formatCalls(_ locs: [CodeLocation]) -> String {
 @inline(__always)
 public func alwaysAssert(
   _ condition: Bool, _ message: String? = nil, function: StaticString = #function,
-  file: StaticString = #file, line: UInt = #line
+  file: StaticString = #filePath, line: UInt = #line
 ) {
   if !condition {
     Backtrace.record(
@@ -203,7 +203,7 @@ public func alwaysAssert(
 /// Abort program execution and print the current backtrace with an optional error message.
 public func tracedFatalError(
   _ message: String? = nil, function: StaticString = #function,
-  file: StaticString = #file, line: UInt = #line
+  file: StaticString = #filePath, line: UInt = #line
 ) -> Never {
   Backtrace.record(
     {

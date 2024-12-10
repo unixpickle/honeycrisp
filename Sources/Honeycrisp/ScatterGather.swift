@@ -1,7 +1,7 @@
 import HCBacktrace
 
 /// A low-level description of indexing for a gather or scatter operation.
-public struct ScatterGatherIndices {
+public struct ScatterGatherIndices: Sendable {
   /// The shape of the tensor of input values before the gather.
   public let valueShape: [Int]
 
@@ -123,13 +123,14 @@ extension Tensor {
 
     var newShape = shape
     newShape[axis] = count
+    let valueShape = newShape
 
     let backend = Backend.current
     let newData = Tensor.createDataTask(self, indices) { t, indices in
       try await backend.scatter(
         try await t.data,
         ScatterGatherIndices(
-          valueShape: newShape,
+          valueShape: valueShape,
           axis: axis,
           indices: BroadcastData(strides: indicesStrides, data: try await indices.data),
           indicesAreUnique: indicesAreUnique

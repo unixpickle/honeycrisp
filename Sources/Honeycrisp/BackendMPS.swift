@@ -1,23 +1,24 @@
 import Accelerate
 import Foundation
 import HCBacktrace
-import Metal
+@preconcurrency import Metal
 import MetalPerformanceShaders
 import MetalPerformanceShadersGraph
 
 /// A ``Backend`` which uses Metal Performance Shaders and custom kernels to
 /// implement operations on the GPU.
-open class MPSBackend: CPUBackend {
+open class MPSBackend: CPUBackend, @unchecked Sendable {
 
-  internal class Deallocator {
+  internal class Deallocator: @unchecked Sendable {
     let fn: () -> Void
     let trace: [CodeLocation]
     var called: Bool = false
+    let lock = NSLock()
 
     public init(
       fn: @escaping () -> Void,
       function: StaticString = #function,
-      file: StaticString = #file,
+      file: StaticString = #filePath,
       line: UInt = #line
     ) {
       self.fn = fn
@@ -26,8 +27,10 @@ open class MPSBackend: CPUBackend {
 
     @recordCaller
     private func _callAsFunction() {
-      #alwaysAssert(!called, "double free")
-      called = true
+      lock.withLock {
+        #alwaysAssert(!called, "double free")
+        called = true
+      }
       fn()
     }
 
@@ -46,7 +49,7 @@ open class MPSBackend: CPUBackend {
     }
   }
 
-  internal class GPUData: Tensor.Data {
+  internal class GPUData: Tensor.Data, @unchecked Sendable {
 
     public let backend: MPSBackend
     public let buffer: MTLBuffer
@@ -235,7 +238,7 @@ open class MPSBackend: CPUBackend {
     let dtype: MPSDataType
   }
 
-  public class MPSRandomGenerator: RandomGenerator {
+  public class MPSRandomGenerator: RandomGenerator, @unchecked Sendable {
     public let mpsBackend: MPSBackend
 
     override open var stateCount: Int {
@@ -552,7 +555,10 @@ open class MPSBackend: CPUBackend {
 
     // Create an MPSBuffer which, while in use, maintains a background Task
     // inside of an onCPU call on the original data.
-    return try await withCheckedThrowingContinuation { outerContinuation in
+    struct SendableResult: @unchecked Sendable {
+      let value: (MTLBuffer, Deallocator)
+    }
+    let result: SendableResult = try await withCheckedThrowingContinuation { outerContinuation in
       Task.detached {
         try await data.onCPU { cpuBuffer in
           try await withCheckedThrowingContinuation {
@@ -569,12 +575,13 @@ open class MPSBackend: CPUBackend {
               return
             }
             outerContinuation.resume(
-              returning: (buffer, Deallocator { innerContinuation.resume() })
+              returning: SendableResult(value: (buffer, Deallocator { innerContinuation.resume() }))
             )
           }
         }
       }
     }
+    return result.value
   }
 
   internal func gpuBuffer(_ data: Tensor.Data?) async throws -> (MTLBuffer?, Deallocator?) {
@@ -1456,6 +1463,9 @@ open class MPSBackend: CPUBackend {
       inBufs.append(buf)
       inDeallocators.append(d)
     }
+    let inDeallocatorsFinal = inDeallocators
+    let inBufsFinal = inBufs
+
     let totalInner = innerCounts.sum()
     let (buffer, bufferCb) = try await allocateBuf(outerCount * totalInner * dtype.byteSize)
 
@@ -1463,14 +1473,14 @@ open class MPSBackend: CPUBackend {
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "concat", deallocators: inDeallocators
+        label: "concat", deallocators: inDeallocatorsFinal
       ) { buf, enc in
         for (i, innerCount) in innerCounts.enumerated() {
           let offset = innerCounts[..<i].sum()
           let state = try getFunction(name: "strided_copy_\(typeName)")
           try setArguments(
             enc,
-            .buffer(inBufs[i]),
+            .buffer(inBufsFinal[i]),
             .buffer(buffer),
             .opaque((UInt32(innerCount), UInt32(totalInner), UInt32(outerCount), UInt32(offset)))
           )
@@ -2460,7 +2470,7 @@ open class MPSBackend: CPUBackend {
   class CompletionCallback {
     private var lock: NSLock = NSLock()
     private var _result: Result<(), Error>? = nil
-    private var _continue: ((Result<(), Error>) -> Void)? = nil
+    private var _continue: (@Sendable (Result<(), Error>) -> Void)? = nil
 
     init() {
     }
@@ -2476,7 +2486,7 @@ open class MPSBackend: CPUBackend {
       }
     }
 
-    func putContinuation(_ f: @escaping (Result<(), Error>) -> Void) {
+    func putContinuation(_ f: @escaping @Sendable (Result<(), Error>) -> Void) {
       lock.lock()
       if let r = _result {
         lock.unlock()
@@ -2511,7 +2521,7 @@ open class MPSBackend: CPUBackend {
     buf.commit()
     return Task.detached {
       try await withCheckedThrowingContinuation { continuation in
-        cb.putContinuation(continuation.resume)
+        cb.putContinuation({ x in continuation.resume(with: x) })
       }
     }
   }

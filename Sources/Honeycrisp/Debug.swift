@@ -4,7 +4,7 @@ import HCBacktrace
 extension Tensor {
   @recordCaller
   private func _printing(onForward: String? = nil, onGrad: String? = nil) -> Tensor {
-    let forwardFn: ((Tensor) async throws -> Void)? =
+    let forwardFn: (@Sendable (Tensor) async throws -> Void)? =
       if let onForward = onForward {
         { t in
           let _ = try await t.data
@@ -13,7 +13,7 @@ extension Tensor {
       } else {
         nil
       }
-    let bwdFn: ((Tensor) async throws -> Void)? =
+    let bwdFn: (@Sendable (Tensor) async throws -> Void)? =
       if let onGrad = onGrad {
         { t in
           let _ = try await t.data
@@ -27,8 +27,8 @@ extension Tensor {
 
   @recordCaller
   private func _printing(
-    onForward: ((Tensor) async throws -> Void)? = nil,
-    onGrad: ((Tensor) async throws -> Void)? = nil
+    onForward: (@Sendable (Tensor) async throws -> Void)? = nil,
+    onGrad: (@Sendable (Tensor) async throws -> Void)? = nil
   ) -> Tensor {
     if onForward == nil && onGrad == nil {
       return self

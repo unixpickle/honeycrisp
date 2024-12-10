@@ -7,7 +7,7 @@ public protocol MaybeTensor {
 
   func maybeTensor() -> Tensor?
 
-  func maybeOnGrad(_ action: @escaping (Tensor) -> Void) -> Self
+  func maybeOnGrad(_ action: @escaping @Sendable (Tensor) -> Void) -> Self
 
   static func fromTensor(_ x: Tensor) -> Self
 }
@@ -21,7 +21,7 @@ extension Tensor: MaybeTensor {
     self
   }
 
-  public func maybeOnGrad(_ action: @escaping (Tensor) -> Void) -> Self {
+  public func maybeOnGrad(_ action: @escaping @Sendable (Tensor) -> Void) -> Self {
     onGrad(action) as! Self
   }
 
@@ -39,7 +39,7 @@ extension Tensor?: MaybeTensor {
     self
   }
 
-  public func maybeOnGrad(_ action: @escaping (Tensor) -> Void) -> Self {
+  public func maybeOnGrad(_ action: @escaping @Sendable (Tensor) -> Void) -> Self {
     if let self = self {
       self.onGrad(action)
     } else {
@@ -75,18 +75,18 @@ extension Optional: MaybeTrainable where Wrapped: Trainable {
 /// with the `@Child` attribute.
 open class Trainable: MaybeTrainable {
 
-  public enum Mode {
+  public enum Mode: Sendable {
     case training
     case inference
   }
 
-  public protocol Buffer {
+  public protocol Buffer: Sendable {
     var name: String? { get }
     var data: Tensor? { get set }
   }
 
   @propertyWrapper
-  public final class Buf<TensorType: MaybeTensor>: Buffer {
+  public final class Buf<TensorType: MaybeTensor>: Buffer, @unchecked Sendable {
     public static subscript<T: Trainable>(
       _enclosingInstance instance: T,
       wrapped wrappedKeyPath: ReferenceWritableKeyPath<T, TensorType>,
@@ -94,19 +94,21 @@ open class Trainable: MaybeTrainable {
     ) -> TensorType {
       get {
         let buf = instance[keyPath: storageKeyPath]
-        guard let data = buf.maybeData else {
+        guard let data = buf.lock.withLock({ buf.maybeData }) else {
           tracedFatalError("@Buf attribute \(storageKeyPath) was accessed before assignment")
         }
         return data
       }
       set {
         let buf = instance[keyPath: storageKeyPath]
-        if buf.maybeName == nil {
-          buf.maybeName = String("\(storageKeyPath)".split(separator: ".").last!)
+        buf.lock.withLock {
+          if buf.maybeName == nil {
+            buf.maybeName = String("\(storageKeyPath)".split(separator: ".").last!)
+          }
+          #alwaysAssert(
+            !(newValue.maybeTensor()?.needsGrad ?? false), "buffer value cannot need grad")
+          buf.maybeData = newValue
         }
-        #alwaysAssert(
-          !(newValue.maybeTensor()?.needsGrad ?? false), "buffer value cannot need grad")
-        buf.maybeData = newValue
         if newValue.isNil {
           instance.registeredBuffers.removeValue(forKey: buf.name!)
         } else {
@@ -125,21 +127,27 @@ open class Trainable: MaybeTrainable {
       set { fatalError() }
     }
 
+    private var lock = NSLock()
+
     private var maybeName: String? = nil
     public var name: String? {
-      maybeName
+      lock.withLock { maybeName }
     }
     private var maybeData: TensorType?
     public var data: Tensor? {
       get {
-        maybeData?.maybeTensor()
+        lock.withLock {
+          maybeData?.maybeTensor()
+        }
       }
       set {
-        if let t = newValue {
-          maybeData = TensorType.fromTensor(t)
-        } else {
-          #alwaysAssert(
-            false, "Cannot unset parameter data. Consider setting the property itself to nil.")
+        lock.withLock {
+          if let t = newValue {
+            maybeData = TensorType.fromTensor(t)
+          } else {
+            #alwaysAssert(
+              false, "Cannot unset parameter data. Consider setting the property itself to nil.")
+          }
         }
       }
     }
@@ -158,7 +166,7 @@ open class Trainable: MaybeTrainable {
   }
 
   @propertyWrapper
-  public final class Param<TensorType: MaybeTensor>: Parameter {
+  public final class Param<TensorType: MaybeTensor>: Parameter, @unchecked Sendable {
     public static subscript<T: Trainable>(
       _enclosingInstance instance: T,
       wrapped wrappedKeyPath: ReferenceWritableKeyPath<T, TensorType>,
@@ -166,25 +174,23 @@ open class Trainable: MaybeTrainable {
     ) -> TensorType {
       get {
         let param = instance[keyPath: storageKeyPath]
-        guard let data = param.maybeData else {
+        guard let data = param.lock.withLock({ param.maybeData }) else {
           tracedFatalError("@Param attribute \(storageKeyPath) was accessed before assignment")
         }
         return data.maybeOnGrad { g in
-          if let existingGrad = param.grad {
-            param.grad = existingGrad + g
-          } else {
-            param.grad = g
-          }
+          param.addGrad(g)
         }
       }
       set {
         let param = instance[keyPath: storageKeyPath]
-        if param.maybeName == nil {
-          param.maybeName = String("\(storageKeyPath)".split(separator: ".").last!)
+        param.lock.withLock {
+          if param.maybeName == nil {
+            param.maybeName = String("\(storageKeyPath)".split(separator: ".").last!)
+          }
+          #alwaysAssert(
+            !(newValue.maybeTensor()?.needsGrad ?? false), "parameter value cannot need grad")
+          param.maybeData = newValue
         }
-        #alwaysAssert(
-          !(newValue.maybeTensor()?.needsGrad ?? false), "parameter value cannot need grad")
-        param.maybeData = newValue
         if newValue.isNil {
           instance.registeredParams.removeValue(forKey: param.name!)
         } else {
@@ -203,26 +209,49 @@ open class Trainable: MaybeTrainable {
       set { fatalError() }
     }
 
+    private var lock = NSLock()
     private var maybeName: String? = nil
     public var name: String? {
-      maybeName
+      lock.withLock { maybeName }
     }
     private var maybeData: TensorType?
     public var data: Tensor? {
       get {
-        maybeData?.maybeTensor()
+        lock.withLock {
+          maybeData?.maybeTensor()
+        }
       }
       set {
-        if let t = newValue {
-          maybeData = TensorType.fromTensor(t)
-        } else {
-          #alwaysAssert(
-            false, "Cannot unset parameter data. Consider setting the property itself to nil.")
+        lock.withLock {
+          if let t = newValue {
+            maybeData = TensorType.fromTensor(t)
+          } else {
+            #alwaysAssert(
+              false, "Cannot unset parameter data. Consider setting the property itself to nil.")
+          }
         }
       }
     }
 
-    public var grad: Tensor?
+    private var _grad: Tensor?
+    public var grad: Tensor? {
+      get {
+        lock.withLock { _grad }
+      }
+      set {
+        lock.withLock { _grad = newValue }
+      }
+    }
+
+    public func addGrad(_ g: Tensor) {
+      lock.withLock {
+        if let g1 = _grad {
+          _grad = g + g1
+        } else {
+          _grad = g
+        }
+      }
+    }
 
     public var projectedValue: Param<TensorType> { self }
 
@@ -344,7 +373,7 @@ open class Trainable: MaybeTrainable {
     return try action()
   }
 
-  public enum StateItem: Codable {
+  public enum StateItem: Codable, Sendable {
     case tensor(TensorState)
     case child([String: StateItem])
   }
@@ -355,24 +384,28 @@ open class Trainable: MaybeTrainable {
     case duplicateKey(String)
   }
 
-  @recordCaller
-  private func _state() async throws -> State {
-    var result = State()
-    for (name, param) in Array(registeredBuffers) + Array(registeredParams) {
-      if result.keys.contains(name) {
-        throw SaveStateError.duplicateKey("key \(name) is repeated in module state")
+  public var state: TracedBlock<State> {
+    let registeredBuffers = registeredBuffers
+    let registeredParams = registeredParams
+    let childrenTasks = registeredChildren.map { x in (x.0, x.1.state) }
+    return TracedBlock {
+      var result = State()
+      for (name, param) in Array(registeredBuffers) + Array(registeredParams) {
+        if result.keys.contains(name) {
+          throw SaveStateError.duplicateKey("key \(name) is repeated in module state")
+        }
+        if let data = param.data {
+          result[name] = .tensor(try await data.state())
+        }
       }
-      if let data = param.data {
-        result[name] = .tensor(try await data.state())
+      for (name, child) in childrenTasks {
+        if result.keys.contains(name) {
+          throw SaveStateError.duplicateKey("key \(name) is repeated in module state")
+        }
+        result[name] = .child(try await child())
       }
+      return result
     }
-    for (name, child) in registeredChildren {
-      if result.keys.contains(name) {
-        throw SaveStateError.duplicateKey("key \(name) is repeated in module state")
-      }
-      result[name] = .child(try await child.state())
-    }
-    return result
   }
 
   public enum LoadStateError: Error {
@@ -596,7 +629,7 @@ public class Conv2D: Trainable {
   public typealias Dim = Conv2DConfig.Dim
   public typealias Padding = Conv2DConfig.Padding
 
-  public enum PaddingType {
+  public enum PaddingType: Sendable {
     case none
     case same
     case allSides(Int)
@@ -604,7 +637,7 @@ public class Conv2D: Trainable {
     case leftRightTopBottom(Int, Int, Int, Int)
   }
 
-  public enum SpatialSize {
+  public enum SpatialSize: Sendable {
     case square(Int)
     case widthHeight(Int, Int)
 
