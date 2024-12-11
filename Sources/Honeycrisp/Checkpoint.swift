@@ -121,12 +121,21 @@ final class CheckpointResultState: Sendable {
   nonisolated(unsafe) var completed: [Bool]
   nonisolated(unsafe) var grads: [Tensor?]
 
-  init(count: Int, trace: [CodeLocation], _ callback: sending @escaping ([Tensor?]) -> Void) {
-    completed = Array(repeating: false, count: count)
-    grads = Array(repeating: nil, count: count)
-    self.trace = trace
-    self.callback = callback
-  }
+  #if compiler(>=6.0)
+    init(count: Int, trace: [CodeLocation], _ callback: sending @escaping ([Tensor?]) -> Void) {
+      completed = Array(repeating: false, count: count)
+      grads = Array(repeating: nil, count: count)
+      self.trace = trace
+      self.callback = callback
+    }
+  #else
+    init(count: Int, trace: [CodeLocation], _ callback: @escaping ([Tensor?]) -> Void) {
+      completed = Array(repeating: false, count: count)
+      grads = Array(repeating: nil, count: count)
+      self.trace = trace
+      self.callback = callback
+    }
+  #endif
 
   func record(index: Int, grad: Tensor?) {
     let result: [Tensor?]? = lock.withLock {
