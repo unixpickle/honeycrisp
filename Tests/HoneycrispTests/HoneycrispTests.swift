@@ -432,6 +432,129 @@ final class HoneycrispTests: XCTestCase {
     XCTAssert((x * x).needsGrad)
   }
 
+  func testCheckpointSimple() async throws {
+    let xData = Tensor(data: [1.0, 2.0, 3.0])
+    var xGrad: Tensor?
+    let x = xData.onGradUnsafe { g in xGrad = g }
+
+    let outputs = Tensor.checkpoint([x]) { xs in
+      [xs[0].pow(2).sum(), xs[0].pow(3).sum()]
+    }
+    (outputs[0] + outputs[1]).backward()
+
+    let expectedGrad = 2 * x + 3 * x.pow(2)
+    try await assertDataEqual(xGrad!, expectedGrad)
+  }
+
+  func testCheckpointRepeatedOutput() async throws {
+    let xData = Tensor(data: [1.0, 2.0, 3.0])
+    var xGrad: Tensor?
+    let x = xData.onGradUnsafe { g in xGrad = g }
+
+    let outputs = Tensor.checkpoint([x]) { xs in
+      let out1 = xs[0].pow(2).sum()
+      return [out1, out1]
+    }
+    (outputs[0] + outputs[1]).backward()
+
+    let expectedGrad = 4 * x
+    try await assertDataEqual(xGrad!, expectedGrad)
+  }
+
+  func testCheckpointUnusedOutput() async throws {
+    let xData = Tensor(data: [1.0, 2.0, 3.0])
+    var xGrad: Tensor?
+    let x = xData.onGradUnsafe { g in xGrad = g }
+
+    let out = Tensor.checkpoint([x]) { xs in
+      let out1 = xs[0].pow(2).sum()
+      let out2 = out1 * 2
+      return [out1, out2, out1]
+    }[0]
+    out.backward()
+
+    let expectedGrad = 2 * x
+    try await assertDataEqual(xGrad!, expectedGrad)
+  }
+
+  func testCheckpointNoGradInOut() async throws {
+    let xData = Tensor(data: [1.0, 2.0, 3.0])
+    var xGrad: Tensor?
+    let x = xData.onGradUnsafe { g in xGrad = g }
+
+    let noGrad1 = Tensor(data: [1.0, 2.0, 3.0])
+    let noGrad2 = Tensor(data: [1, 2, 3])
+
+    let out = Tensor.checkpoint([x, noGrad1, noGrad2]) { xs in
+      let out1 = xs[0].pow(2).sum()
+      let out2 = out1 * 2
+      return [out1, out2.noGrad(), xs[1], xs[2], noGrad1, noGrad2]
+    }[0]
+    out.backward()
+
+    let expectedGrad = 2 * x
+    try await assertDataEqual(xGrad!, expectedGrad)
+  }
+
+  func testCheckpointNested() async throws {
+    let xData = Tensor(data: [1.0, 2.0, 3.0])
+    var xGrad: Tensor?
+    let x = xData.onGradUnsafe { g in xGrad = g }
+
+    let out = Tensor.checkpoint([x]) { xs in
+      let out1 = xs[0].pow(2)
+      return Tensor.checkpoint([xs[0], out1]) { ys in
+        [ys[0] * ys[1] + 1]
+      }
+    }[0]
+    out.backward()
+
+    let expectedGrad = 3 * x.pow(2)
+    try await assertDataEqual(xGrad!, expectedGrad)
+  }
+
+  func testCheckpointRandom() async throws {
+    let xData = Tensor(ones: [100])
+    var xGrad: Tensor?
+    let x = xData.onGradUnsafe { g in xGrad = g }
+
+    let outputs = Tensor.checkpoint([x]) { xs in
+      [(xs[0] * Tensor(randnLike: xs[0]))]
+    }
+    outputs[0].sum().backward()
+
+    try await assertDataEqual(xGrad!, outputs[0])
+  }
+
+  func testCheckpointTrainable() async throws {
+    let layer = Linear(inCount: 4, outCount: 5)
+    let xData = Tensor(randn: [8, 4])
+    let target = Tensor(randn: [8, 5])
+    var xGrad: Tensor?
+    var x = xData.onGradUnsafe { g in xGrad = g }
+
+    let expLoss = (layer(x) - target).pow(2).sum()
+    expLoss.backward()
+    let expXGrad = xGrad!
+    xGrad = nil
+    let expGrads = layer.parameters.map { $0.1.grad! }
+    for (_, var p) in layer.parameters {
+      p.grad = nil
+    }
+
+    x = xData.onGradUnsafe { g in xGrad = g }
+    let actLoss = Tensor.checkpoint([x, target]) { xs in
+      [(layer(xs[0]) - xs[1]).pow(2).sum()]
+    }[0]
+    actLoss.backward()
+    try await assertClose(expLoss, actLoss)
+    try await assertClose(expXGrad, xGrad!)
+
+    for ((_, p), expGrad) in zip(layer.parameters, expGrads) {
+      try await assertClose(expGrad, p.grad!)
+    }
+  }
+
   func testCacheBackendForBackward() async throws {
     // If any operations are called on this backend, it will raise an error.
     let unusedBackend = Backend()
