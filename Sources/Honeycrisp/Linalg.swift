@@ -104,21 +104,35 @@ extension Tensor {
   }
 
   @recordCaller
-  private func _tril() -> Tensor {
+  private func _tril(offset: Int = 0) -> Tensor {
+    triangular(upper: false, offset: offset)
+  }
+
+  @recordCaller
+  private func _triu(offset: Int = 0) -> Tensor {
+    triangular(upper: true, offset: offset)
+  }
+
+  private func triangular(upper: Bool, offset: Int = 0) -> Tensor {
+    #alwaysAssert(shape.count >= 2, "tensor of shape \(shape) is not a matrix")
     let backend = Backend.current
     let newData = createDataTask { t in
-      return try await backend.tril(
+      return try await backend.triangular(
         try await t.data,
         batch: t.shape[..<(t.shape.count - 2)].product(),
         rows: t.shape[t.shape.count - 2],
-        cols: t.shape[t.shape.count - 1], dtype: t.dtype)
+        cols: t.shape[t.shape.count - 1],
+        upper: upper,
+        offset: offset,
+        dtype: t.dtype
+      )
     }
     if !needsGrad || !Tensor.isGradEnabled {
       return Tensor(dataTask: newData, shape: shape, dtype: dtype)
     } else {
       let handle = saveForBackward()
       return Tensor(dataTask: newData, shape: shape, dtype: dtype) { grad in
-        handle.backward(backend) { grad.tril() }
+        handle.backward(backend) { grad.triangular(upper: upper, offset: offset) }
       }
     }
   }

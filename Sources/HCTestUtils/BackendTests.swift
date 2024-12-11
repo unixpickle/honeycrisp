@@ -621,23 +621,67 @@ open class BackendTests {
     XCTAssertEqual(yGrad!.shape, y.shape)
   }
 
-  public static func testTril() async throws {
-    try await assertDataEqual(
-      Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2]).tril(), [1, 0, 3, 4, 5, 6])
+  public static func testTriangular() async throws {
+    let tensor3x2 = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2])
+    try await assertDataEqual(tensor3x2.tril(), [1, 0, 3, 4, 5, 6])
+    try await assertDataEqual(tensor3x2.tril(offset: -4), [0, 0, 0, 0, 0, 0])
+    try await assertDataEqual(tensor3x2.tril(offset: -3), [0, 0, 0, 0, 0, 0])
+    try await assertDataEqual(tensor3x2.tril(offset: -2), [0, 0, 0, 0, 5, 0])
+    try await assertDataEqual(tensor3x2.tril(offset: -1), [0, 0, 3, 0, 5, 6])
+    try await assertDataEqual(tensor3x2.tril(offset: 1), [1, 2, 3, 4, 5, 6])
+    try await assertDataEqual(tensor3x2.tril(offset: 2), [1, 2, 3, 4, 5, 6])
+    try await assertDataEqual(tensor3x2.triu(), [1, 2, 0, 4, 0, 0])
+    try await assertDataEqual(tensor3x2.triu(offset: -3), [1, 2, 3, 4, 5, 6])
+    try await assertDataEqual(tensor3x2.triu(offset: -2), [1, 2, 3, 4, 5, 6])
+    try await assertDataEqual(tensor3x2.triu(offset: -1), [1, 2, 3, 4, 0, 6])
+    try await assertDataEqual(tensor3x2.triu(offset: 1), [0, 2, 0, 0, 0, 0])
+    try await assertDataEqual(tensor3x2.triu(offset: 2), [0, 0, 0, 0, 0, 0])
+    try await assertDataEqual(tensor3x2.triu(offset: 3), [0, 0, 0, 0, 0, 0])
+
+    let tensor2x3 = tensor3x2.reshape([2, 3])
+    try await assertDataEqual(tensor2x3.tril(), [1, 0, 0, 4, 5, 0])
+    try await assertDataEqual(tensor2x3.tril(offset: -3), [0, 0, 0, 0, 0, 0])
+    try await assertDataEqual(tensor2x3.tril(offset: -2), [0, 0, 0, 0, 0, 0])
+    try await assertDataEqual(tensor2x3.tril(offset: -1), [0, 0, 0, 4, 0, 0])
+    try await assertDataEqual(tensor2x3.tril(offset: 1), [1, 2, 0, 4, 5, 6])
+    try await assertDataEqual(tensor2x3.tril(offset: 2), [1, 2, 3, 4, 5, 6])
+    try await assertDataEqual(tensor2x3.tril(offset: 3), [1, 2, 3, 4, 5, 6])
+    try await assertDataEqual(tensor2x3.triu(), [1, 2, 3, 0, 5, 6])
+    try await assertDataEqual(tensor2x3.triu(offset: -3), [1, 2, 3, 4, 5, 6])
+    try await assertDataEqual(tensor2x3.triu(offset: -2), [1, 2, 3, 4, 5, 6])
+    try await assertDataEqual(tensor2x3.triu(offset: -1), [1, 2, 3, 4, 5, 6])
+    try await assertDataEqual(tensor2x3.triu(offset: 1), [0, 2, 3, 0, 0, 6])
+    try await assertDataEqual(tensor2x3.triu(offset: 2), [0, 0, 3, 0, 0, 0])
+    try await assertDataEqual(tensor2x3.triu(offset: 3), [0, 0, 0, 0, 0, 0])
+
+    // Simple batching test
     try await assertDataEqual(
       Tensor(data: [1, 2, 3, 4, 5, 6, -1, -2, -3, -4, -5, -6], shape: [2, 3, 2]).tril(),
       [1, 0, 3, 4, 5, 6, -1, 0, -3, -4, -5, -6])
-    try await assertDataEqual(
-      Tensor(data: [1, 2, 3, 4, 5, 6], shape: [2, 3]).tril(), [1, 0, 0, 4, 5, 0])
+
+    // Brute-force batching test
+    for shape in [[3, 3], [5, 7], [7, 5], [129, 3], [3, 129]] {
+      for bs in [1, 2, 3] {
+        let input = Tensor(randInt: [bs] + shape, in: 0..<100_000_000)
+        for offset in [-100, -2, -1, 0, 1, 2, 100] {
+          var output = input.tril(offset: offset)
+          var expected = Tensor(stack: (0..<bs).map { input[$0].tril(offset: offset) })
+          try await assertDataEqual(output, expected)
+
+          output = input.triu(offset: offset)
+          expected = Tensor(stack: (0..<bs).map { input[$0].triu(offset: offset) })
+          try await assertDataEqual(output, expected)
+        }
+      }
+    }
+
+    // Quick test for a square matrix
     try await assertDataEqual(
       Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9], shape: [3, 3]).tril(),
       [1, 0, 0, 4, 5, 0, 7, 8, 9])
-
-    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2], dtype: .float32)
-    var xGrad: Tensor?
-    x.onGradUnsafe { g in xGrad = g }.tril().backward(
-      Tensor(data: [-1, -2, -3, -4, -5, -6], shape: [3, 2], dtype: .float32))
-    try await assertDataEqual(xGrad!, [-1, 0, -3, -4, -5, -6])
+    try await assertDataEqual(
+      Tensor(data: [1, 2, 3, 4, 5, 6, 7, 8, 9], shape: [3, 3]).triu(),
+      [1, 2, 3, 0, 5, 6, 0, 0, 9])
   }
 
   public static func testIndexing() async throws {

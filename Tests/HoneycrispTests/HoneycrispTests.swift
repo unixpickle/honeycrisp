@@ -151,9 +151,9 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
-  func testTril() async throws {
+  func testTriangular() async throws {
     try await runInBackends {
-      try await BackendTests.testTril()
+      try await BackendTests.testTriangular()
     }
   }
 
@@ -553,6 +553,14 @@ final class HoneycrispTests: XCTestCase {
     for ((_, p), expGrad) in zip(layer.parameters, expGrads) {
       try await assertClose(expGrad, p.grad!)
     }
+  }
+
+  func testTriangularGrad() async throws {
+    let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2], dtype: .float32)
+    var xGrad: Tensor?
+    x.onGradUnsafe { g in xGrad = g }.tril().backward(
+      Tensor(data: [-1, -2, -3, -4, -5, -6], shape: [3, 2], dtype: .float32))
+    try await assertDataEqual(xGrad!, [-1, 0, -3, -4, -5, -6])
   }
 
   func testCacheBackendForBackward() async throws {

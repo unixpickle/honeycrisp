@@ -288,10 +288,14 @@ open class BackendWrapper: Backend, @unchecked Sendable {
       rows: rows, inner: inner, cols: cols, dtype: dtype)
   }
 
-  override public func tril(_ a: Tensor.Data, batch: Int, rows: Int, cols: Int, dtype: Tensor.DType)
+  override public func triangular(
+    _ a: Tensor.Data, batch: Int, rows: Int, cols: Int, upper: Bool, offset: Int,
+    dtype: Tensor.DType
+  )
     async throws -> Tensor.Data
   {
-    try await wrapped.tril(a, batch: batch, rows: rows, cols: cols, dtype: dtype)
+    try await wrapped.triangular(
+      a, batch: batch, rows: rows, cols: cols, upper: upper, offset: offset, dtype: dtype)
   }
 
   override public func conv1D(

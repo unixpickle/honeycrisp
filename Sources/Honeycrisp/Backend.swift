@@ -628,11 +628,16 @@ open class Backend: @unchecked Sendable {
     throw BackendError.notImplemented("batchedMatmul")
   }
 
-  /// Create a low-triangular version of a (batch of) matrices.
-  open func tril(_ a: Tensor.Data, batch: Int, rows: Int, cols: Int, dtype: Tensor.DType)
+  /// Create a low-triangular or upper-triangular version of a
+  /// (batch of) matrices.
+  /// Offsets the diagonal by the given number of rows/columns.
+  open func triangular(
+    _ a: Tensor.Data, batch: Int, rows: Int, cols: Int, upper: Bool, offset: Int,
+    dtype: Tensor.DType
+  )
     async throws -> Tensor.Data
   {
-    throw BackendError.notImplemented("tril")
+    throw BackendError.notImplemented("triangular")
   }
 
   /// Compute a 1-dimensional convolution.

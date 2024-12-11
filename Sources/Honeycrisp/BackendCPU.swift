@@ -1140,23 +1140,34 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
     }
   }
 
-  override open func tril(_ a: Tensor.Data, batch: Int, rows: Int, cols: Int, dtype: Tensor.DType)
-    async throws
-    -> Tensor.Data
+  override open func triangular(
+    _ a: Tensor.Data, batch: Int, rows: Int, cols: Int, upper: Bool, offset: Int,
+    dtype: Tensor.DType
+  )
+    async throws -> Tensor.Data
   {
-    let rowSize = cols * dtype.byteSize
+    let elSize = dtype.byteSize
+    let rowSize = elSize * cols
     return try await withBuffers(batch * rows * rowSize, a) { outPtr, inPtr in
       try await serialize {
+        outPtr.ptr.initializeMemory(
+          as: UInt8.self, repeating: 0, count: elSize * rows * cols * batch)
         for i in 0..<batch {
           for j in 0..<rows {
-            let copyBytes = min(rowSize, (j + 1) * dtype.byteSize)
-            let offset = (j + i * rows) * cols * dtype.byteSize
-            outPtr.advanced(by: offset).copyMemory(
-              from: inPtr.advanced(by: offset), byteCount: copyBytes)
-            if copyBytes < rowSize {
-              let zeroCount = rowSize - copyBytes
-              let zeroStart = outPtr.advanced(by: offset + (cols * dtype.byteSize - zeroCount))
-              zeroStart.initializeMemory(as: UInt8.self, repeating: 0, count: zeroCount)
+            let rowIn = inPtr.advanced(by: (i * rows + j) * cols * elSize)
+            let rowOut = outPtr.advanced(by: (i * rows + j) * cols * elSize)
+            if upper {
+              let elCount = min(cols, cols - j - offset)
+              if elCount > 0 {
+                let skip = (cols - elCount)
+                rowOut.advanced(by: skip * elSize).copyMemory(
+                  from: rowIn.advanced(by: skip * elSize), byteCount: elCount * elSize)
+              }
+            } else {
+              let elCount = min(cols, (j + 1) + offset)
+              if elCount > 0 {
+                rowOut.copyMemory(from: rowIn, byteCount: elCount * elSize)
+              }
             }
           }
         }
