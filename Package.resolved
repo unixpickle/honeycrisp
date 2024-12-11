@@ -1,13 +1,13 @@
 {
-  "originHash" : "30dc9bfbc41db0de87b5330058b65e54ade7cb48ac52747a6230b08f86a8863d",
+  "originHash" : "518e63f8f0f77c5835469c73ad89289852ef5e4de39e3fe29a884a61e740c6cf",
   "pins" : [
     {
       "identity" : "coreml-builder",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/unixpickle/coreml-builder.git",
       "state" : {
-        "revision" : "e3bfb67d500c514ff3345112b9a5c6cce92128e8",
-        "version" : "0.1.0"
+        "revision" : "87c1e9b9baedcd7cfedfa0bef6fc43843c96b9c3",
+        "version" : "0.2.0"
       }
     },
     {
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-protobuf",
       "state" : {
-        "revision" : "edb6ed4919f7756157fe02f2552b7e3850a538e5",
-        "version" : "1.28.1"
+        "revision" : "ebc7251dd5b37f627c93698e4374084d98409633",
+        "version" : "1.28.2"
       }
     },
     {

@@ -7,7 +7,8 @@ import PackageDescription
 let package = Package(
   name: "Honeycrisp",
   platforms: [
-    .macOS(.v13)
+    .macOS(.v13),
+    .iOS(.v13),
   ],
   products: [
     .library(
@@ -62,5 +63,6 @@ let package = Package(
     .executableTarget(
       name: "HCMatrixBench",
       dependencies: ["Honeycrisp"]),
-  ]
+  ],
+  swiftLanguageVersions: [.v5, .version("6")]
 )
