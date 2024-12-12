@@ -24,7 +24,7 @@ let package = Package(
   dependencies: [
     .package(
       url: "https://github.com/swiftlang/swift-syntax.git", from: "600.0.0"),
-    .package(url: "https://github.com/1024jp/GzipSwift", from: "6.0.0"),
+    .package(url: "https://github.com/1024jp/GzipSwift", "6.0.0"..<"6.1.0"),
     .package(url: "https://github.com/unixpickle/coreml-builder.git", from: "0.2.0"),
     .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.1.0"),
   ],
