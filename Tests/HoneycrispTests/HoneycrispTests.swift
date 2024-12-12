@@ -401,6 +401,54 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testSyncTrainable() async throws {
+    class Network: Trainable {
+      @Child(name: "layer0") var layer0: SyncTrainable<Linear>
+      @Child(name: "layer1") var layer1: SyncTrainable<Linear>
+      @Child(name: "layer2") var layer2: SyncTrainable<Linear>?
+
+      override init() {
+        super.init()
+        layer0 = SyncTrainable(Linear(inCount: 3, outCount: 5))
+        layer1 = SyncTrainable(Linear(inCount: 5, outCount: 7))
+        layer2 = nil
+      }
+    }
+
+    let net = Network()
+    for _ in 0..<2 {
+      var netParams = net.parameters
+      XCTAssertEqual(netParams.count, 4)
+      XCTAssertEqual(netParams[0].0, "layer0.bias")
+      XCTAssertEqual(netParams[0].1.data!.shape, [5])
+      XCTAssertEqual(netParams[1].0, "layer0.weight")
+      XCTAssertEqual(netParams[1].1.data!.shape, [3, 5])
+      XCTAssertEqual(netParams[2].0, "layer1.bias")
+      XCTAssertEqual(netParams[2].1.data!.shape, [7])
+      XCTAssertEqual(netParams[3].0, "layer1.weight")
+      XCTAssertEqual(netParams[3].1.data!.shape, [5, 7])
+
+      net.layer2 = SyncTrainable(Linear(inCount: 3, outCount: 3))
+      netParams = net.parameters
+      XCTAssertEqual(netParams.count, 6)
+      XCTAssertEqual(netParams[4].0, "layer2.bias")
+      XCTAssertEqual(netParams[4].1.data!.shape, [3])
+      XCTAssertEqual(netParams[5].0, "layer2.weight")
+      XCTAssertEqual(netParams[5].1.data!.shape, [3, 3])
+      net.layer2 = nil
+    }
+
+    let net1 = Network()
+    try net1.loadState(try await net.state())
+    for ((name1, param1), (name2, param2)) in zip(
+      net.buffersAndParameters, net1.buffersAndParameters)
+    {
+      XCTAssertEqual(param1.data!.dtype, param2.data!.dtype)
+      XCTAssertEqual(param1.data!.shape, param2.data!.shape)
+      try await assertClose(param1.data!, param2.data!, "params differ for names \(name1)/\(name2)")
+    }
+  }
+
   func testConv1DTrainable() async throws {
     let cFirst = Conv1D(inChannels: 3, outChannels: 5, kernelSize: 3, stride: 2)
     let inFirst = Tensor(zeros: [2, 3, 16])
@@ -527,13 +575,13 @@ final class HoneycrispTests: XCTestCase {
   }
 
   func testCheckpointTrainable() async throws {
-    let layer = Linear(inCount: 4, outCount: 5)
+    let layer = SyncTrainable(Linear(inCount: 4, outCount: 5))
     let xData = Tensor(randn: [8, 4])
     let target = Tensor(randn: [8, 5])
     var xGrad: Tensor?
     var x = xData.onGradUnsafe { g in xGrad = g }
 
-    let expLoss = (layer(x) - target).pow(2).sum()
+    let expLoss = (layer.use { l in l(x) } - target).pow(2).sum()
     expLoss.backward()
     let expXGrad = xGrad!
     xGrad = nil
@@ -544,7 +592,7 @@ final class HoneycrispTests: XCTestCase {
 
     x = xData.onGradUnsafe { g in xGrad = g }
     let actLoss = Tensor.checkpoint([x, target]) { xs in
-      [(layer(xs[0]) - xs[1]).pow(2).sum()]
+      [(layer.use { l in l(xs[0]) } - xs[1]).pow(2).sum()]
     }[0]
     actLoss.backward()
     try await assertClose(expLoss, actLoss)

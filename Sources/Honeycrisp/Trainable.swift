@@ -52,19 +52,31 @@ extension Tensor?: MaybeTensor {
   }
 }
 
-/// A protocol for representing both `Trainable?` and `Trainable`.
-public protocol MaybeTrainable {
-  var isNil: Bool { get }
+/// A protocol for modules with trainable parameters and buffers.
+///
+/// Typically, you should not implement this yourself. It is intended to be used
+/// for modules which can be consumed by the @Child attribute, such as Trainable
+/// and SyncTrainable.
+public protocol TrainableProto {
 
-  func maybeTrainable() -> Trainable?
+  var parameters: [(String, Trainable.Parameter)] { get }
+  var buffers: [(String, Trainable.Buffer)] { get }
+  var buffersAndParameters: [(String, Trainable.Buffer)] { get }
+  var mode: Trainable.Mode { get set }
+  var state: TracedBlock<Trainable.State> { get }
+  func loadState(
+    _ state: Trainable.State, mustSetAllParameters: Bool, mustUseAllStates: Bool,
+    function: StaticString, file: StaticString, line: UInt) throws
+
 }
 
-extension Optional: MaybeTrainable where Wrapped: Trainable {
-  public var isNil: Bool {
-    self == nil
-  }
+/// A protocol for representing both `Trainable?` and `Trainable`.
+public protocol MaybeTrainable {
+  func maybeTrainable() -> TrainableProto?
+}
 
-  public func maybeTrainable() -> Trainable? {
+extension Optional: MaybeTrainable where Wrapped: TrainableProto {
+  public func maybeTrainable() -> TrainableProto? {
     self
   }
 }
@@ -73,7 +85,7 @@ extension Optional: MaybeTrainable where Wrapped: Trainable {
 ///
 /// Parameters are declared using the `@Param` attribute, and sub-modules are declared
 /// with the `@Child` attribute.
-open class Trainable: MaybeTrainable {
+open class Trainable: MaybeTrainable, TrainableProto {
 
   public enum Mode: Sendable {
     case training
@@ -290,7 +302,7 @@ open class Trainable: MaybeTrainable {
     @available(
       *, unavailable,
       message:
-        "This usage of @Child is incorrect. Make sure you are inside of a subclass of Trainable, and ensure that this property is of type T or T? where T: Trainable and has no initial value."
+        "This usage of @Child is incorrect. Make sure you are inside of a subclass of Trainable, and ensure that this property is of type T or T? where T: TrainableProto and has no initial value."
     )
     public var wrappedValue: Value {
       get { fatalError() }
@@ -305,19 +317,14 @@ open class Trainable: MaybeTrainable {
     }
   }
 
-  /// Implementation of ``MaybeTrainable/isNil``
-  public var isNil: Bool {
-    false
-  }
-
   /// Implementation of ``MaybeTrainable/maybeTrainable()``
-  public func maybeTrainable() -> Trainable? {
+  public func maybeTrainable() -> TrainableProto? {
     self
   }
 
   internal var registeredParams = [String: Parameter]()
   internal var registeredBuffers = [String: Buffer]()
-  internal var registeredChildren = [String: Trainable]()
+  internal var registeredChildren = [String: TrainableProto]()
 
   internal var _mode: Mode = .training
 
@@ -357,7 +364,7 @@ open class Trainable: MaybeTrainable {
     }
     set {
       _mode = newValue
-      for child in registeredChildren.values {
+      for var child in registeredChildren.values {
         child.mode = newValue
       }
     }
@@ -453,7 +460,8 @@ open class Trainable: MaybeTrainable {
         }
       } else if case .child(let x) = state[name]! {
         try child.loadState(
-          x, mustSetAllParameters: mustSetAllParameters, mustUseAllStates: mustUseAllStates)
+          x, mustSetAllParameters: mustSetAllParameters, mustUseAllStates: mustUseAllStates,
+          function: #function, file: #filePath, line: #line)
         state.removeValue(forKey: name)
       } else {
         throw LoadStateError.unexpectedType(
@@ -885,4 +893,69 @@ private func expandVector(_ vec: Tensor, axis: Int, shape: [Int]) -> Tensor {
   var preShape = [Int](repeating: 1, count: shape.count)
   preShape[axis] = vec.shape[0]
   return vec.reshape(preShape)
+}
+
+/// A wrapper around a ``Trainable`` that protects accesses with a lock.
+///
+/// This can be used to make Sendable models, for multithreaded environments or for
+/// use with gradient checkpointing.
+public final class SyncTrainable<T: Trainable>: TrainableProto, MaybeTrainable, Sendable {
+
+  nonisolated(unsafe) let t: T
+  let lock = NSLock()
+
+  #if compiler(>=6.0)
+    public init(_ wrapped: sending T) {
+      self.t = wrapped
+    }
+  #else
+    public init(_ wrapped: T) {
+      self.t = wrapped
+    }
+  #endif
+
+  @recordCaller
+  private func _use<R: Sendable>(_ fn: (T) throws -> R) rethrows -> R {
+    try lock.withLock { try fn(t) }
+  }
+
+  public func maybeTrainable() -> TrainableProto? {
+    self
+  }
+
+  public var parameters: [(String, Trainable.Parameter)] {
+    use { t in t.parameters }
+  }
+
+  public var buffers: [(String, Trainable.Buffer)] {
+    use { t in t.buffers }
+  }
+
+  public var buffersAndParameters: [(String, Trainable.Buffer)] {
+    use { t in t.buffersAndParameters }
+  }
+
+  public var mode: Trainable.Mode {
+    get {
+      use { t in t.mode }
+    }
+    set {
+      use { t in t.mode = newValue }
+    }
+  }
+
+  public var state: TracedBlock<Trainable.State> {
+    use { t in t.state }
+  }
+
+  @recordCaller
+  private func _loadState(
+    _ state: Trainable.State, mustSetAllParameters: Bool = true, mustUseAllStates: Bool = true
+  ) throws {
+    try use { t in
+      try t.loadState(
+        state, mustSetAllParameters: mustSetAllParameters, mustUseAllStates: mustUseAllStates)
+    }
+  }
+
 }
