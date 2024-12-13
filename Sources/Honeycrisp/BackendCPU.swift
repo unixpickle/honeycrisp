@@ -1689,12 +1689,21 @@ struct SendableRawPointer: @unchecked Sendable {
     self.ptr = ptr
   }
 
-  func bindMemory<T>(
-    to type: T.Type,
-    capacity count: Int
-  ) -> UnsafePointer<T> where T: ~Copyable {
-    ptr.bindMemory(to: type, capacity: count)
-  }
+  #if compiler(>=6)
+    func bindMemory<T>(
+      to type: T.Type,
+      capacity count: Int
+    ) -> UnsafePointer<T> where T: ~Copyable {
+      ptr.bindMemory(to: type, capacity: count)
+    }
+  #else
+    func bindMemory<T>(
+      to type: T.Type,
+      capacity count: Int
+    ) -> UnsafePointer<T> {
+      ptr.bindMemory(to: type, capacity: count)
+    }
+  #endif
 
   func advanced(by n: Int) -> UnsafeRawPointer {
     ptr.advanced(by: n)
@@ -1708,12 +1717,21 @@ struct SendableMutableRawPointer: @unchecked Sendable {
     self.ptr = ptr
   }
 
-  func bindMemory<T>(
-    to type: T.Type,
-    capacity count: Int
-  ) -> UnsafeMutablePointer<T> where T: ~Copyable {
-    ptr.bindMemory(to: type, capacity: count)
-  }
+  #if compiler(>=6)
+    func bindMemory<T>(
+      to type: T.Type,
+      capacity count: Int
+    ) -> UnsafeMutablePointer<T> where T: ~Copyable {
+      ptr.bindMemory(to: type, capacity: count)
+    }
+  #else
+    func bindMemory<T>(
+      to type: T.Type,
+      capacity count: Int
+    ) -> UnsafeMutablePointer<T> {
+      ptr.bindMemory(to: type, capacity: count)
+    }
+  #endif
 
   func advanced(by n: Int) -> UnsafeMutableRawPointer {
     ptr.advanced(by: n)

@@ -132,23 +132,43 @@ extension Float: NumericTensorElement {
   }
 }
 
-extension Bool: @retroactive Comparable {
-  public static func < (lhs: Self, rhs: Self) -> Bool {
-    lhs == false && rhs == true
-  }
+#if compiler(>=6)
+  extension Bool: @retroactive Comparable {
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+      lhs == false && rhs == true
+    }
 
-  public static func <= (lhs: Self, rhs: Self) -> Bool {
-    lhs == false
-  }
+    public static func <= (lhs: Self, rhs: Self) -> Bool {
+      lhs == false
+    }
 
-  public static func >= (lhs: Self, rhs: Self) -> Bool {
-    lhs == true
-  }
+    public static func >= (lhs: Self, rhs: Self) -> Bool {
+      lhs == true
+    }
 
-  public static func > (lhs: Self, rhs: Self) -> Bool {
-    lhs == true && rhs == false
+    public static func > (lhs: Self, rhs: Self) -> Bool {
+      lhs == true && rhs == false
+    }
   }
-}
+#else
+  extension Bool: Comparable {
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+      lhs == false && rhs == true
+    }
+
+    public static func <= (lhs: Self, rhs: Self) -> Bool {
+      lhs == false
+    }
+
+    public static func >= (lhs: Self, rhs: Self) -> Bool {
+      lhs == true
+    }
+
+    public static func > (lhs: Self, rhs: Self) -> Bool {
+      lhs == true && rhs == false
+    }
+  }
+#endif
 
 extension Bool: TensorElement {
   public static var isInt64Lossy: Bool { false }
