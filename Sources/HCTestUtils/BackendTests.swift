@@ -402,6 +402,42 @@ open class BackendTests {
     XCTAssertEqual(input1.sum(axis: 2, keepdims: true).shape, [2, 2, 1])
   }
 
+  public static func testCumulativeSum() async throws {
+    for dtype: Tensor.DType in [.float16, .float32, .int64] {
+      let rawData = Tensor(data: [1, 2, 3, -2, 4, 7], shape: [2, 3], dtype: dtype)
+
+      let sums: [(Bool, Bool, Tensor)] = [
+        (false, false, Tensor(data: [1, 3, 6, -2, 2, 9], shape: [2, 3], dtype: dtype)),
+        (true, false, Tensor(data: [0, 1, 3, 0, -2, 2], shape: [2, 3], dtype: dtype)),
+        (false, true, Tensor(data: [6, 5, 3, 9, 11, 7], shape: [2, 3], dtype: dtype)),
+        (true, true, Tensor(data: [5, 3, 0, 11, 7, 0], shape: [2, 3], dtype: dtype)),
+      ]
+      for (exclusive, reverse, expected) in sums {
+        let actual = rawData.cumulativeSum(axis: 1, exclusive: exclusive, reverse: reverse)
+        try await assertDataEqual(actual, expected)
+        if dtype.supportsGrad {
+          let p: Trainable.Param<Tensor> = Trainable.Param()
+          p.data = rawData
+          let xGrad = Tensor(data: [3, 4, -3, 7, 6, -1], shape: [2, 3], dtype: dtype)
+          let x = rawData.onGrad { g in p.addGrad(g) }
+          let y = x.cumulativeSum(axis: 1, exclusive: exclusive, reverse: reverse)
+          y.backward(xGrad)
+          let expectedGrad = try await estimateGradient(
+            delta: 0.1, input: rawData.cast(.float32), outGrad: xGrad.cast(.float32)
+          ) { x in x.cumulativeSum(axis: 1, exclusive: exclusive, reverse: reverse) }
+          try await assertClose(expectedGrad.cast(dtype), p.grad!)
+        }
+
+        // We didn't test axis 0, only axis 1, so now we make sure that using axis 0
+        // is equivalent to transposing, summing, and transposing again.
+        let ax0Expected = rawData[PermuteAxes(1, 0)].cumulativeSum(
+          axis: 1, exclusive: exclusive, reverse: reverse)[PermuteAxes(1, 0)]
+        let ax0Actual = rawData.cumulativeSum(axis: 0, exclusive: exclusive, reverse: reverse)
+        try await assertDataEqual(ax0Expected, ax0Actual)
+      }
+    }
+  }
+
   public static func testRepeat() async throws {
     let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0, 7.0], shape: [1, 2, 3, 1])
     var xGrad: Tensor?

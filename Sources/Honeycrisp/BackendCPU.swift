@@ -825,6 +825,45 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
     }
   }
 
+  override open func cumulativeSum(
+    _ a: Tensor.Data, dims: ReduceDims, exclusive: Bool, reverse: Bool, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    return try await withBuffers(dims.inCount * dtype.byteSize, a) { buffer, aBuf in
+      func apply<T: NumericTensorElement>(_: T.Type) async throws {
+        try readBuffer(T.self, aBuf, count: dims.inCount, dtype: dtype) { arr in
+          try writeBuffer(T.self, buffer, count: dims.inCount, dtype: dtype) { arrOut in
+            let innerIndices =
+              if reverse {
+                stride(from: dims.reduceCount - 1, through: 0, by: -1)
+              } else {
+                stride(from: 0, through: dims.reduceCount - 1, by: 1)
+              }
+            for i in 0..<dims.outerCount {
+              for j in 0..<dims.innerCount {
+                var sum = T(0.0)
+                for k in innerIndices {
+                  let idx = j + (k + i * dims.reduceCount) * dims.innerCount
+                  let item = arr[idx]
+                  let next = sum + item
+                  arrOut[idx] = (exclusive ? sum : next)
+                  sum = next
+                }
+              }
+            }
+          }
+        }
+      }
+      if dtype == .int64 {
+        try await apply(Int64.self)
+      } else {
+        try await apply(Float.self)
+      }
+    }
+  }
+
   override open func logSoftmax(
     _ a: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )

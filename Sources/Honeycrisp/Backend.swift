@@ -527,6 +527,19 @@ open class Backend: @unchecked Sendable {
     throw BackendError.notImplemented("reduce")
   }
 
+  // Perform a cumulative sum along an axis.
+  //
+  // If exclusive is true, then the sum is effectively offset by 1.
+  // If reverse is true, then the axis is effectively reversed before and after the operation.
+  open func cumulativeSum(
+    _ a: Tensor.Data, dims: ReduceDims, exclusive: Bool, reverse: Bool, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("cumulativeSum")
+  }
+
   /// Compute the log of the softmax operator along an axis of the tensor.
   open func logSoftmax(_ a: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType) async throws
     -> Tensor.Data

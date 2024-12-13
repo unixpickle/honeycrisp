@@ -36,19 +36,19 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     }
 
     /// Update the state of the generator given the seed.
-    override public func seed(_ x: Int) {
+    override open func seed(_ x: Int) {
       wrapped.seed(x)
     }
 
     /// Sample a numeric tensor from a given continuous distribution.
-    override public func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) -> Task<
+    override open func sample(count: Int, dist: RandomDist, dtype: Tensor.DType) -> Task<
       Tensor.Data, Error
     > {
       wrapped.sample(count: count, dist: dist, dtype: dtype)
     }
 
     /// Sample a tensor of int64 values uniformly in the given range.
-    override public func sample(count: Int, in range: Range<Int64>) -> Task<Tensor.Data, Error> {
+    override open func sample(count: Int, in range: Range<Int64>) -> Task<Tensor.Data, Error> {
       wrapped.sample(count: count, in: range)
     }
   }
@@ -64,7 +64,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.broadcast(a, dtype: dtype)
   }
 
-  override public func binaryOp(
+  override open func binaryOp(
     _ a: BroadcastData, _ b: BroadcastData, op: NumericBinaryOp, dtype: Tensor.DType
   )
     async throws
@@ -73,7 +73,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.binaryOp(a, b, op: op, dtype: dtype)
   }
 
-  override public func binaryOp<T: NumericTensorElement>(
+  override open func binaryOp<T: NumericTensorElement>(
     _ a: Tensor.Data, _ b: T, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -82,7 +82,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.binaryOp(a, b, op: op, count: count, dtype: dtype)
   }
 
-  override public func binaryOp<T: NumericTensorElement>(
+  override open func binaryOp<T: NumericTensorElement>(
     _ a: T, _ b: Tensor.Data, op: NumericBinaryOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -109,7 +109,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.bitwiseOp(a, b, op: op, count: count, dtype: dtype)
   }
 
-  override public func mulAdd(
+  override open func mulAdd(
     input: BroadcastData, coeff: BroadcastData, bias: BroadcastData, dtype: Tensor.DType
   )
     async throws
@@ -118,7 +118,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.mulAdd(input: input, coeff: coeff, bias: bias, dtype: dtype)
   }
 
-  override public func addMul(
+  override open func addMul(
     input: BroadcastData, bias: BroadcastData, coeff: BroadcastData, dtype: Tensor.DType
   )
     async throws
@@ -144,7 +144,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
       input: input, outGrad: outGrad, dims: dims, eps: eps, dtype: dtype)
   }
 
-  override public func compare(
+  override open func compare(
     _ a: BroadcastData, _ b: BroadcastData, op: ComparisonOp, dtype: Tensor.DType
   )
     async throws
@@ -153,7 +153,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.compare(a, b, op: op, dtype: dtype)
   }
 
-  override public func compare<T: TensorElement>(
+  override open func compare<T: TensorElement>(
     _ a: Tensor.Data, _ b: T, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -162,7 +162,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.compare(a, b, op: op, count: count, dtype: dtype)
   }
 
-  override public func compare<T: TensorElement>(
+  override open func compare<T: TensorElement>(
     _ a: T, _ b: Tensor.Data, op: ComparisonOp, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -171,7 +171,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.compare(a, b, op: op, count: count, dtype: dtype)
   }
 
-  override public func cast(
+  override open func cast(
     _ a: Tensor.Data, count: Int, inType: Tensor.DType, outType: Tensor.DType
   )
     async throws
@@ -180,7 +180,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.cast(a, count: count, inType: inType, outType: outType)
   }
 
-  override public func pow<T: NumericTensorElement>(
+  override open func pow<T: NumericTensorElement>(
     _ a: Tensor.Data, _ b: T, scale: T, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -189,7 +189,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.pow(a, b, scale: scale, scales: scales, count: count, dtype: dtype)
   }
 
-  override public func clamp<T: NumericTensorElement>(
+  override open func clamp<T: NumericTensorElement>(
     _ a: Tensor.Data, min: T?, max: T?, count: Int, dtype: Tensor.DType
   )
     async throws
@@ -198,7 +198,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.clamp(a, min: min, max: max, count: count, dtype: dtype)
   }
 
-  override public func reduce(
+  override open func reduce(
     _ a: Tensor.Data, op: ReduceOp, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
@@ -207,7 +207,17 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.reduce(a, op: op, dims: dims, dtype: dtype)
   }
 
-  override public func logSoftmax(
+  override open func cumulativeSum(
+    _ a: Tensor.Data, dims: ReduceDims, exclusive: Bool, reverse: Bool, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.cumulativeSum(
+      a, dims: dims, exclusive: exclusive, reverse: reverse, dtype: dtype)
+  }
+
+  override open func logSoftmax(
     _ a: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
@@ -216,7 +226,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.logSoftmax(a, dims: dims, dtype: dtype)
   }
 
-  override public func logSoftmaxGrad(
+  override open func logSoftmaxGrad(
     _ a: Tensor.Data, _ outGrad: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )
     async throws
@@ -226,7 +236,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
 
   }
 
-  override public func repeated(
+  override open func repeated(
     _ a: Tensor.Data, dims: RepeatDims, dtype: Tensor.DType
   )
     async throws
@@ -235,7 +245,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.repeated(a, dims: dims, dtype: dtype)
   }
 
-  override public func gather(
+  override open func gather(
     _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
   )
     async throws
@@ -244,7 +254,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.gather(a, s, dtype: dtype)
   }
 
-  override public func scatter(
+  override open func scatter(
     _ a: Tensor.Data, _ s: ScatterGatherIndices, dtype: Tensor.DType
   )
     async throws
@@ -253,7 +263,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.scatter(a, s, dtype: dtype)
   }
 
-  override public func when<T>(
+  override open func when<T>(
     _ mask: BroadcastData, _ a: TensorOrScalar<T>, _ b: TensorOrScalar<T>, _ x: T.Type,
     dtype: Tensor.DType
   )
@@ -263,7 +273,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.when(mask, a, b, x, dtype: dtype)
   }
 
-  override public func matmul(
+  override open func matmul(
     a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
     inner: Int, cols: Int,
     dtype: Tensor.DType
@@ -276,7 +286,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
       cols: cols, dtype: dtype)
   }
 
-  override public func batchedMatmul(
+  override open func batchedMatmul(
     matrixCount: Int, a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool,
     rows: Int, inner: Int, cols: Int, dtype: Tensor.DType
   )
@@ -288,7 +298,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
       rows: rows, inner: inner, cols: cols, dtype: dtype)
   }
 
-  override public func triangular(
+  override open func triangular(
     _ a: Tensor.Data, batch: Int, rows: Int, cols: Int, upper: Bool, offset: Int,
     dtype: Tensor.DType
   )
@@ -298,7 +308,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
       a, batch: batch, rows: rows, cols: cols, upper: upper, offset: offset, dtype: dtype)
   }
 
-  override public func conv1D(
+  override open func conv1D(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -307,7 +317,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.conv1D(config, batch: batch, image: image, kernel: kernel, dtype: dtype)
   }
 
-  override public func conv1DTranspose(
+  override open func conv1DTranspose(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -317,7 +327,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
       config, batch: batch, image: image, kernel: kernel, dtype: dtype)
   }
 
-  override public func conv1DKernelGrad(
+  override open func conv1DKernelGrad(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
     dtype: Tensor.DType
   )
@@ -328,7 +338,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
       config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
   }
 
-  override public func conv2D(
+  override open func conv2D(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -337,7 +347,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.conv2D(config, batch: batch, image: image, kernel: kernel, dtype: dtype)
   }
 
-  override public func conv2DTranspose(
+  override open func conv2DTranspose(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -347,7 +357,7 @@ open class BackendWrapper: Backend, @unchecked Sendable {
       config, batch: batch, image: image, kernel: kernel, dtype: dtype)
   }
 
-  override public func conv2DKernelGrad(
+  override open func conv2DKernelGrad(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
     dtype: Tensor.DType
   )
@@ -358,13 +368,13 @@ open class BackendWrapper: Backend, @unchecked Sendable {
       config, batch: batch, image: image, outGrad: outGrad, dtype: dtype)
   }
 
-  override public func elemwise(
+  override open func elemwise(
     _ a: Tensor.Data, op: ElemwiseOp, scales: Tensor.Data?, count: Int, dtype: Tensor.DType
   ) async throws -> Tensor.Data {
     try await wrapped.elemwise(a, op: op, scales: scales, count: count, dtype: dtype)
   }
 
-  override public func concat(
+  override open func concat(
     _ inputs: [Tensor.Data], outerCount: Int, innerCounts: [Int], dtype: Tensor.DType
   )
     async throws
@@ -373,13 +383,13 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.concat(inputs, outerCount: outerCount, innerCounts: innerCounts, dtype: dtype)
   }
 
-  override public func constant<T: TensorElement>(_ value: T, count: Int, dtype: Tensor.DType)
+  override open func constant<T: TensorElement>(_ value: T, count: Int, dtype: Tensor.DType)
     async throws -> Tensor.Data
   {
     try await wrapped.constant(value, count: count, dtype: dtype)
   }
 
-  override public func collection<T: TensorElement>(
+  override open func collection<T: TensorElement>(
     _ collection: some Collection<T>, reverse: Bool, dtype: Tensor.DType
   )
     async throws -> Tensor.Data
@@ -387,16 +397,15 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.collection(collection, reverse: reverse, dtype: dtype)
   }
 
-  override public func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data
-  {
+  override open func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data {
     try await wrapped.axisPermutation(permutation: permutation, shape: shape)
   }
 
-  override public func defaultRandom() -> RandomGenerator {
+  override open func defaultRandom() -> RandomGenerator {
     WrappedRandomGenerator(wrappedBackend: self, wrapped: wrapped.defaultRandom())
   }
 
-  override public func createRandom() -> RandomGenerator {
+  override open func createRandom() -> RandomGenerator {
     WrappedRandomGenerator(wrappedBackend: self, wrapped: wrapped.createRandom())
   }
 
@@ -430,7 +439,7 @@ open class BackendFLOPCounter: BackendWrapper, @unchecked Sendable {
     super.init(wrapping: wrapping)
   }
 
-  override public func matmul(
+  override open func matmul(
     a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool, rows: Int,
     inner: Int, cols: Int,
     dtype: Tensor.DType
@@ -445,7 +454,7 @@ open class BackendFLOPCounter: BackendWrapper, @unchecked Sendable {
     return result
   }
 
-  override public func batchedMatmul(
+  override open func batchedMatmul(
     matrixCount: Int, a: Tensor.Data, transA: Bool, b: Tensor.Data, transB: Bool, transOut: Bool,
     rows: Int, inner: Int, cols: Int, dtype: Tensor.DType
   )
@@ -459,7 +468,7 @@ open class BackendFLOPCounter: BackendWrapper, @unchecked Sendable {
     return result
   }
 
-  override public func conv1D(
+  override open func conv1D(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -471,7 +480,7 @@ open class BackendFLOPCounter: BackendWrapper, @unchecked Sendable {
     return result
   }
 
-  override public func conv1DTranspose(
+  override open func conv1DTranspose(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -483,7 +492,7 @@ open class BackendFLOPCounter: BackendWrapper, @unchecked Sendable {
     return result
   }
 
-  override public func conv1DKernelGrad(
+  override open func conv1DKernelGrad(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
     dtype: Tensor.DType
   )
@@ -496,7 +505,7 @@ open class BackendFLOPCounter: BackendWrapper, @unchecked Sendable {
     return result
   }
 
-  override public func conv2D(
+  override open func conv2D(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -508,7 +517,7 @@ open class BackendFLOPCounter: BackendWrapper, @unchecked Sendable {
     return result
   }
 
-  override public func conv2DTranspose(
+  override open func conv2DTranspose(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )
     async throws
@@ -520,7 +529,7 @@ open class BackendFLOPCounter: BackendWrapper, @unchecked Sendable {
     return result
   }
 
-  override public func conv2DKernelGrad(
+  override open func conv2DKernelGrad(
     _ config: Conv2DConfig, batch: Int, image: Tensor.Data, outGrad: Tensor.Data,
     dtype: Tensor.DType
   )
