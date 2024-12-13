@@ -8,7 +8,7 @@ let package = Package(
   name: "Honeycrisp",
   platforms: [
     .macOS(.v13),
-    .iOS(.v13),
+    .iOS(.v16),
   ],
   products: [
     .library(
