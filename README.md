@@ -1,6 +1,6 @@
 # 🍎 Honeycrisp
 
-[Documentation](https://honeycrisp.aqnichol.com/documentation/honeycrisp/) | [Examples](https://github.com/unixpickle/honeycrisp-examples) | [Package Index Page](https://swiftpackageindex.com/unixpickle/honeycrisp)
+[Documentation](https://swiftpackageindex.com/unixpickle/honeycrisp/main/documentation/honeycrisp) | [Examples](https://github.com/unixpickle/honeycrisp-examples) | [Package Index Page](https://swiftpackageindex.com/unixpickle/honeycrisp)
 
 Automatic differentiation and neural networks, all in Swift for Apple Silicon.
 
