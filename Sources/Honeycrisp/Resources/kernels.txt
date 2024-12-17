@@ -634,6 +634,39 @@ float erf_grad(float x) {
         if (id < N) { \
             output[id] = input[id] < 0 ? -1 : 1; \
         } \
+    } \
+    \
+    kernel void floor_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = floor(input[id]); \
+        } \
+    } \
+    \
+    kernel void ceil_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = ceil(input[id]); \
+        } \
+    } \
+    \
+    kernel void round_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = round(input[id]); \
+        } \
     }
 
 ELEMWISE_KERNELS(float)

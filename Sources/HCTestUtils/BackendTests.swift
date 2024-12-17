@@ -971,6 +971,26 @@ open class BackendTests {
     try await assertDataEqual(
       Tensor(data: [-1, -2, -3, -4, -5], shape: [5], dtype: .float32).clamp(max: -2),
       Tensor(data: [-1, -2, -3, -4, -5], shape: [5], dtype: .int64).clamp(max: -2))
+
+    for dtype: Tensor.DType in [.float16, .float32] {
+      let inputs = [
+        -100000.53, -100000.47, -1000.53, -1000.47, -1.53, -1.47, -1.5, 1.5, 2.7, 2.3, 100.47,
+        100.53, 10000.47, 10000.53,
+      ]
+      let x = Tensor(data: inputs, dtype: dtype)
+      let roundedExp = Tensor(data: try await x.floats().map { $0.rounded() }, dtype: dtype)
+      let roundedAct = x.round()
+
+      let floorExp = Tensor(data: try await x.floats().map { $0.rounded(.down) }, dtype: dtype)
+      let floorAct = x.floor()
+
+      let ceilExp = Tensor(data: try await x.floats().map { $0.rounded(.up) }, dtype: dtype)
+      let ceilAct = x.ceil()
+
+      try await assertDataEqual(roundedExp, roundedAct)
+      try await assertDataEqual(floorExp, floorAct)
+      try await assertDataEqual(ceilExp, ceilAct)
+    }
   }
 
   public static func testMinMax() async throws {

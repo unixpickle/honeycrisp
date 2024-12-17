@@ -29,6 +29,9 @@ public enum ElemwiseOp: Sendable {
   case geluExactGrad
   case erf
   case erfGrad
+  case floor
+  case ceil
+  case round
 
   public func apply<T: NumericTensorElement>(_ x: T) -> T {
     let f = x.toFloat()
@@ -69,6 +72,12 @@ public enum ElemwiseOp: Sendable {
       T(fastErf(f))
     case .erfGrad:
       T(simpleErfGrad(f))
+    case .floor:
+      T(f.rounded(.down))
+    case .ceil:
+      T(f.rounded(.up))
+    case .round:
+      T(f.rounded())
     }
   }
 }
@@ -250,5 +259,20 @@ extension Tensor {
   @recordCaller
   private func _rsqrt() -> Tensor {
     pow(-0.5)
+  }
+
+  @recordCaller
+  private func _floor() -> Tensor {
+    noGrad().elemwise(op: .floor)
+  }
+
+  @recordCaller
+  private func _ceil() -> Tensor {
+    noGrad().elemwise(op: .ceil)
+  }
+
+  @recordCaller
+  private func _round() -> Tensor {
+    noGrad().elemwise(op: .round)
   }
 }

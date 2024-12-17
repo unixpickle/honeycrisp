@@ -402,8 +402,8 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
       for op in [
         "vector_pow", "vector_pow_scaled", "log", "recip", "exp", "sigmoid", "sigmoid_grad",
         "gelu_approx", "gelu_approx_grad", "gelu_exact", "gelu_exact_grad", "erf", "erf_grad",
-        "sin", "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "rand",
-        "randn", "normalize_inner", "normalize_inner_grad", "log_softmax",
+        "sin", "cos", "minus_sin", "relu", "relu_grad", "abs", "abs_grad", "floor", "ceil",
+        "round", "rand", "randn", "normalize_inner", "normalize_inner_grad", "log_softmax",
         "log_softmax_grad", "adamw",
       ] {
         names.append("\(op)_\(type)")
@@ -696,6 +696,12 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
         "sigmoid"
       case .sigmoidGrad:
         "sigmoid_grad"
+      case .ceil:
+        "ceil"
+      case .floor:
+        "floor"
+      case .round:
+        "round"
       }
     let functionName = "\(namePrefix)_\(typeName)"
 
