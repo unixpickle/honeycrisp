@@ -402,9 +402,9 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
       for op in [
         "vector_pow", "vector_pow_scaled", "log", "recip", "exp", "sigmoid", "sigmoid_grad",
         "gelu_approx", "gelu_approx_grad", "gelu_exact", "gelu_exact_grad", "erf", "erf_grad",
-        "sin", "cos", "minus_sin", "tan", "tan_grad", "atan", "atan_grad", "relu", "relu_grad",
-        "abs", "abs_grad", "floor", "ceil", "round", "rand", "randn", "normalize_inner",
-        "normalize_inner_grad", "log_softmax",
+        "sin", "cos", "minus_sin", "tan", "tan_grad", "atan", "atan_grad", "acos", "acos_grad",
+        "asin", "asin_grad", "relu", "relu_grad", "abs", "abs_grad", "floor", "ceil", "round",
+        "rand", "randn", "normalize_inner", "normalize_inner_grad", "log_softmax",
         "log_softmax_grad", "adamw",
       ] {
         names.append("\(op)_\(type)")
@@ -675,6 +675,14 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
         "atan"
       case .atanGrad:
         "atan_grad"
+      case .acos:
+        "acos"
+      case .acosGrad:
+        "acos_grad"
+      case .asin:
+        "asin"
+      case .asinGrad:
+        "asin_grad"
       case .relu:
         "relu"
       case .reluGrad:

@@ -634,6 +634,50 @@ float erf_grad(float x) {
         } \
     } \
     \
+    kernel void acos_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = acos(input[id]); \
+        } \
+    } \
+    \
+    kernel void acos_grad_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = -1 / sqrt(1 - pow(input[id], 2)); \
+        } \
+    } \
+    \
+    kernel void asin_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = asin(input[id]); \
+        } \
+    } \
+    \
+    kernel void asin_grad_##type( \
+        device const type* input [[buffer(0)]], \
+        device type* output [[buffer(1)]], \
+        constant uint &N [[buffer(2)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            output[id] = 1 / sqrt(1 - pow(input[id], 2)); \
+        } \
+    } \
+    \
     kernel void relu_##type( \
         device const type* input [[buffer(0)]], \
         device type* output [[buffer(1)]], \

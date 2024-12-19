@@ -18,6 +18,10 @@ public enum ElemwiseOp: Sendable {
   case tanGrad
   case atan
   case atanGrad
+  case acos
+  case acosGrad
+  case asin
+  case asinGrad
   case exp
   case log
   case recip
@@ -54,6 +58,14 @@ public enum ElemwiseOp: Sendable {
       T(Foundation.atan(f))
     case .atanGrad:
       T(1 / (1 + pow(f, 2)))
+    case .acos:
+      T(Foundation.acos(f))
+    case .acosGrad:
+      T(-1 / Foundation.sqrt(1 - pow(f, 2)))
+    case .asin:
+      T(Foundation.asin(f))
+    case .asinGrad:
+      T(1 / Foundation.sqrt(1 - pow(f, 2)))
     case .exp:
       T(Foundation.exp(f))
     case .log:
@@ -221,6 +233,16 @@ extension Tensor {
   @recordCaller
   private func _atan() -> Tensor {
     self.elemwise(op: .atan, grad: .atanGrad)
+  }
+
+  @recordCaller
+  private func _acos() -> Tensor {
+    self.elemwise(op: .acos, grad: .acosGrad)
+  }
+
+  @recordCaller
+  private func _asin() -> Tensor {
+    self.elemwise(op: .asin, grad: .asinGrad)
   }
 
   @recordCaller
