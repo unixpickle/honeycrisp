@@ -1063,6 +1063,69 @@ open class BackendTests {
     XCTAssertEqual(input.max(axis: 1, keepdims: true).shape, [3, 1])
   }
 
+  public static func testAllSome() async throws {
+    func checkEqual(_ t1: Tensor, _ t2: Tensor) async throws {
+      XCTAssertEqual(t1.shape, t2.shape)
+      XCTAssertEqual(t1.dtype, t2.dtype)
+      try await assertDataEqual(t1, t2)
+    }
+    try await checkEqual(
+      Tensor(data: [false, true, false, false, true, true, true, false], shape: [4, 2]).all(
+        axis: 1, keepdims: false),
+      Tensor(data: [false, false, true, false], shape: [4])
+    )
+    try await checkEqual(
+      Tensor(data: [false, true, false, false, true, true, true, false], shape: [4, 2]).all(
+        axis: 1, keepdims: true),
+      Tensor(data: [false, false, true, false], shape: [4, 1])
+    )
+    try await checkEqual(
+      Tensor(data: [false, true, false, false, true, true, true, false], shape: [4, 2]).some(
+        axis: 1, keepdims: false),
+      Tensor(data: [true, false, true, true], shape: [4])
+    )
+    try await checkEqual(
+      Tensor(data: [false, true, false, false, true, true, true, false], shape: [4, 2]).some(
+        axis: 1, keepdims: true),
+      Tensor(data: [true, false, true, true], shape: [4, 1])
+    )
+
+    // Empty arrays
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0], dtype: .bool).all(), Tensor(data: [true], shape: []))
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0]).all(keepdims: true),
+      Tensor(data: [true], shape: [1, 1]))
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0]).all(axis: 1),
+      Tensor(data: [true, true, true, true], shape: [4]))
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0]).all(axis: 1, keepdims: true),
+      Tensor(data: [true, true, true, true], shape: [4, 1]))
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0]).all(axis: 0), Tensor(data: [Bool](), shape: [0]))
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0]).all(axis: 0, keepdims: true),
+      Tensor(data: [Bool](), shape: [1, 0]))
+
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0]).some(), Tensor(data: [false], shape: []))
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0]).some(keepdims: true),
+      Tensor(data: [false], shape: [1, 1]))
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0]).some(axis: 1),
+      Tensor(data: [false, false, false, false], shape: [4]))
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0]).some(axis: 1, keepdims: true),
+      Tensor(data: [false, false, false, false], shape: [4, 1]))
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0]).some(axis: 0), Tensor(data: [Bool](), shape: [0]))
+    try await checkEqual(
+      Tensor(data: [Bool](), shape: [4, 0]).some(axis: 0, keepdims: true),
+      Tensor(data: [Bool](), shape: [1, 0]))
+  }
+
   public static func testExpandAndRepeat() async throws {
     let t1Arr: [Float] = [1, 2, 3, 4]
     let t2Arr: [Float] = [1, 2, 3, 4, 5, 6]

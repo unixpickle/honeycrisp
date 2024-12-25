@@ -399,15 +399,15 @@ public final class Tensor: Sendable {
   ) where C: Collection<T>, C: Sendable {
     let shape = shape ?? [data.count]
     let dtype = dtype ?? T.dtype
-    if !dtype.supportsGrad {
-      #alwaysAssert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
-    }
-    #alwaysAssert(
-      data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
-    #alwaysAssert(
-      dtype.canUseScalarType(T.self),
-      "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
     let dataTask = Backtrace.record(function: function, file: file, line: line) {
+      if !dtype.supportsGrad {
+        #alwaysAssert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
+      }
+      #alwaysAssert(
+        data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
+      #alwaysAssert(
+        dtype.canUseScalarType(T.self),
+        "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
       let backend = Backend.current
       return Tensor.createDataTask {
         try await backend.collection(data, reverse: reverse, dtype: dtype)
@@ -475,10 +475,10 @@ public final class Tensor: Sendable {
     line: UInt = #line
   ) {
     let dtype = dtype ?? T.dtype
-    #alwaysAssert(
-      dtype.canUseScalarType(T.self),
-      "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
     let dataTask = Backtrace.record(function: function, file: file, line: line) {
+      #alwaysAssert(
+        dtype.canUseScalarType(T.self),
+        "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
       let backend = Backend.current
       return Tensor.createDataTask {
         try await backend.constant(constant, count: shape.product(), dtype: dtype)

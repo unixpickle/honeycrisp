@@ -90,6 +90,68 @@ extension Tensor {
   }
 
   @recordCaller
+  private func _all(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+    #alwaysAssert(dtype == .bool, "can only apply all() to boolean tensors")
+    let axis = positiveAxis(axis)
+    if let axis = axis {
+      if shape[axis] == 0 {
+        var outShape = shape
+        if keepdims {
+          outShape[axis] = 1
+        } else {
+          outShape.remove(at: axis)
+        }
+        return Tensor(constant: true, shape: outShape, dtype: .bool)
+      } else {
+        return min(axis: axis, keepdims: keepdims)
+      }
+    } else {
+      if shape.product() == 0 {
+        let outShape =
+          if keepdims {
+            [Int](repeating: 1, count: shape.count)
+          } else {
+            [Int]()
+          }
+        return Tensor(constant: true, shape: outShape, dtype: .bool)
+      } else {
+        return min(keepdims: keepdims)
+      }
+    }
+  }
+
+  @recordCaller
+  private func _some(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+    #alwaysAssert(dtype == .bool, "can only apply some() to boolean tensors")
+    let axis = positiveAxis(axis)
+    if let axis = axis {
+      if shape[axis] == 0 {
+        var outShape = shape
+        if keepdims {
+          outShape[axis] = 1
+        } else {
+          outShape.remove(at: axis)
+        }
+        return Tensor(constant: false, shape: outShape, dtype: .bool)
+      } else {
+        return max(axis: axis, keepdims: keepdims)
+      }
+    } else {
+      if shape.product() == 0 {
+        let outShape =
+          if keepdims {
+            [Int](repeating: 1, count: shape.count)
+          } else {
+            [Int]()
+          }
+        return Tensor(constant: false, shape: outShape, dtype: .bool)
+      } else {
+        return max(keepdims: keepdims)
+      }
+    }
+  }
+
+  @recordCaller
   private func _variance(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
     let mean = self.mean(axis: axis, keepdims: true)
     let result = (self - mean.expand(as: self)).pow(2).mean(axis: axis, keepdims: true)
