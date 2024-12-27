@@ -202,6 +202,9 @@ extension PartialRangeThrough<Int>: TensorIndex {
 public struct FlipAxis: TensorIndex {
   public var minTensorIndexDims: Int { 1 }
 
+  public init() {
+  }
+
   public func tensorIndex(forShape inShape: [Int]) -> TensorIndexResult {
     return TensorIndexResult(
       reshape: inShape,
