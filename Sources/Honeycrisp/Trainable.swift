@@ -489,6 +489,19 @@ public class TrainableArray<T: Trainable>: Trainable {
   }
 }
 
+/// A ``Trainable`` which tracks a dictionary of sub-modules.
+public class TrainableDictionary<T: Trainable>: Trainable {
+  public let children: [String: T]
+
+  public init(_ children: [String: T]) {
+    self.children = children
+    super.init()
+    for (k, ch) in children {
+      self.registeredChildren[k] = ch
+    }
+  }
+}
+
 /// A ``Trainable`` module that implements a learned matrix multiplication and optional bias.
 public class Linear: Trainable {
   @Param(name: "weight") public var weight: Tensor
