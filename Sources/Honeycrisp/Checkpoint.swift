@@ -6,6 +6,7 @@ extension Tensor {
   private static func _checkpoint(
     enabled: Bool = true,
     saveRandomState: Bool = true,
+    waitForCPU: Bool = true,
     _ args: [Tensor],
     _ fn: @escaping @Sendable ([Tensor]) -> [Tensor]
   ) -> [Tensor] {
@@ -48,7 +49,11 @@ extension Tensor {
             newInputs.append(x)
           }
         }
-        return backend.use { saver.saveOrRestoreRandom { fn(newInputs) } }
+        return Tensor.asDependencies(
+          grads.filter({ $0 != nil }).map({ $0! }), waitForCPU: waitForCPU
+        ) {
+          backend.use { saver.saveOrRestoreRandom { fn(newInputs) } }
+        }
       }
 
       // We are already in a backward context here, so all of our backward() blocks

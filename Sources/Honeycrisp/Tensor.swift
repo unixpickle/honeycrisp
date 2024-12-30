@@ -233,6 +233,51 @@ public final class Tensor: Sendable {
     }
   }
 
+  /// Like ``Tensor/asDependency(waitForCPU:_:)-8hdxc`` for multiple tensors at once.
+  public static func asDependencies<T>(
+    _ tensors: [Tensor], waitForCPU: Bool = true, _ fn: () async throws -> T
+  ) async rethrows
+    -> T
+  {
+    let ts = tensors.map { $0.dataTask }
+    let task = Task {
+      for t in ts {
+        let data = try await t.value
+        if waitForCPU {
+          try await data.onCPU { _ in () }
+        }
+      }
+    }
+
+    return try await Tensor.$taskDataDependencies.withValue(
+      (Tensor.taskDataDependencies ?? []) + [task]
+    ) {
+      try await fn()
+    }
+  }
+
+  /// Like ``Tensor/asDependency(waitForCPU:_:)-2mzrw`` for multiple tensors at once.
+  public static func asDependencies<T>(
+    _ tensors: [Tensor], waitForCPU: Bool = true, _ fn: () throws -> T
+  )
+    rethrows -> T
+  {
+    let ts = tensors.map { $0.dataTask }
+    let task = Task {
+      for t in ts {
+        let data = try await t.value
+        if waitForCPU {
+          try await data.onCPU { _ in () }
+        }
+      }
+    }
+
+    return try Tensor.$taskDataDependencies.withValue((Tensor.taskDataDependencies ?? []) + [task])
+    {
+      try fn()
+    }
+  }
+
   /// The `Task` which is responsible for computing the data of the Tensor.
   ///
   /// Rather than accessing this directly, you may use the ``Tensor/data`` attribute.
