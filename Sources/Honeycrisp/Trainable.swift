@@ -477,7 +477,7 @@ open class Trainable: MaybeTrainable, TrainableProto {
 }
 
 /// A ``Trainable`` which tracks an array of sub-modules.
-public class TrainableArray<T: Trainable>: Trainable {
+public class TrainableArray<T: TrainableProto>: Trainable {
   public let children: [T]
 
   public init(_ children: [T]) {
@@ -490,7 +490,7 @@ public class TrainableArray<T: Trainable>: Trainable {
 }
 
 /// A ``Trainable`` which tracks a dictionary of sub-modules.
-public class TrainableDictionary<T: Trainable>: Trainable {
+public class TrainableDictionary<T: TrainableProto>: Trainable {
   public let children: [String: T]
 
   public init(_ children: [String: T]) {
