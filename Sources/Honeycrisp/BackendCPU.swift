@@ -33,6 +33,9 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
 
     public let byteCount: Int
 
+    public func wait() async throws {
+    }
+
     public func onCPU<T>(_ fn: (_: UnsafeRawPointer) async throws -> T) async throws -> T {
       try await fn(data)
     }

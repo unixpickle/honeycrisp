@@ -71,6 +71,11 @@ public final class Tensor: Sendable {
     /// by a tensor might be less than the size of the data.
     var byteCount: Int { get }
 
+    /// Wait for the actual computation to complete.
+    ///
+    /// Unlike ``Tensor/Data/onCPU(_:)``, this method does not need to map the result to the CPU.
+    func wait() async throws
+
     /// Get the data as a concrete, CPU-mapped buffer.
     func onCPU<T>(_ fn: (_: UnsafeRawPointer) async throws -> T) async throws -> T
 
@@ -187,14 +192,14 @@ public final class Tensor: Sendable {
   /// initializer. It only affects data tasks created with the `createDataTask`
   /// helpers, which should be used internally whenever a backend method is
   /// called.
-  public func asDependency<T>(waitForCPU: Bool = true, _ fn: () async throws -> T) async rethrows
+  public func asDependency<T>(waitForData: Bool = true, _ fn: () async throws -> T) async rethrows
     -> T
   {
     let t = self.dataTask
     let task = Task {
       let data = try await t.value
-      if waitForCPU {
-        try await data.onCPU { _ in () }
+      if waitForData {
+        try await data.wait()
       }
     }
 
@@ -218,12 +223,12 @@ public final class Tensor: Sendable {
   /// initializer. It only affects data tasks created with the `createDataTask`
   /// helpers, which should be used internally whenever a backend method is
   /// called.
-  public func asDependency<T>(waitForCPU: Bool = true, _ fn: () throws -> T) rethrows -> T {
+  public func asDependency<T>(waitForData: Bool = true, _ fn: () throws -> T) rethrows -> T {
     let t = self.dataTask
     let task = Task {
       let data = try await t.value
-      if waitForCPU {
-        try await data.onCPU { _ in () }
+      if waitForData {
+        try await data.wait()
       }
     }
 
@@ -233,9 +238,9 @@ public final class Tensor: Sendable {
     }
   }
 
-  /// Like ``Tensor/asDependency(waitForCPU:_:)-8hdxc`` for multiple tensors at once.
+  /// Like ``Tensor/asDependency(waitForData:_:)-8dsl4`` for multiple tensors at once.
   public static func asDependencies<T>(
-    _ tensors: [Tensor], waitForCPU: Bool = true, _ fn: () async throws -> T
+    _ tensors: [Tensor], waitForData: Bool = true, _ fn: () async throws -> T
   ) async rethrows
     -> T
   {
@@ -243,8 +248,8 @@ public final class Tensor: Sendable {
     let task = Task {
       for t in ts {
         let data = try await t.value
-        if waitForCPU {
-          try await data.onCPU { _ in () }
+        if waitForData {
+          try await data.wait()
         }
       }
     }
@@ -256,9 +261,9 @@ public final class Tensor: Sendable {
     }
   }
 
-  /// Like ``Tensor/asDependency(waitForCPU:_:)-2mzrw`` for multiple tensors at once.
+  /// Like ``Tensor/asDependency(waitForData:_:)-32h1i`` for multiple tensors at once.
   public static func asDependencies<T>(
-    _ tensors: [Tensor], waitForCPU: Bool = true, _ fn: () throws -> T
+    _ tensors: [Tensor], waitForData: Bool = true, _ fn: () throws -> T
   )
     rethrows -> T
   {
@@ -266,8 +271,8 @@ public final class Tensor: Sendable {
     let task = Task {
       for t in ts {
         let data = try await t.value
-        if waitForCPU {
-          try await data.onCPU { _ in () }
+        if waitForData {
+          try await data.wait()
         }
       }
     }
@@ -577,7 +582,7 @@ public final class Tensor: Sendable {
 
   @recordCaller
   private func _wait() async throws {
-    let _ = try await (try await data).onCPU { _ in () }
+    try await (try await data).wait()
   }
 
   public func noGrad() -> Tensor {

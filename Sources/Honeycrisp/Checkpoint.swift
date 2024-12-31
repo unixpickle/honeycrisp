@@ -6,7 +6,7 @@ extension Tensor {
   private static func _checkpoint(
     enabled: Bool = true,
     saveRandomState: Bool = true,
-    waitForCPU: Bool = true,
+    waitForData: Bool = true,
     _ args: [Tensor],
     _ fn: @escaping @Sendable ([Tensor]) -> [Tensor]
   ) -> [Tensor] {
@@ -50,7 +50,7 @@ extension Tensor {
           }
         }
         return Tensor.asDependencies(
-          grads.filter({ $0 != nil }).map({ $0! }), waitForCPU: waitForCPU
+          grads.filter({ $0 != nil }).map({ $0! }), waitForData: waitForData
         ) {
           backend.use { saver.saveOrRestoreRandom { fn(newInputs) } }
         }

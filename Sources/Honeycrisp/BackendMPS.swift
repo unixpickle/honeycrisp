@@ -70,6 +70,12 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
 
     public var byteCount: Int { buffer.allocatedSize }
 
+    public func wait() async throws {
+      if let completion = completion {
+        let _ = try await completion.value
+      }
+    }
+
     public func onCPU<T>(_ fn: (_: UnsafeRawPointer) async throws -> T) async throws -> T {
       if let completion = completion {
         let _ = try await completion.value
