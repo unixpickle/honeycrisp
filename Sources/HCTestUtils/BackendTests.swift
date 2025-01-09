@@ -36,6 +36,18 @@ class DummyLinear: Trainable {
 }
 
 open class BackendTests {
+  public static func testCreateFromData() async throws {
+    for dtype: Tensor.DType in [.int64, .float16, .float32] {
+      try await assertDataEqual(Tensor(data: [1, 2, 3], dtype: dtype), [1.0, 2.0, 3.0])
+      try await assertDataEqual(Tensor(data: 1..<4, dtype: dtype), [1.0, 2.0, 3.0])
+      try await assertDataEqual(Tensor(data: 1...3, dtype: dtype), [1.0, 2.0, 3.0])
+      try await assertDataEqual(Tensor(data: (-1)...3, dtype: dtype), [-1.0, 0.0, 1.0, 2.0, 3.0])
+      try await assertDataEqual(Tensor(data: (-1)..<4, dtype: dtype), [-1.0, 0.0, 1.0, 2.0, 3.0])
+      try await assertDataEqual(Tensor(data: (-4)..<(-2), dtype: dtype), [-4.0, -3.0])
+      try await assertDataEqual(Tensor(data: (-4)...(-2), dtype: dtype), [-4.0, -3.0, -2.0])
+    }
+  }
+
   public static func testCast() async throws {
     let x = Tensor(data: [1.0, 2.0, 0.0], shape: [3], dtype: .float32)
     try await assertDataEqual(x, [1.0, 2.0, 0.0])

@@ -37,6 +37,12 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testCreateFromData() async throws {
+    try await runInBackends {
+      try await BackendTests.testCreateFromData()
+    }
+  }
+
   func testCast() async throws {
     try await runInBackends {
       try await BackendTests.testCast()

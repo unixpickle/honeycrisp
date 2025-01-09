@@ -403,7 +403,7 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
     let library = try device.makeLibrary(source: sourceStr, options: MTLCompileOptions())
 
     // Lookup all functions in the library.
-    var names = ["axis_permutation"]
+    var names = ["create_range", "axis_permutation"]
     for type in ["half", "float"] {
       for op in [
         "vector_pow", "vector_pow_scaled", "log", "recip", "exp", "sigmoid", "sigmoid_grad",
@@ -1707,6 +1707,41 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
     let r = TwoToOneGraph(graph: graph, inputA: input, inputB: indices, output: output)
     scatters[key] = r
     return r
+  }
+
+  override open func collection<T: TensorElement>(
+    _ collection: some Collection<T>, reverse: Bool, dtype: Tensor.DType
+  )
+    async throws -> Tensor.Data
+  {
+    guard dtype == .int64, let range = (collection as? Range<Int>),
+      range.lowerBound >= 0 && range.upperBound <= Int(UInt32.max)
+    else {
+      return try await super.collection(collection, reverse: reverse, dtype: dtype)
+    }
+
+    let outputCount = range.count
+    #alwaysAssert(outputCount <= Int(UInt32.max), "cannot apply kernel to this many values")
+
+    let (buffer, bufferCb) = try await allocateBuf(outputCount * Tensor.DType.int64.byteSize)
+    return try await serialize { [self] in
+      let completion = try completionBufferAndEncoder(
+        label: "collection", deallocators: []
+      ) { buf, enc in
+        let functionName = "create_range"
+        let state = try getFunction(name: functionName)
+        try setArguments(
+          enc,
+          .uint(UInt32(range.lowerBound)),
+          .uint(UInt32(range.upperBound)),
+          .buffer(buffer),
+          .uint(UInt32(outputCount)),
+          .uint(UInt32(reverse ? 1 : 0))
+        )
+        dispatch1D(enc, state: state, threadCount: outputCount)
+      }
+      return GPUData(backend: self, buffer: buffer, completion: completion, deallocator: bufferCb)
+    }
   }
 
   override open func axisPermutation(permutation: [Int], shape: [Int]) async throws -> Tensor.Data {

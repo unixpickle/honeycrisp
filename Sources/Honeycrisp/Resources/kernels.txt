@@ -1005,6 +1005,21 @@ DEFINE_SCATTER(scatter, short)
 DEFINE_SCATTER(scatter, int)
 DEFINE_SCATTER(scatter, long)
 
+kernel void create_range(
+    device const uint& rangeStart [[buffer(0)]],
+    device const uint& rangeEnd [[buffer(1)]],
+    device ulong* output [[buffer(2)]],
+    constant uint &outputCount [[buffer(3)]],
+    constant uint &reverse [[buffer(4)]],
+    uint id [[thread_position_in_grid]]
+) {
+    uint flatIndex = 0;
+    uint result = reverse ? (rangeEnd - (id + 1)) : (rangeStart + id);
+    if (id < outputCount) {
+        output[id] = result;
+    }
+}
+
 kernel void axis_permutation(
     device const uint* newStrides [[buffer(0)]],
     device const uint* newShape [[buffer(1)]],
