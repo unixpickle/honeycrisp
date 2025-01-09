@@ -38,13 +38,32 @@ class DummyLinear: Trainable {
 open class BackendTests {
   public static func testCreateFromData() async throws {
     for dtype: Tensor.DType in [.int64, .float16, .float32] {
-      try await assertDataEqual(Tensor(data: [1, 2, 3], dtype: dtype), [1.0, 2.0, 3.0])
-      try await assertDataEqual(Tensor(data: 1..<4, dtype: dtype), [1.0, 2.0, 3.0])
-      try await assertDataEqual(Tensor(data: 1...3, dtype: dtype), [1.0, 2.0, 3.0])
-      try await assertDataEqual(Tensor(data: (-1)...3, dtype: dtype), [-1.0, 0.0, 1.0, 2.0, 3.0])
-      try await assertDataEqual(Tensor(data: (-1)..<4, dtype: dtype), [-1.0, 0.0, 1.0, 2.0, 3.0])
-      try await assertDataEqual(Tensor(data: (-4)..<(-2), dtype: dtype), [-4.0, -3.0])
-      try await assertDataEqual(Tensor(data: (-4)...(-2), dtype: dtype), [-4.0, -3.0, -2.0])
+      for reverse in [false, true] {
+        func maybeReverse(_ arr: [Float]) -> [Float] {
+          if reverse {
+            arr.reversed()
+          } else {
+            arr
+          }
+        }
+        try await assertDataEqual(
+          Tensor(data: [1, 2, 3], dtype: dtype, reverse: reverse), maybeReverse([1.0, 2.0, 3.0]))
+        try await assertDataEqual(
+          Tensor(data: 1..<4, dtype: dtype, reverse: reverse), maybeReverse([1.0, 2.0, 3.0]))
+        try await assertDataEqual(
+          Tensor(data: 1...3, dtype: dtype, reverse: reverse), maybeReverse([1.0, 2.0, 3.0]))
+        try await assertDataEqual(
+          Tensor(data: (-1)...3, dtype: dtype, reverse: reverse),
+          maybeReverse([-1.0, 0.0, 1.0, 2.0, 3.0]))
+        try await assertDataEqual(
+          Tensor(data: (-1)..<4, dtype: dtype, reverse: reverse),
+          maybeReverse([-1.0, 0.0, 1.0, 2.0, 3.0]))
+        try await assertDataEqual(
+          Tensor(data: (-4)..<(-2), dtype: dtype, reverse: reverse), maybeReverse([-4.0, -3.0]))
+        try await assertDataEqual(
+          Tensor(data: (-4)...(-2), dtype: dtype, reverse: reverse),
+          maybeReverse([-4.0, -3.0, -2.0]))
+      }
     }
   }
 
