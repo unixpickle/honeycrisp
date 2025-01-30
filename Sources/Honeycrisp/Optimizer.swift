@@ -226,7 +226,7 @@ public class GradClipper {
   }
 
   @recordCaller
-  private func _clipGrads(model: Trainable) async throws -> (Float, Float) {
+  private func _clipGrads(model: TrainableProto) async throws -> (Float, Float) {
     var gradNorm = Tensor(data: [0.0])
     for (_, p) in model.parameters {
       if let g = p.grad {
