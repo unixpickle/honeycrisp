@@ -214,7 +214,7 @@ public class GradClipper {
   public let maxStds: Float
   private var history: [Float] = []
 
-  init(historySize: Int = 30, recentCount: Int = 5, maxStds: Float = 2.0) {
+  public init(historySize: Int = 30, recentCount: Int = 5, maxStds: Float = 2.0) {
     self.historySize = historySize
     self.recentCount = recentCount
     self.maxStds = maxStds
