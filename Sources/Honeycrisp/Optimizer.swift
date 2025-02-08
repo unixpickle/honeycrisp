@@ -94,15 +94,6 @@ open class Optimizer {
       p.grad = nil
     }
   }
-
-  internal func step() {
-    preconditionFailure("Method not implemented")
-  }
-
-  @recordCaller
-  private func _step() {
-    step()
-  }
 }
 
 /// An ``Optimizer`` implementation for [Adam: A Method for Stochastic Optimization](https://arxiv.org/abs/1412.6980).
@@ -134,7 +125,8 @@ public class Adam: Optimizer {
     super.init(parameters)
   }
 
-  override internal func step() {
+  @recordCaller
+  private func _step() {
     for (name, var param) in parameters {
       guard let grad = param.grad else {
         continue
