@@ -590,9 +590,7 @@ public final class Tensor: Sendable {
   }
 
   @recordCaller
-  private func _createDataTask(_ fn: @escaping @Sendable (Tensor) async throws -> Data) -> Task<
-    Data, Error
-  > {
+  private func _createDataTask<T>(_ fn: @escaping @Sendable (Tensor) async throws -> T) -> Task<T, Error> {
     Tensor.createDataTask(self, fn)
   }
 
@@ -622,9 +620,9 @@ public final class Tensor: Sendable {
   }
 
   @recordCaller
-  static private func _createDataTask(
-    _ x: Tensor, _ fn: @escaping @Sendable (Tensor) async throws -> Data
-  ) -> Task<Data, Error> {
+  static private func _createDataTask<T>(
+    _ x: Tensor, _ fn: @escaping @Sendable (Tensor) async throws -> T
+  ) -> Task<T, Error> {
     let safeRef1 = x.noGrad()
     return createDataTask {
       try await fn(safeRef1)

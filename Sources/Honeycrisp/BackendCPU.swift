@@ -1217,6 +1217,126 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
     }
   }
 
+  override open func qrDecomposition(
+    _ a: Tensor.Data,
+    batch: Int,
+    rows m: Int,
+    cols n: Int,
+    full: Bool,
+    dtype: Tensor.DType
+  ) async throws -> (q: Tensor.Data, r: Tensor.Data) {
+    let full = (m < n) || full
+  
+    // Determine output shapes.
+    // For tall (or square) matrices (m >= n):
+    //   Reduced: Q is m×n, R is n×n.
+    //   Full:    Q is m×m, R is m×n.
+    // For wide matrices (m < n): Q is m×m, R is m×n.
+    let qCols = (m >= n) ? (full ? m : n) : m
+    let qSize = batch * m * qCols * dtype.byteSize
+  
+    let rRows = (m >= n) ? (full ? m : n) : m
+    let rSize = batch * rRows * n * dtype.byteSize
+  
+    let (q, r) = try await withBuffers(qSize, rSize, a) { qBuf, rBuf, inBuf in
+      try readBuffer(Float.self, inBuf, count: batch * m * n, dtype: dtype) { arrIn in
+        try writeBuffer(Float.self, qBuf, count: qSize, dtype: dtype) { arrQ in
+          try writeBuffer(Float.self, rBuf, count: rSize, dtype: dtype) { arrR in
+            typealias IntType = __CLPK_integer
+
+            // Process each matrix in the batch.
+            for b in 0..<batch {
+              let baseIn = b * m * n
+              
+              // Make a mutable copy of the b-th matrix, and transpose it to column-major order.
+              var localA = Array(repeating: Float(0.0), count: m * n)
+              for i in 0..<m {
+                for j in 0..<n {
+                  localA[j * m + i] = arrIn[baseIn + i * n + j]
+                }
+              }
+  
+              let k = min(m, n)
+              var reflectScalars = [Float](repeating: 0.0, count: k)
+              var illegalArgIdx: IntType = 0
+              var mm = IntType(m)
+              var nn = IntType(n)
+              var leadingDim = mm
+  
+              // Query workspace size for SGEQRF.
+              var lwork: IntType = -1
+              var workQuery: Float = 0.0
+              sgeqrf_(&mm, &nn, &localA, &leadingDim, &reflectScalars, &workQuery, &lwork, &illegalArgIdx)
+              lwork = IntType(workQuery)
+              var work = [Float](repeating: 0.0, count: Int(lwork))
+  
+              // Compute the QR factorization.
+              sgeqrf_(&mm, &nn, &localA, &leadingDim, &reflectScalars, &work, &lwork, &illegalArgIdx)
+              if illegalArgIdx != 0 {
+                throw BackendError.lapackError("failed in SGEQRF with illegalArgIdx=\(illegalArgIdx)")
+              }
+  
+              // Extract R.
+              // SGEQRF overwrites localA with the R factor in its upper-triangular part.
+              let rBase = b * rRows * n
+              for j in 0..<n {
+                for i in 0..<rRows {
+                  // For valid entries, only rows i <= j (and i < k) are defined.
+                  if i <= j && i < k {
+                    arrR[rBase + i * n + j] = localA[i + j * m]
+                  } else {
+                    arrR[rBase + i * n + j] = 0.0
+                  }
+                }
+              }
+  
+              // Generate Q.
+              var transQ: [Float]
+              if m > n && full {
+                transQ = Array(repeating: 0.0, count: m * qCols)
+                // Copy the first n columns from localA.
+                for j in 0..<n {
+                  for i in 0..<m {
+                    transQ[i + j * m] = localA[i + j * m]
+                  }
+                }
+              } else if m > n {
+                transQ = localA
+              } else {
+                transQ = Array(repeating: 0.0, count: m * qCols)
+                for j in 0..<m {
+                  for i in 0..<m {
+                    transQ[i + j * m] = localA[i + j * m]
+                  }
+                }
+              }
+              var qm = IntType(m)
+              var qn = IntType(qCols)
+              var qk = IntType(k)
+              lwork = -1
+              sorgqr_(&qm, &qn, &qk, &transQ, &leadingDim, &reflectScalars, &workQuery, &lwork, &illegalArgIdx)
+              lwork = IntType(workQuery)
+              work = [Float](repeating: 0.0, count: Int(lwork))
+              sorgqr_(&qm, &qn, &qk, &transQ, &leadingDim, &reflectScalars, &work, &lwork, &illegalArgIdx)
+              if illegalArgIdx != 0 {
+                throw BackendError.lapackError("failed in SORGQR (full) with illegalArgIdx=\(illegalArgIdx)")
+              }
+  
+              // Write transQ to the global arrQ at offset b.
+              let qBase = b * m * qCols
+              for j in 0..<qCols {
+                for i in 0..<m {
+                  arrQ[qBase + i * qCols + j] = transQ[i + j * m]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return (q: q, r: r)
+  }
+
   internal func convNd<Dim: SpatialDim>(
     _ config: ConvConfig<Dim>, batch: Int, image: Tensor.Data, kernel: Tensor.Data,
     dtype: Tensor.DType
@@ -1546,6 +1666,25 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
         try await fn(SendableMutableRawPointer(out), buf1)
       }
       return result
+    }
+  }
+
+  func withBuffers(
+    _ outputSize1: Int, _ outputSize2: Int, _ in1: Tensor.Data,
+    _ fn: (SendableMutableRawPointer, SendableMutableRawPointer, SendableRawPointer) async throws ->
+      Void
+  ) async throws -> (Tensor.Data, Tensor.Data) {
+    try await in1.onCPU { buf1 in
+      let buf1 = SendableRawPointer(buf1)
+      let result1 = try await allocate(outputSize1)
+      let result2 = try await result1.mutateOnCPU { out1 in
+        let result2 = try await allocate(outputSize2)
+        try await result2.mutateOnCPU { out2 in
+          try await fn(SendableMutableRawPointer(out1), SendableMutableRawPointer(out2), buf1)
+        }
+        return result2
+      }
+      return (result1, result2)
     }
   }
 

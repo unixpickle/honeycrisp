@@ -169,6 +169,12 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testQR() async throws {
+    try await runInBackends {
+      try await BackendTests.testQR()
+    }
+  }
+
   func testIndexing() async throws {
     try await runInBackends {
       try await BackendTests.testIndexing()

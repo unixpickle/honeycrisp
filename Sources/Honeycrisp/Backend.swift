@@ -11,6 +11,7 @@ public enum BackendError: Error {
   case allocationFailed(Int)
   case kernelFailed(String)
   case failedToLoadKernels(String)
+  case lapackError(String)
 }
 
 /// An base class for backends which can perform operations on tensor data.
@@ -651,6 +652,14 @@ open class Backend: @unchecked Sendable {
     async throws -> Tensor.Data
   {
     throw BackendError.notImplemented("triangular")
+  }
+
+  /// Compute the QR decomposition of the (batch of) matrices.
+  ///
+  /// If full is true, then a Q will be square, and some of the elements in Q and R
+  /// may be redundant.
+  open func qrDecomposition(_ a: Tensor.Data, batch: Int, rows: Int, cols: Int, full: Bool, dtype: Tensor.DType) async throws -> (q: Tensor.Data, r: Tensor.Data) {
+    throw BackendError.notImplemented("qrDecomposition")
   }
 
   /// Compute a 1-dimensional convolution.

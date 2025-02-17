@@ -751,6 +751,43 @@ open class BackendTests {
       [1, 2, 3, 0, 5, 6, 0, 0, 9])
   }
 
+  public static func testQR() async throws {
+    func checkMatrix(_ matrix: Tensor) async throws {
+      for full in [false, true] {
+        let (q, r) = matrix.qrDecomposition(full: full)
+        try await assertClose(q &* r, matrix)
+        try await assertDataEqual(r, r.triu())
+        let eye =
+          if q.shape[q.shape.count - 2] < q.shape[q.shape.count - 1] {
+            q &* q.t()
+          } else {
+            q.t() &* q
+          }
+        let eyeActual = Tensor(oneHot: Array(0..<eye.shape.last!), count: eye.shape.last!).expand(
+          as: eye)
+        try await assertClose(eye, eyeActual)
+      }
+    }
+    try await checkMatrix(
+      Tensor(data: [3.5, 2.5, -1.5, 0.87, 1.0, 0.3, -1.5, 2, 3], shape: [3, 3]))
+    try await checkMatrix(Tensor(data: [3.5, 2.5, -1.5, 0.87, 1.0, 0.3], shape: [3, 2]))
+    try await checkMatrix(Tensor(data: [3.5, 2.5, -1.5, 0.87, 1.0, 0.3], shape: [2, 3]))
+    try await checkMatrix(
+      Tensor(
+        data: [
+          2.0, 3.0, 4.0, -1.0, 7.0, -0.5, 0.728, 19.38, -7.3, 1.92, -3.21, 3.14, -2.0, 14.0, -5.6,
+          0.5, -3.81, 1.5,
+        ], shape: [2, 3, 3]))
+    try await checkMatrix(
+      Tensor(
+        data: [0.728, 19.38, -7.3, 1.92, -3.21, 3.14, -2.0, 14.0, -5.6, 0.5, -3.81, 1.5],
+        shape: [2, 3, 2]))
+    try await checkMatrix(
+      Tensor(
+        data: [0.728, 19.38, -7.3, 1.92, -3.21, 3.14, -2.0, 14.0, -5.6, 0.5, -3.81, 1.5],
+        shape: [2, 2, 3]))
+  }
+
   public static func testIndexing() async throws {
     let x = Tensor(data: [1, 2, 3, 4, 5, 6], shape: [3, 2])
     XCTAssertEqual(x[0].shape, [2])

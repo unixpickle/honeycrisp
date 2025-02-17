@@ -100,7 +100,11 @@ extension Tensor {
   }
 
   public static func &* (_ lhs: Tensor, _ rhs: Tensor) -> Tensor {
-    return matmul(a: lhs, transA: false, b: rhs, transB: false, transOut: false)
+    if lhs.shape.count <= 2 {
+      matmul(a: lhs, transA: false, b: rhs, transB: false, transOut: false)
+    } else {
+      batchedMatmul(a: lhs, transA: false, b: rhs, transB: false, transOut: false)
+    }
   }
 
   @recordCaller
@@ -135,6 +139,34 @@ extension Tensor {
         handle.backward(backend) { grad.triangular(upper: upper, offset: offset) }
       }
     }
+  }
+
+  @recordCaller
+  private func _qrDecomposition(full: Bool = false) -> (q: Tensor, r: Tensor) {
+    #alwaysAssert(shape.count >= 2, "tensor of shape \(shape) is not a matrix")
+    let batchShape = shape[..<(shape.count - 2)]
+    let batch = batchShape.product()
+    let rows = shape[shape.count - 2]
+    let cols = shape[shape.count - 1]
+    let full = full || rows <= cols
+    let qShape = Array(batchShape + (full ? [rows, rows] : [rows, cols]))
+    let rShape = Array(batchShape + (full ? [rows, cols] : [cols, cols]))
+    let backend = Backend.current
+    let newData = createDataTask { t in
+      return try await backend.qrDecomposition(
+        try await t.data,
+        batch: batch,
+        rows: rows,
+        cols: cols,
+        full: full,
+        dtype: t.dtype
+      )
+    }
+    #alwaysAssert(!needsGrad || !Tensor.isGradEnabled, "QR decomposition does not currently support gradients")
+    return (
+      q: Tensor(dataTask: Task { try await newData.value.q }, shape: qShape, dtype: dtype),
+      r: Tensor(dataTask: Task { try await newData.value.r }, shape: rShape, dtype: dtype)
+    )
   }
 
 }
