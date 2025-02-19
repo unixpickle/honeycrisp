@@ -1226,19 +1226,21 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
     dtype: Tensor.DType
   ) async throws -> (q: Tensor.Data, r: Tensor.Data) {
     let full = (m < n) || full
-  
+
     // Determine output shapes.
     // For tall (or square) matrices (m >= n):
     //   Reduced: Q is m×n, R is n×n.
     //   Full:    Q is m×m, R is m×n.
     // For wide matrices (m < n): Q is m×m, R is m×n.
     let qCols = (m >= n) ? (full ? m : n) : m
-    let qSize = batch * m * qCols * dtype.byteSize
-  
+    let qSize = batch * m * qCols
+    let qBytes = qSize * dtype.byteSize
+
     let rRows = (m >= n) ? (full ? m : n) : m
-    let rSize = batch * rRows * n * dtype.byteSize
-  
-    let (q, r) = try await withBuffers(qSize, rSize, a) { qBuf, rBuf, inBuf in
+    let rSize = batch * rRows * n
+    let rBytes = rSize * dtype.byteSize
+
+    let (q, r) = try await withBuffers(qBytes, rBytes, a) { qBuf, rBuf, inBuf in
       try readBuffer(Float.self, inBuf, count: batch * m * n, dtype: dtype) { arrIn in
         try writeBuffer(Float.self, qBuf, count: qSize, dtype: dtype) { arrQ in
           try writeBuffer(Float.self, rBuf, count: rSize, dtype: dtype) { arrR in
@@ -1247,7 +1249,7 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
             // Process each matrix in the batch.
             for b in 0..<batch {
               let baseIn = b * m * n
-              
+
               // Make a mutable copy of the b-th matrix, and transpose it to column-major order.
               var localA = Array(repeating: Float(0.0), count: m * n)
               for i in 0..<m {
@@ -1255,27 +1257,30 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
                   localA[j * m + i] = arrIn[baseIn + i * n + j]
                 }
               }
-  
+
               let k = min(m, n)
               var reflectScalars = [Float](repeating: 0.0, count: k)
               var illegalArgIdx: IntType = 0
               var mm = IntType(m)
               var nn = IntType(n)
               var leadingDim = mm
-  
+
               // Query workspace size for SGEQRF.
               var lwork: IntType = -1
               var workQuery: Float = 0.0
-              sgeqrf_(&mm, &nn, &localA, &leadingDim, &reflectScalars, &workQuery, &lwork, &illegalArgIdx)
+              sgeqrf_(
+                &mm, &nn, &localA, &leadingDim, &reflectScalars, &workQuery, &lwork, &illegalArgIdx)
               lwork = IntType(workQuery)
               var work = [Float](repeating: 0.0, count: Int(lwork))
-  
+
               // Compute the QR factorization.
-              sgeqrf_(&mm, &nn, &localA, &leadingDim, &reflectScalars, &work, &lwork, &illegalArgIdx)
+              sgeqrf_(
+                &mm, &nn, &localA, &leadingDim, &reflectScalars, &work, &lwork, &illegalArgIdx)
               if illegalArgIdx != 0 {
-                throw BackendError.lapackError("failed in SGEQRF with illegalArgIdx=\(illegalArgIdx)")
+                throw BackendError.lapackError(
+                  "failed in SGEQRF with illegalArgIdx=\(illegalArgIdx)")
               }
-  
+
               // Extract R.
               // SGEQRF overwrites localA with the R factor in its upper-triangular part.
               let rBase = b * rRows * n
@@ -1289,7 +1294,7 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
                   }
                 }
               }
-  
+
               // Generate Q.
               var transQ: [Float]
               if m > n && full {
@@ -1314,14 +1319,18 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
               var qn = IntType(qCols)
               var qk = IntType(k)
               lwork = -1
-              sorgqr_(&qm, &qn, &qk, &transQ, &leadingDim, &reflectScalars, &workQuery, &lwork, &illegalArgIdx)
+              sorgqr_(
+                &qm, &qn, &qk, &transQ, &leadingDim, &reflectScalars, &workQuery, &lwork,
+                &illegalArgIdx)
               lwork = IntType(workQuery)
               work = [Float](repeating: 0.0, count: Int(lwork))
-              sorgqr_(&qm, &qn, &qk, &transQ, &leadingDim, &reflectScalars, &work, &lwork, &illegalArgIdx)
+              sorgqr_(
+                &qm, &qn, &qk, &transQ, &leadingDim, &reflectScalars, &work, &lwork, &illegalArgIdx)
               if illegalArgIdx != 0 {
-                throw BackendError.lapackError("failed in SORGQR (full) with illegalArgIdx=\(illegalArgIdx)")
+                throw BackendError.lapackError(
+                  "failed in SORGQR (full) with illegalArgIdx=\(illegalArgIdx)")
               }
-  
+
               // Write transQ to the global arrQ at offset b.
               let qBase = b * m * qCols
               for j in 0..<qCols {

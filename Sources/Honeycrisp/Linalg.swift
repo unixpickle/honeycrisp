@@ -2,6 +2,18 @@ import HCBacktrace
 
 extension Tensor {
 
+  public convenience init(
+    identity count: Int, dtype: DType = .float32, function: StaticString = #function,
+    file: StaticString = #filePath, line: UInt = #line
+  ) {
+    let result = Backtrace.record(function: function, file: file, line: line) {
+      #alwaysAssert(count >= 0, "identity size must not be negative, but got \(count)")
+      let idxs = Tensor(data: 0..<count)
+      return (idxs == idxs[..., NewAxis()]).cast(dtype)
+    }
+    self.init(dataTask: result.dataTask, shape: [count, count], dtype: dtype)
+  }
+
   @recordCaller
   private static func _outer(_ a: Tensor, _ b: Tensor) -> Tensor {
     #alwaysAssert(
@@ -162,7 +174,8 @@ extension Tensor {
         dtype: t.dtype
       )
     }
-    #alwaysAssert(!needsGrad || !Tensor.isGradEnabled, "QR decomposition does not currently support gradients")
+    #alwaysAssert(
+      !needsGrad || !Tensor.isGradEnabled, "QR decomposition does not currently support gradients")
     return (
       q: Tensor(dataTask: Task { try await newData.value.q }, shape: qShape, dtype: dtype),
       r: Tensor(dataTask: Task { try await newData.value.r }, shape: rShape, dtype: dtype)

@@ -754,18 +754,22 @@ open class BackendTests {
   public static func testQR() async throws {
     func checkMatrix(_ matrix: Tensor) async throws {
       for full in [false, true] {
-        let (q, r) = matrix.qrDecomposition(full: full)
-        try await assertClose(q &* r, matrix)
-        try await assertDataEqual(r, r.triu())
-        let eye =
-          if q.shape[q.shape.count - 2] < q.shape[q.shape.count - 1] {
-            q &* q.t()
-          } else {
-            q.t() &* q
-          }
-        let eyeActual = Tensor(oneHot: Array(0..<eye.shape.last!), count: eye.shape.last!).expand(
-          as: eye)
-        try await assertClose(eye, eyeActual)
+        for dtype: Tensor.DType in [.float16, .float32] {
+          let tol: Float = dtype == .float32 ? 1e-4 : 1e-2
+          let (qRaw, rRaw) = matrix.cast(dtype).qrDecomposition(full: full)
+          let q = qRaw.cast(.float32)
+          let r = rRaw.cast(.float32)
+          try await assertClose(q &* r, matrix, atol: tol, rtol: tol)
+          try await assertDataEqual(r, r.triu())
+          let eye =
+            if q.shape[q.shape.count - 2] < q.shape[q.shape.count - 1] {
+              q &* q.t()
+            } else {
+              q.t() &* q
+            }
+          let eyeActual = Tensor(identity: eye.shape.last!).expand(as: eye)
+          try await assertClose(eye, eyeActual, atol: tol, rtol: tol)
+        }
       }
     }
     try await checkMatrix(

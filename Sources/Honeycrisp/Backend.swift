@@ -658,7 +658,9 @@ open class Backend: @unchecked Sendable {
   ///
   /// If full is true, then a Q will be square, and some of the elements in Q and R
   /// may be redundant.
-  open func qrDecomposition(_ a: Tensor.Data, batch: Int, rows: Int, cols: Int, full: Bool, dtype: Tensor.DType) async throws -> (q: Tensor.Data, r: Tensor.Data) {
+  open func qrDecomposition(
+    _ a: Tensor.Data, batch: Int, rows: Int, cols: Int, full: Bool, dtype: Tensor.DType
+  ) async throws -> (q: Tensor.Data, r: Tensor.Data) {
     throw BackendError.notImplemented("qrDecomposition")
   }
 

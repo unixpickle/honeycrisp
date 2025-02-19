@@ -590,7 +590,9 @@ public final class Tensor: Sendable {
   }
 
   @recordCaller
-  private func _createDataTask<T>(_ fn: @escaping @Sendable (Tensor) async throws -> T) -> Task<T, Error> {
+  private func _createDataTask<T>(_ fn: @escaping @Sendable (Tensor) async throws -> T) -> Task<
+    T, Error
+  > {
     Tensor.createDataTask(self, fn)
   }
 
