@@ -121,6 +121,11 @@ extension Tensor {
     let axis = positiveAxis(axis)
     let (indices, indicesStrides) = expandIndices(axis: axis, indices: indices)
 
+    #alwaysAssert(
+      indices.shape[axis] == shape[axis],
+      "shape \(shape) is not compatible with indices shape \(indices.shape) for scatter along axis \(axis)"
+    )
+
     var newShape = shape
     newShape[axis] = count
     let valueShape = newShape
