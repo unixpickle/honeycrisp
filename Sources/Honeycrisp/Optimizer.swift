@@ -246,9 +246,10 @@ public class GradClipper {
     if history.count < historySize + recentCount {
       return (false, 1.0)
     }
-    let mean = history[..<historySize].reduce(0.0, +) / Float(historySize)
+    let past = history[..<historySize]
+    let mean = past.reduce(0.0, +) / Float(historySize)
     let std = sqrt(
-      history.map { pow($0 - mean, 2) }.reduce(0.0, +) / Float(historySize)
+      past.map { pow($0 - mean, 2) }.reduce(0.0, +) / Float(historySize)
     )
     let threshold = mean + std * maxStds
     return (norm > threshold, min(1, threshold / norm))
