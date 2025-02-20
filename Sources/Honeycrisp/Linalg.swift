@@ -15,29 +15,20 @@ extension Tensor {
     self.init(dataTask: result.dataTask, shape: [count, count], dtype: dtype)
   }
 
-  /// Create a matrix with the given diagonal elements.
-  ///
-  /// If offset > 0, then the elements are put above the diagonal.
-  /// If offset < 0, then the elements are put below the diagonal.
-  public convenience init(
-    diagonal: Tensor, offset: Int = 0, function: StaticString = #function,
-    file: StaticString = #filePath, line: UInt = #line
-  ) {
-    let result = Backtrace.record(function: function, file: file, line: line) {
-      #alwaysAssert(
-        diagonal.shape.count == 1, "diagonal must be 1-D, but got shape \(diagonal.shape)")
-      let matrixSize = diagonal.shape[0] + (offset < 0 ? -offset : offset)
-      var indices = Tensor(data: 0..<diagonal.shape[0], dtype: .int64) * (matrixSize + 1)
-      if offset > 0 {
-        indices = indices + offset
-      } else if offset < 0 {
-        indices = indices - matrixSize * offset
-      }
-      return diagonal.scatter(
-        axis: 0, count: matrixSize * matrixSize, indices: indices, indicesAreUnique: true
-      ).reshape([matrixSize, matrixSize])
+  @recordCaller
+  private static func _diagonal(_ diagonal: Tensor, offset: Int = 0) -> Tensor {
+    #alwaysAssert(
+      diagonal.shape.count == 1, "diagonal must be 1-D, but got shape \(diagonal.shape)")
+    let matrixSize = diagonal.shape[0] + (offset < 0 ? -offset : offset)
+    var indices = Tensor(data: 0..<diagonal.shape[0], dtype: .int64) * (matrixSize + 1)
+    if offset > 0 {
+      indices = indices + offset
+    } else if offset < 0 {
+      indices = indices - matrixSize * offset
     }
-    self.init(dataTask: result.dataTask, shape: result.shape, dtype: result.dtype)
+    return diagonal.scatter(
+      axis: 0, count: matrixSize * matrixSize, indices: indices, indicesAreUnique: true
+    ).reshape([matrixSize, matrixSize])
   }
 
   @recordCaller
