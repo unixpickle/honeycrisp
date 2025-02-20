@@ -504,6 +504,20 @@ final class HoneycrispTests: XCTestCase {
     XCTAssert((x * x).needsGrad)
   }
 
+  func testDiagonal() async throws {
+    let d1 = Tensor(diagonal: Tensor(data: [2, 3, 4], dtype: .float32))
+    XCTAssertEqual(d1.shape, [3, 3])
+    try await assertDataEqual(d1, [2, 0, 0, 0, 3, 0, 0, 0, 4])
+
+    let d2 = Tensor(diagonal: Tensor(data: [2, 3, 4], dtype: .float32), offset: 1)
+    XCTAssertEqual(d2.shape, [4, 4])
+    try await assertDataEqual(d2, [0, 2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 0, 0, 0])
+
+    let d3 = Tensor(diagonal: Tensor(data: [2, 3, 4], dtype: .float32), offset: -1)
+    XCTAssertEqual(d3.shape, [4, 4])
+    try await assertDataEqual(d3, [0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0])
+  }
+
   func testCheckpointSimple() async throws {
     let xData = Tensor(data: [1.0, 2.0, 3.0])
     var xGrad: Tensor?
