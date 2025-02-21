@@ -199,4 +199,35 @@ extension Tensor {
     )
   }
 
+  @recordCaller
+  private func _svd(full: Bool = false) -> (u: Tensor, s: Tensor, vt: Tensor) {
+    #alwaysAssert(shape.count >= 2, "tensor of shape \(shape) is not a matrix")
+    let batchShape = shape[..<(shape.count - 2)]
+    let batch = batchShape.product()
+    let rows = shape[shape.count - 2]
+    let cols = shape[shape.count - 1]
+    let k = Swift.min(rows, cols)
+    let sShape = Array(batchShape + [k])
+    let uShape = Array(batchShape + (full ? [rows, rows] : [rows, k]))
+    let vtShape = Array(batchShape + (full ? [cols, cols] : [k, cols]))
+    let backend = Backend.current
+    let newData = createDataTask { t in
+      return try await backend.svd(
+        try await t.data,
+        batch: batch,
+        rows: rows,
+        cols: cols,
+        full: full,
+        dtype: t.dtype
+      )
+    }
+    #alwaysAssert(
+      !needsGrad || !Tensor.isGradEnabled, "SVD does not currently support gradients")
+    return (
+      u: Tensor(dataTask: Task { try await newData.value.u }, shape: uShape, dtype: dtype),
+      s: Tensor(dataTask: Task { try await newData.value.s }, shape: sShape, dtype: dtype),
+      vt: Tensor(dataTask: Task { try await newData.value.vt }, shape: vtShape, dtype: dtype)
+    )
+  }
+
 }

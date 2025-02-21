@@ -767,8 +767,50 @@ open class BackendTests {
             } else {
               q.t() &* q
             }
-          let eyeActual = Tensor(identity: eye.shape.last!).expand(as: eye)
-          try await assertClose(eye, eyeActual, atol: tol, rtol: tol)
+          try await assertCloseToIdentity(eye)
+        }
+      }
+    }
+    try await checkMatrix(
+      Tensor(data: [3.5, 2.5, -1.5, 0.87, 1.0, 0.3, -1.5, 2, 3], shape: [3, 3]))
+    try await checkMatrix(Tensor(data: [3.5, 2.5, -1.5, 0.87, 1.0, 0.3], shape: [3, 2]))
+    try await checkMatrix(Tensor(data: [3.5, 2.5, -1.5, 0.87, 1.0, 0.3], shape: [2, 3]))
+    try await checkMatrix(
+      Tensor(
+        data: [
+          2.0, 3.0, 4.0, -1.0, 7.0, -0.5, 0.728, 19.38, -7.3, 1.92, -3.21, 3.14, -2.0, 14.0, -5.6,
+          0.5, -3.81, 1.5,
+        ], shape: [2, 3, 3]))
+    try await checkMatrix(
+      Tensor(
+        data: [0.728, 19.38, -7.3, 1.92, -3.21, 3.14, -2.0, 14.0, -5.6, 0.5, -3.81, 1.5],
+        shape: [2, 3, 2]))
+    try await checkMatrix(
+      Tensor(
+        data: [0.728, 19.38, -7.3, 1.92, -3.21, 3.14, -2.0, 14.0, -5.6, 0.5, -3.81, 1.5],
+        shape: [2, 2, 3]))
+  }
+
+  public static func testSVD() async throws {
+    func checkMatrix(_ matrix: Tensor) async throws {
+      for full in [false, true] {
+        for dtype: Tensor.DType in [.float16, .float32] {
+          let tol: Float = dtype == .float32 ? 1e-4 : 1e-2
+          let (uRaw, sRaw, vtRaw) = matrix.cast(dtype).svd(full: full)
+          let (u, s, vt) = (uRaw.cast(.float32), sRaw.cast(.float32), vtRaw.cast(.float32))
+          try await assertCloseToIdentity(u.t() &* u, atol: tol, rtol: tol)
+          try await assertCloseToIdentity(vt &* vt.t(), atol: tol, rtol: tol)
+          let k = min(matrix.shape[matrix.shape.count - 2], matrix.shape.last!)
+          let minimalU = u[FullRange(count: u.shape.count - 1), ..<k]
+          let minimalVt = vt[FullRange(count: vt.shape.count - 2), ..<k]
+
+          let diagIndices = Tensor(data: 0..<k, dtype: .int64) * (k + 1)
+          let sMatrix = s.scatter(
+            axis: -1, count: k * k, indices: diagIndices, indicesAreUnique: true
+          ).reshape(Array(s.shape + [k]))
+
+          let reconstruction = minimalU &* sMatrix &* minimalVt
+          try await assertClose(matrix, reconstruction, atol: tol, rtol: tol)
         }
       }
     }

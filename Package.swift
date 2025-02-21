@@ -48,6 +48,9 @@ let package = Package(
       ],
       resources: [
         .process("Resources")
+      ],
+      cSettings: [
+        .define("ACCELERATE_NEW_LAPACK")
       ]),
     .target(
       name: "HCTestUtils",

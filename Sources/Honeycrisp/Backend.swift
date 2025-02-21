@@ -664,6 +664,17 @@ open class Backend: @unchecked Sendable {
     throw BackendError.notImplemented("qrDecomposition")
   }
 
+  /// Compute the SVD of the (batch of) matrices.
+  ///
+  /// If full is true, then both U and Vt will be square.
+  /// Otherwise, if rows > cols, then U and Vt will be of shape
+  /// [rows, k] and [k, cols], where k = min(rows, cols).
+  open func svd(
+    _ a: Tensor.Data, batch: Int, rows: Int, cols: Int, full: Bool, dtype: Tensor.DType
+  ) async throws -> (u: Tensor.Data, s: Tensor.Data, vt: Tensor.Data) {
+    throw BackendError.notImplemented("svd")
+  }
+
   /// Compute a 1-dimensional convolution.
   open func conv1D(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType

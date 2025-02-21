@@ -46,6 +46,17 @@ public func assertClose(
   }
 }
 
+public func assertCloseToIdentity(
+  _ x: Tensor, _ msg: String? = nil, atol: Float = 1e-4, rtol: Float = 1e-4,
+  file: StaticString = #filePath,
+  line: UInt = #line
+) async throws {
+  XCTAssert(x.shape.count >= 2)
+  XCTAssertEqual(x.shape[x.shape.count - 2], x.shape[x.shape.count - 1])
+  let eye = Tensor(identity: x.shape.last!, dtype: x.dtype).expand(as: x)
+  try await assertClose(x, eye, msg, atol: atol, rtol: rtol)
+}
+
 public func assertDataEqual(
   _ x: Tensor, _ y: [Float], _ msg: String? = nil, file: StaticString = #filePath,
   line: UInt = #line
