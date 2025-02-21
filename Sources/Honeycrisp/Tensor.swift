@@ -632,9 +632,9 @@ public final class Tensor: Sendable {
   }
 
   @recordCaller
-  static private func _createDataTask(
-    _ x: Tensor, _ y: Tensor, _ fn: @escaping @Sendable (Tensor, Tensor) async throws -> Data
-  ) -> Task<Data, Error> {
+  static private func _createDataTask<T>(
+    _ x: Tensor, _ y: Tensor, _ fn: @escaping @Sendable (Tensor, Tensor) async throws -> T
+  ) -> Task<T, Error> {
     let safeRef1 = x.noGrad()
     let safeRef2 = y.noGrad()
     return createDataTask {
@@ -643,10 +643,10 @@ public final class Tensor: Sendable {
   }
 
   @recordCaller
-  static private func _createDataTask(
+  static private func _createDataTask<T>(
     _ x: Tensor, _ y: Tensor, _ z: Tensor,
-    _ fn: @escaping @Sendable (Tensor, Tensor, Tensor) async throws -> Data
-  ) -> Task<Data, Error> {
+    _ fn: @escaping @Sendable (Tensor, Tensor, Tensor) async throws -> T
+  ) -> Task<T, Error> {
     let safeRef1 = x.noGrad()
     let safeRef2 = y.noGrad()
     let safeRef3 = z.noGrad()
@@ -656,10 +656,10 @@ public final class Tensor: Sendable {
   }
 
   @recordCaller
-  static private func _createDataTask(
+  static private func _createDataTask<T>(
     _ w: Tensor, _ x: Tensor, _ y: Tensor, _ z: Tensor,
-    _ fn: @escaping @Sendable (Tensor, Tensor, Tensor, Tensor) async throws -> Data
-  ) -> Task<Data, Error> {
+    _ fn: @escaping @Sendable (Tensor, Tensor, Tensor, Tensor) async throws -> T
+  ) -> Task<T, Error> {
     let safeRef1 = w.noGrad()
     let safeRef2 = x.noGrad()
     let safeRef3 = y.noGrad()

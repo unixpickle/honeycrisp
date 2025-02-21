@@ -1240,8 +1240,11 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
     let rSize = batch * rRows * n
     let rBytes = rSize * dtype.byteSize
 
-    let (q, r) = try await withBuffers(qBytes, rBytes, a) { qBuf, rBuf, inBuf in
-      try readBuffer(Float.self, inBuf, count: batch * m * n, dtype: dtype) { arrIn in
+    let qAndR = try await withBuffers([qBytes, rBytes], [a]) { outBufs, inBufs in
+      let qBuf = outBufs[0]
+      let rBuf = outBufs[1]
+      let inBuf = inBufs[0]
+      return try readBuffer(Float.self, inBuf, count: batch * m * n, dtype: dtype) { arrIn in
         try writeBuffer(Float.self, qBuf, count: qSize, dtype: dtype) { arrQ in
           try writeBuffer(Float.self, rBuf, count: rSize, dtype: dtype) { arrR in
             typealias IntType = __CLPK_integer
@@ -1343,7 +1346,7 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
         }
       }
     }
-    return (q: q, r: r)
+    return (q: qAndR[0], r: qAndR[1])
   }
 
   internal func convNd<Dim: SpatialDim>(
@@ -1551,9 +1554,10 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
   {
     #alwaysAssert(inputs.count == innerCounts.count)
     let totalInner = innerCounts.sum()
-    return try await withBuffers(outerCount * totalInner * dtype.byteSize, inputs) {
-      buffer, inBufs in
-      try await serialize {
+    return try await withBuffers([outerCount * totalInner * dtype.byteSize], inputs) {
+      outBufs, inBufs in
+      let buffer = outBufs[0]
+      return try await serialize {
         var outOffset = 0
         for i in 0..<outerCount {
           for (inBuf, innerCount) in zip(inBufs, innerCounts) {
@@ -1565,7 +1569,7 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
           }
         }
       }
-    }
+    }[0]
   }
 
   override open func constant<T: TensorElement>(_ value: T, count: Int, dtype: Tensor.DType)
@@ -1679,25 +1683,6 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
   }
 
   func withBuffers(
-    _ outputSize1: Int, _ outputSize2: Int, _ in1: Tensor.Data,
-    _ fn: (SendableMutableRawPointer, SendableMutableRawPointer, SendableRawPointer) async throws ->
-      Void
-  ) async throws -> (Tensor.Data, Tensor.Data) {
-    try await in1.onCPU { buf1 in
-      let buf1 = SendableRawPointer(buf1)
-      let result1 = try await allocate(outputSize1)
-      let result2 = try await result1.mutateOnCPU { out1 in
-        let result2 = try await allocate(outputSize2)
-        try await result2.mutateOnCPU { out2 in
-          try await fn(SendableMutableRawPointer(out1), SendableMutableRawPointer(out2), buf1)
-        }
-        return result2
-      }
-      return (result1, result2)
-    }
-  }
-
-  func withBuffers(
     _ outputSize: Int, _ in1: Tensor.Data, _ in2: Tensor.Data,
     _ fn: (SendableMutableRawPointer, SendableRawPointer, SendableRawPointer) async throws -> Void
   ) async throws -> Tensor.Data {
@@ -1763,32 +1748,50 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
   }
 
   func withBuffers(
-    _ outputSize: Int, _ ins: [Tensor.Data],
-    _ fn: (SendableMutableRawPointer, [SendableRawPointer]) async throws -> Void
-  ) async throws -> Tensor.Data {
-    func inner(_ ins: [Tensor.Data], _ fn: ([SendableRawPointer]) async throws -> Tensor.Data)
-      async throws -> Tensor.Data
+    _ outputSizes: [Int], _ ins: [Tensor.Data],
+    _ fn: ([SendableMutableRawPointer], [SendableRawPointer]) async throws -> Void
+  ) async throws -> [Tensor.Data] {
+    func readFunc(_ ins: [Tensor.Data], _ fn: ([SendableRawPointer]) async throws -> [Tensor.Data])
+      async throws -> [Tensor.Data]
     {
       if ins.isEmpty {
         try await fn([])
       } else {
         try await ins[0].onCPU { ptr in
           let ptr = SendableRawPointer(ptr)
-          return try await inner(Array(ins[1...])) { otherPtrs in
+          return try await readFunc(Array(ins[1...])) { otherPtrs in
             try await fn([ptr] + otherPtrs)
           }
         }
       }
     }
-    return try await inner(ins) { allPtrs in
-      let result = try await allocate(outputSize)
-      try await result.mutateOnCPU { outPtr in
-        try await fn(SendableMutableRawPointer(outPtr), allPtrs)
+
+    func writeFunc(
+      _ sizes: [Int], _ fn: ([SendableMutableRawPointer]) async throws -> Void
+    )
+      async throws -> [Tensor.Data]
+    {
+      if sizes.isEmpty {
+        try await fn([])
+        return []
+      } else {
+        let result = try await allocate(sizes[0])
+        return [result]
+          + (try await result.mutateOnCPU { ptr in
+            let ptr = SendableMutableRawPointer(ptr)
+            return try await writeFunc(Array(sizes[1...])) { otherPtrs in
+              try await fn([ptr] + otherPtrs)
+            }
+          })
       }
-      return result
+    }
+
+    return try await readFunc(ins) { readPtrs in
+      try await writeFunc(outputSizes) { writePtrs in
+        try await fn(writePtrs, readPtrs)
+      }
     }
   }
-
 }
 
 func readBuffer<T, T1: TensorElement>(
