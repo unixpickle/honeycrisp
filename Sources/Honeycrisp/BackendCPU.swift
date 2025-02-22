@@ -1250,20 +1250,15 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
             try writeBuffer(Float.self, rBuf, count: rSize, dtype: dtype) { arrR in
               typealias IntType = __LAPACK_int
 
-              // Process each matrix in the batch.
+              let k = min(m, n)
+              var localA = Array(repeating: Float(0.0), count: m * n)
+              var reflectScalars = [Float](repeating: 0.0, count: k)
+
               for b in 0..<batch {
-                let baseIn = b * m * n
+                transposeMatrix(
+                  input: arrIn.baseAddress!, output: &localA, outRows: n, outCols: m,
+                  inOffset: b * m * n)
 
-                // Make a mutable copy of the b-th matrix, and transpose it to column-major order.
-                var localA = Array(repeating: Float(0.0), count: m * n)
-                for i in 0..<m {
-                  for j in 0..<n {
-                    localA[j * m + i] = arrIn[baseIn + i * n + j]
-                  }
-                }
-
-                let k = min(m, n)
-                var reflectScalars = [Float](repeating: 0.0, count: k)
                 var illegalArgIdx: IntType = 0
                 var mm = IntType(m)
                 var nn = IntType(n)
@@ -1337,13 +1332,9 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
                     "failed in SORGQR (full) with illegalArgIdx=\(illegalArgIdx)")
                 }
 
-                // Write transQ to the global arrQ at offset b.
-                let qBase = b * m * qCols
-                for j in 0..<qCols {
-                  for i in 0..<m {
-                    arrQ[qBase + i * qCols + j] = transQ[i + j * m]
-                  }
-                }
+                transposeMatrix(
+                  input: &transQ, output: arrQ.baseAddress!, outRows: m, outCols: qCols,
+                  outOffset: b * m * qCols)
               }
             }
           }
@@ -1388,15 +1379,15 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
             try writeBuffer(Float.self, sBuf, count: k * batch, dtype: dtype) { arrS in
               try writeBuffer(Float.self, vtBuf, count: vtSize, dtype: dtype) { arrVt in
                 typealias IntType = __LAPACK_int
-                for b in 0..<batch {
-                  let baseIn = b * m * n
 
-                  var localA = Array(repeating: Float(0.0), count: m * n)
-                  for i in 0..<m {
-                    for j in 0..<n {
-                      localA[j * m + i] = arrIn[baseIn + i * n + j]
-                    }
-                  }
+                var localA = Array(repeating: Float(0.0), count: m * n)
+                var localU = [Float](repeating: 0, count: uSize)
+                var localVt = [Float](repeating: 0, count: vtSize)
+
+                for b in 0..<batch {
+                  transposeMatrix(
+                    input: arrIn.baseAddress!, output: &localA, outRows: n, outCols: m,
+                    inOffset: b * m * n)
 
                   let job = (full ? "A" : "S").utf8CString[0]
                   var jobU = job
@@ -1405,10 +1396,6 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
                   var mn = IntType(n)
                   var leadingDim = mm
 
-                  var sOut = [Float](repeating: 0, count: k)
-                  var uOut = [Float](repeating: 0, count: uSize)
-                  var vtOut = [Float](repeating: 0, count: vtSize)
-
                   var leadingDimU = IntType(uRows)
                   var leadingDimVt = IntType(vtRows)
 
@@ -1416,34 +1403,27 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
                   var workQuery: Float = 0.0
                   var info: IntType = 0
                   sgesvd_(
-                    &jobU, &jobVt, &mm, &mn, &localA, &leadingDim, &sOut, &uOut, &leadingDimU,
-                    &vtOut, &leadingDimVt, &workQuery, &lwork, &info)
+                    &jobU, &jobVt, &mm, &mn, &localA, &leadingDim, arrS.baseAddress! + b * k,
+                    &localU, &leadingDimU,
+                    &localVt, &leadingDimVt, &workQuery, &lwork, &info)
                   lwork = IntType(workQuery)
                   var work = [Float](repeating: 0.0, count: Int(lwork))
                   sgesvd_(
-                    &jobU, &jobVt, &mm, &mn, &localA, &leadingDim, &sOut, &uOut, &leadingDimU,
-                    &vtOut, &leadingDimVt, &work, &lwork, &info)
+                    &jobU, &jobVt, &mm, &mn, &localA, &leadingDim, arrS.baseAddress! + b * k,
+                    &localU, &leadingDimU,
+                    &localVt, &leadingDimVt, &work, &lwork, &info)
                   if info < 0 {
                     throw BackendError.lapackError("argument \(-info) is invalid")
                   } else if info > 0 {
                     throw BackendError.lapackError("\(info) superdiagonals did not converge")
                   }
 
-                  for i in 0..<uRows {
-                    for j in 0..<uCols {
-                      arrU[b * uRows * uCols + i * uCols + j] = uOut[i + j * uRows]
-                    }
-                  }
-
-                  for i in 0..<vtRows {
-                    for j in 0..<vtCols {
-                      arrVt[b * vtRows * vtCols + i * vtCols + j] = vtOut[i + j * vtRows]
-                    }
-                  }
-
-                  for (i, x) in sOut.enumerated() {
-                    arrS[b * k + i] = x
-                  }
+                  transposeMatrix(
+                    input: &localU, output: arrU.baseAddress!, outRows: uRows, outCols: uCols,
+                    outOffset: b * uRows * uCols)
+                  transposeMatrix(
+                    input: &localVt, output: arrVt.baseAddress!, outRows: vtRows, outCols: vtCols,
+                    outOffset: b * vtRows * vtCols)
                 }
               }
             }
@@ -1941,6 +1921,15 @@ func writeBuffer<T, T1: TensorElement>(
   let result = try arr.withUnsafeMutableBufferPointer(fn)
   try arrayToPointer(arr, output: buf.ptr, dtype: dtype)
   return result
+}
+
+func transposeMatrix(
+  input: UnsafePointer<Float>, output: UnsafeMutablePointer<Float>, outRows: Int, outCols: Int,
+  inOffset: Int = 0, outOffset: Int = 0
+) {
+  let a = input + inOffset
+  let b = output + outOffset
+  vDSP_mtrans(a, 1, b, 1, vDSP_Length(outRows), vDSP_Length(outCols))
 }
 
 struct SendableRawPointer: @unchecked Sendable {

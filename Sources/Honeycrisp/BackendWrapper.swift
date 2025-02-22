@@ -308,6 +308,19 @@ open class BackendWrapper: Backend, @unchecked Sendable {
       a, batch: batch, rows: rows, cols: cols, upper: upper, offset: offset, dtype: dtype)
   }
 
+  override open func qrDecomposition(
+    _ a: Tensor.Data, batch: Int, rows: Int, cols: Int, full: Bool, dtype: Tensor.DType
+  ) async throws -> (q: Tensor.Data, r: Tensor.Data) {
+    try await wrapped.qrDecomposition(
+      a, batch: batch, rows: rows, cols: cols, full: full, dtype: dtype)
+  }
+
+  override open func svd(
+    _ a: Tensor.Data, batch: Int, rows: Int, cols: Int, full: Bool, dtype: Tensor.DType
+  ) async throws -> (u: Tensor.Data, s: Tensor.Data, vt: Tensor.Data) {
+    try await wrapped.svd(a, batch: batch, rows: rows, cols: cols, full: full, dtype: dtype)
+  }
+
   override open func conv1D(
     _ config: Conv1DConfig, batch: Int, image: Tensor.Data, kernel: Tensor.Data, dtype: Tensor.DType
   )

@@ -767,7 +767,7 @@ open class BackendTests {
             } else {
               q.t() &* q
             }
-          try await assertCloseToIdentity(eye)
+          try await assertCloseToIdentity(eye, atol: tol, rtol: tol)
         }
       }
     }
