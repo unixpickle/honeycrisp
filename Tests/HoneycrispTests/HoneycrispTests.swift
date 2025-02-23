@@ -133,6 +133,12 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testArgsort() async throws {
+    try await runInBackends {
+      try await BackendTests.testArgsort()
+    }
+  }
+
   func testRepeat() async throws {
     try await runInBackends {
       try await BackendTests.testRepeat()

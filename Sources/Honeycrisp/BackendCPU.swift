@@ -828,6 +828,40 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
     }
   }
 
+  override open func argsort(
+    _ a: Tensor.Data, dims: ReduceDims, descending: Bool, stable: Bool, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    return try await withBuffers(dims.inCount * Tensor.DType.int64.byteSize, a) { buffer, aBuf in
+      func apply<T: NumericTensorElement>(_: T.Type) async throws {
+        try await serialize {
+          try readBuffer(T.self, aBuf, count: dims.inCount, dtype: dtype) { arr in
+            try writeBuffer(Int64.self, buffer, count: dims.inCount, dtype: .int64) { arrOut in
+              for i in 0..<dims.outerCount {
+                for j in 0..<dims.innerCount {
+                  var values = (0..<dims.reduceCount).map { k in
+                    (arr[j + (k + i * dims.reduceCount) * dims.innerCount], Int64(k))
+                  }
+                  values.sort { x, y in descending ? x.0 > y.0 : x.0 < y.0 }
+                  for (k, (_, sourceIdx)) in values.enumerated() {
+                    arrOut[j + (k + i * dims.reduceCount) * dims.innerCount] = sourceIdx
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      if dtype == .int64 {
+        try await apply(Int64.self)
+      } else {
+        try await apply(Float.self)
+      }
+    }
+  }
+
   override open func cumulativeSum(
     _ a: Tensor.Data, dims: ReduceDims, exclusive: Bool, reverse: Bool, dtype: Tensor.DType
   )

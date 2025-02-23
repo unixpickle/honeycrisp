@@ -207,6 +207,15 @@ open class BackendWrapper: Backend, @unchecked Sendable {
     try await wrapped.reduce(a, op: op, dims: dims, dtype: dtype)
   }
 
+  override open func argsort(
+    _ a: Tensor.Data, dims: ReduceDims, descending: Bool, stable: Bool, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.argsort(a, dims: dims, descending: descending, stable: stable, dtype: dtype)
+  }
+
   override open func cumulativeSum(
     _ a: Tensor.Data, dims: ReduceDims, exclusive: Bool, reverse: Bool, dtype: Tensor.DType
   )

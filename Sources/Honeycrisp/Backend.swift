@@ -528,6 +528,17 @@ open class Backend: @unchecked Sendable {
     throw BackendError.notImplemented("reduce")
   }
 
+  /// Sort the array along an axis, returning the indices of the permutation
+  /// to sort the array in the given order.
+  open func argsort(
+    _ a: Tensor.Data, dims: ReduceDims, descending: Bool, stable: Bool, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    throw BackendError.notImplemented("argsort")
+  }
+
   // Perform a cumulative sum along an axis.
   //
   // If exclusive is true, then the sum is effectively offset by 1.

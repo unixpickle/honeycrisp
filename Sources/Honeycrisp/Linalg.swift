@@ -100,7 +100,7 @@ extension Tensor {
     let bShape = transB ? [b.shape[d1], b.shape[d0]] : [b.shape[d0], b.shape[d1]]
     #alwaysAssert(
       aShape[1] == bShape[0],
-      "shape mismatch for batched matmul: \(a.shape) (trans=\(transA)), \(b.shape) (trans\(transB))"
+      "shape mismatch for batched matmul: \(a.shape) (trans=\(transA)), \(b.shape) (trans=\(transB))"
     )
     let outShape = batchShape + (transOut ? [bShape[1], aShape[0]] : [aShape[0], bShape[1]])
     let backend = Backend.current

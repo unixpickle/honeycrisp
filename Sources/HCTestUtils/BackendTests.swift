@@ -469,6 +469,46 @@ open class BackendTests {
     }
   }
 
+  public static func testArgsort() async throws {
+    for dtype: Tensor.DType in [.float16, .float32, .int64] {
+      let unsorted = Tensor(
+        data: (0..<(2 * 3 * 4)).map { _ in Int.random(in: (-30)...30) }, shape: [2, 3, 4],
+        dtype: dtype)
+      for descending in [false, true] {
+        for stable in [false, true] {
+          for axis in [0, 1, 2] {
+            let axisFirst = unsorted.move(axis: axis, to: -1)
+            var sortedFloats = try await axisFirst.floats()
+            let chunkSize = axisFirst.shape[2]
+            for i in stride(from: 0, to: axisFirst.shape.reduce(1, *), by: chunkSize) {
+              var newValues = sortedFloats[i..<(i + chunkSize)].sorted()
+              if descending {
+                newValues.reverse()
+              }
+              sortedFloats.replaceSubrange(i..<(i + chunkSize), with: newValues)
+            }
+            let sortedAxisFirst = Tensor(data: sortedFloats, shape: axisFirst.shape).cast(dtype)
+            let sortedExpected = sortedAxisFirst.move(axis: -1, to: axis)
+            let sortedIndices = unsorted.argsort(axis: axis, descending: descending, stable: stable)
+            let sortedActual = unsorted.gather(axis: axis, indices: sortedIndices)
+            try await assertDataEqual(sortedActual, sortedExpected)
+          }
+        }
+
+        // Make sure stable sort is actually stable.
+        let unsortedStable = Tensor(data: [1, 2, 3, 1, 4, 3, 5, 3], shape: [8])
+        let indices = unsortedStable.argsort(axis: 0, descending: descending, stable: true)
+        let expected =
+          if descending {
+            [6, 4, 2, 5, 7, 1, 0, 3]
+          } else {
+            [0, 3, 1, 2, 5, 7, 4, 6]
+          }
+        try await assertDataEqual(indices, expected.map { Float($0) })
+      }
+    }
+  }
+
   public static func testRepeat() async throws {
     let x = Tensor(data: [1.0, 2.0, 3.0, -2.0, 3.0, 7.0], shape: [1, 2, 3, 1])
     var xGrad: Tensor?
