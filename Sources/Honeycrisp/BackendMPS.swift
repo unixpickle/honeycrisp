@@ -244,6 +244,12 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
     let dtype: MPSDataType
   }
 
+  private struct ArgSortKey: Hashable {
+    var dims: ReduceDims
+    var descending: Bool
+    var dtype: MPSDataType
+  }
+
   public class MPSRandomGenerator: RandomGenerator, @unchecked Sendable {
     public let mpsBackend: MPSBackend
 
@@ -351,6 +357,7 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
   private var conv2D: [Conv2DKey: TwoToOneGraph] = [:]
   private var scatters: [ScatterKey: TwoToOneGraph] = [:]
   private var reductions: [ReduceKey: OneToOneGraph] = [:]
+  private var argSorts: [ArgSortKey: OneToOneGraph] = [:]
   private var logSoftmaxes: [SoftmaxKey: OneToOneGraph] = [:]
   private var logSoftmaxGrads: [SoftmaxKey: TwoToOneGraph] = [:]
   private var _defaultRandomMPS: MPSRandomGenerator? = nil
@@ -1842,6 +1849,70 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
       let output = graph.reshape(unshapedOutput, shape: mpsShape([dims.outCount]), name: "output")
       let r = OneToOneGraph(graph: graph, input: input, output: output)
       reductions[key] = r
+      return r
+    }
+  }
+
+  override open func argsort(
+    _ a: Tensor.Data, dims: ReduceDims, descending: Bool, stable: Bool, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    if stable {
+      return try await super.argsort(
+        a, dims: dims, descending: descending, stable: stable, dtype: dtype)
+    }
+
+    guard let mpsDType = dtype.mpsDType else {
+      return try await super.argsort(
+        a, dims: dims, descending: descending, stable: stable, dtype: dtype)
+    }
+
+    let (aBuf, aCb) = try await gpuBuffer(a)
+    let (output, outputCb) = try await allocateBuf(dims.inCount * Tensor.DType.int64.byteSize)
+    return try await serialize { [self] in
+      let red = self.createArgSort(dims: dims, descending: descending, dtype: mpsDType)
+      let completion = completionBuffer(
+        label: "argsort", deallocators: [aCb]
+      ) { buf in
+        red.graph.encode(
+          to: buf as! MPSCommandBuffer,
+          feeds: [
+            red.input: MPSGraphTensorData(
+              MPSVector(
+                buffer: aBuf,
+                descriptor: MPSVectorDescriptor(
+                  length: dims.inCount, dataType: mpsDType)))
+          ],
+          targetOperations: nil,
+          resultsDictionary: [
+            red.output: MPSGraphTensorData(
+              MPSVector(
+                buffer: output,
+                descriptor: MPSVectorDescriptor(length: dims.inCount, dataType: .int64)))
+          ],
+          executionDescriptor: nil)
+      }
+      return GPUData(backend: self, buffer: output, completion: completion, deallocator: outputCb)
+    }
+  }
+
+  private func createArgSort(dims: ReduceDims, descending: Bool, dtype: MPSDataType)
+    -> OneToOneGraph
+  {
+    let key = ArgSortKey(dims: dims, descending: descending, dtype: dtype)
+    if let r = argSorts[key] {
+      return r
+    } else {
+      let graph = MPSGraph()
+      let input = graph.placeholder(
+        shape: mpsShape([dims.inCount]), dataType: dtype, name: "input")
+      let reshaped = graph.reshape(input, shape: mpsShape(dims.shape), name: "reshaped")
+      let unshapedOutput = graph.argSort(reshaped, axis: 1, descending: descending, name: "argSort")
+      let output = graph.reshape(unshapedOutput, shape: mpsShape([dims.inCount]), name: "output")
+      let r = OneToOneGraph(graph: graph, input: input, output: output)
+      argSorts[key] = r
       return r
     }
   }
