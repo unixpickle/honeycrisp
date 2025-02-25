@@ -312,6 +312,8 @@ open class Trainable: MaybeTrainable, TrainableProto {
     var name: String? = nil
     private var value: Value?
 
+    public var projectedValue: Child<Value> { self }
+
     public init(name: String? = nil) {
       self.name = name
     }
