@@ -749,7 +749,7 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
     async throws
     -> Tensor.Data
   {
-    let outType = (op == .sum ? dtype : Tensor.DType.int64)
+    let outType: Tensor.DType = op.isIntOut ? .int64 : dtype
     return try await withBuffers(dims.outCount * outType.byteSize, a) { buffer, aBuf in
       if dtype == .float32 && op == .sum {
         for i in 0..<dims.outerCount {
@@ -782,6 +782,25 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
                       sum = sum + item
                     }
                     arrOut[index] = sum
+                    index += 1
+                  }
+                }
+              }
+            }
+          }
+        case .prod:
+          try await serialize {
+            try readBuffer(T.self, aBuf, count: dims.inCount, dtype: dtype) { arr in
+              try writeBuffer(T.self, buffer, count: dims.outCount, dtype: dtype) { arrOut in
+                var index: Int = 0
+                for i in 0..<dims.outerCount {
+                  for j in 0..<dims.innerCount {
+                    var prod = T(1.0)
+                    for k in 0..<dims.reduceCount {
+                      let item = arr[j + (k + i * dims.reduceCount) * dims.innerCount]
+                      prod = prod * item
+                    }
+                    arrOut[index] = prod
                     index += 1
                   }
                 }
@@ -887,6 +906,45 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
                   let next = sum + item
                   arrOut[idx] = (exclusive ? sum : next)
                   sum = next
+                }
+              }
+            }
+          }
+        }
+      }
+      if dtype == .int64 {
+        try await apply(Int64.self)
+      } else {
+        try await apply(Float.self)
+      }
+    }
+  }
+
+  override open func cumulativeProd(
+    _ a: Tensor.Data, dims: ReduceDims, exclusive: Bool, reverse: Bool, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    return try await withBuffers(dims.inCount * dtype.byteSize, a) { buffer, aBuf in
+      func apply<T: NumericTensorElement>(_: T.Type) async throws {
+        try readBuffer(T.self, aBuf, count: dims.inCount, dtype: dtype) { arr in
+          try writeBuffer(T.self, buffer, count: dims.inCount, dtype: dtype) { arrOut in
+            let innerIndices =
+              if reverse {
+                stride(from: dims.reduceCount - 1, through: 0, by: -1)
+              } else {
+                stride(from: 0, through: dims.reduceCount - 1, by: 1)
+              }
+            for i in 0..<dims.outerCount {
+              for j in 0..<dims.innerCount {
+                var prod = T(1.0)
+                for k in innerIndices {
+                  let idx = j + (k + i * dims.reduceCount) * dims.innerCount
+                  let item = arr[idx]
+                  let next = prod * item
+                  arrOut[idx] = (exclusive ? prod : next)
+                  prod = next
                 }
               }
             }

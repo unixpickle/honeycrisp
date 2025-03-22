@@ -127,9 +127,21 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testProd() async throws {
+    try await runInBackends {
+      try await BackendTests.testProd()
+    }
+  }
+
   func testCumulativeSum() async throws {
     try await runInBackends {
       try await BackendTests.testCumulativeSum()
+    }
+  }
+
+  func testCumulativeProd() async throws {
+    try await runInBackends {
+      try await BackendTests.testCumulativeProd()
     }
   }
 

@@ -53,14 +53,24 @@ public struct RepeatDims: Hashable, Sendable {
 /// A reduction operation which can be applied to a ``Tensor``.
 public enum ReduceOp: Sendable {
   case sum
+  case prod
   case argmax
   case argmin
+
+  public var isIntOut: Bool {
+    self == .argmax || self == .argmin
+  }
 }
 
 extension Tensor {
   @recordCaller
   private func _sum(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
     reduce(op: .sum, axis: axis, keepdims: keepdims)
+  }
+
+  @recordCaller
+  private func _prod(axis: Int? = nil, keepdims: Bool = false) -> Tensor {
+    reduce(op: .prod, axis: axis, keepdims: keepdims)
   }
 
   @recordCaller
@@ -212,14 +222,25 @@ extension Tensor {
       try await backend.reduce(try await t.data, op: op, dims: t.reduceDims(axis), dtype: t.dtype)
     }
     let newShape = Array(shape[..<axis]) + (keepdims ? [1] : []) + Array(shape[(axis + 1)...])
-    if !Tensor.isGradEnabled || !needsGrad || (op != .sum) {
-      return Tensor(
-        dataTask: newData, shape: newShape, dtype: op == .argmin || op == .argmax ? .int64 : dtype)
+    if !Tensor.isGradEnabled || !needsGrad || op.isIntOut {
+      return Tensor(dataTask: newData, shape: newShape, dtype: op.isIntOut ? .int64 : dtype)
     } else {
       let handle = self.saveForBackward()
       return Tensor(dataTask: newData, shape: newShape, dtype: dtype) { grad in
-        handle.backward(backend) {
-          grad.repeating(axis: axis, count: self.shape[axis]).reshape(self.shape)
+        switch op {
+        case .argmin, .argmax:
+          fatalError()
+        case .sum:
+          handle.backward(backend) {
+            grad.repeating(axis: axis, count: self.shape[axis]).reshape(self.shape)
+          }
+        case .prod:
+          handle.backward(backend) {
+            let x = self.noGrad().cumulativeProd(axis: axis, exclusive: true)
+            let y = self.noGrad().cumulativeProd(axis: axis, exclusive: true, reverse: true)
+            let reshapedGrad = (keepdims ? grad : grad.unsqueeze(axis: axis))
+            return x * y * reshapedGrad
+          }
         }
       }
     }

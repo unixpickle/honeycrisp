@@ -226,6 +226,16 @@ open class BackendWrapper: Backend, @unchecked Sendable {
       a, dims: dims, exclusive: exclusive, reverse: reverse, dtype: dtype)
   }
 
+  override open func cumulativeProd(
+    _ a: Tensor.Data, dims: ReduceDims, exclusive: Bool, reverse: Bool, dtype: Tensor.DType
+  )
+    async throws
+    -> Tensor.Data
+  {
+    try await wrapped.cumulativeProd(
+      a, dims: dims, exclusive: exclusive, reverse: reverse, dtype: dtype)
+  }
+
   override open func logSoftmax(
     _ a: Tensor.Data, dims: ReduceDims, dtype: Tensor.DType
   )

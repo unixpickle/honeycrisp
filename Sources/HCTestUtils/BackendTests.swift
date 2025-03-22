@@ -433,6 +433,36 @@ open class BackendTests {
     XCTAssertEqual(input1.sum(axis: 2, keepdims: true).shape, [2, 2, 1])
   }
 
+  public static func testProd() async throws {
+    // Simulate prod with sum in the positive case
+    let rawInput = Tensor(rand: [3, 4, 5]) + 0.5
+    for axis in 0..<3 {
+      let param: Trainable.Param<Tensor> = .init()
+      let expectedOut = rawInput.onGrad { param.addGrad($0) }.log().sum(axis: axis).exp()
+      let outGrad = Tensor(randnLike: expectedOut)
+      expectedOut.backward(outGrad)
+      let expectedGrad = param.grad!
+      for dtype: Tensor.DType in [.float16, .float32] {
+        let tol: Float = dtype == .float32 ? 1e-4 : 1e-2
+        let actualOut = rawInput.onGrad { param.addGrad($0) }.cast(dtype).prod(axis: axis).cast(
+          .float32)
+        try await assertClose(expectedOut, actualOut, atol: tol, rtol: tol)
+
+        param.grad = nil
+        actualOut.backward(outGrad)
+        let actualGrad = param.grad!
+        try await assertClose(expectedGrad, actualGrad, atol: tol, rtol: tol)
+      }
+    }
+
+    // Make sure signs are correct
+    let x = Tensor(data: [2.0, -3.0, 4.0, 2.0, -3.0, -4.0], shape: [2, 3])
+    for dtype: Tensor.DType in [.float16, .float32, .int64] {
+      try await assertDataEqual(x.cast(dtype).prod(axis: 0), [4.0, 9.0, -16.0])
+      try await assertDataEqual(x.cast(dtype).prod(axis: 1), [-24.0, 24.0])
+    }
+  }
+
   public static func testCumulativeSum() async throws {
     for dtype: Tensor.DType in [.float16, .float32, .int64] {
       let rawData = Tensor(data: [1, 2, 3, -2, 4, 7], shape: [2, 3], dtype: dtype)
@@ -461,9 +491,33 @@ open class BackendTests {
 
         // We didn't test axis 0, only axis 1, so now we make sure that using axis 0
         // is equivalent to transposing, summing, and transposing again.
-        let ax0Expected = rawData[PermuteAxes(1, 0)].cumulativeSum(
-          axis: 1, exclusive: exclusive, reverse: reverse)[PermuteAxes(1, 0)]
+        let ax0Expected = rawData.t().cumulativeSum(axis: 1, exclusive: exclusive, reverse: reverse)
+          .t()
         let ax0Actual = rawData.cumulativeSum(axis: 0, exclusive: exclusive, reverse: reverse)
+        try await assertDataEqual(ax0Expected, ax0Actual)
+      }
+    }
+  }
+
+  public static func testCumulativeProd() async throws {
+    for dtype: Tensor.DType in [.float16, .float32, .int64] {
+      let rawData = Tensor(data: [1, 2, 3, -2, 4, -2], shape: [2, 3], dtype: dtype)
+
+      let outputs: [(Bool, Bool, Tensor)] = [
+        (false, false, Tensor(data: [1, 2, 6, -2, -8, 16], shape: [2, 3], dtype: dtype)),
+        (true, false, Tensor(data: [1, 1, 2, 1, -2, -8], shape: [2, 3], dtype: dtype)),
+        (false, true, Tensor(data: [6, 6, 3, 16, -8, -2], shape: [2, 3], dtype: dtype)),
+        (true, true, Tensor(data: [6, 3, 1, -8, -2, 1], shape: [2, 3], dtype: dtype)),
+      ]
+      for (exclusive, reverse, expected) in outputs {
+        let actual = rawData.cumulativeProd(axis: 1, exclusive: exclusive, reverse: reverse)
+        try await assertDataEqual(actual, expected)
+
+        // Test axis 0 by transposing twice.
+        let ax0Expected = rawData.t().cumulativeProd(
+          axis: 1, exclusive: exclusive, reverse: reverse
+        ).t()
+        let ax0Actual = rawData.cumulativeProd(axis: 0, exclusive: exclusive, reverse: reverse)
         try await assertDataEqual(ax0Expected, ax0Actual)
       }
     }

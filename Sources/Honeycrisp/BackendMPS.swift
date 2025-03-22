@@ -1794,7 +1794,7 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
 
     let (aBuf, aCb) = try await gpuBuffer(a)
     let (output, outputCb) = try await allocateBuf(
-      dims.outCount * (op == .sum ? dtype : Tensor.DType.int64).byteSize)
+      dims.outCount * (op.isIntOut ? Tensor.DType.int64 : dtype).byteSize)
     return try await serialize { [self] in
       let red = self.createReduction(op: op, dims: dims, dtype: mpsDType)
       let completion = completionBuffer(
@@ -1815,7 +1815,7 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
               MPSVector(
                 buffer: output,
                 descriptor: MPSVectorDescriptor(
-                  length: dims.outCount, dataType: op == .sum ? mpsDType : .int64)))
+                  length: dims.outCount, dataType: op.isIntOut ? .int64 : mpsDType)))
           ],
           executionDescriptor: nil)
       }
@@ -1837,6 +1837,8 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
         switch op {
         case .sum:
           graph.reductionSum(with: reshaped, axis: 1, name: "unshapedOutput")
+        case .prod:
+          graph.reductionProduct(with: reshaped, axis: 1, name: "unshapedOutput")
         case .argmax:
           graph.cast(
             graph.reductionArgMaximum(with: reshaped, axis: 1, name: "unshapedOutput"),
