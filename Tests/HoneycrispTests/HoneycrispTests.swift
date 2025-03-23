@@ -542,6 +542,36 @@ final class HoneycrispTests: XCTestCase {
     try await assertDataEqual(d3, [0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0])
   }
 
+  func testMultinomialWithReplacement() async throws {
+    let weights = Tensor(data: [2.0, 1.0, 0.5])
+    let expectedProbs = weights / weights.sum()
+
+    // Take many samples along the inner dimension
+    var samples = weights.multinomial(sampleCount: 10000, replacement: true)
+    var counts = Tensor(ones: samples.shape).scatter(axis: 0, count: 3, indices: samples)
+    var actualProbs = counts.cast(.float32) / counts.sum().cast(.float32)
+    try await assertClose(expectedProbs, actualProbs, atol: 0.03, rtol: 0.03)
+
+    // Sample along the outer dimension
+    samples = weights.unsqueeze(axis: 0).repeating(axis: 0, count: 10000).multinomial(
+      sampleCount: 1, replacement: true
+    ).flatten()
+    counts = Tensor(ones: samples.shape).scatter(axis: 0, count: 3, indices: samples)
+    actualProbs = counts.cast(.float32) / counts.sum().cast(.float32)
+    try await assertClose(expectedProbs, actualProbs, atol: 0.03, rtol: 0.03)
+  }
+
+  func testMultinomialWithoutReplacement() async throws {
+    let weights = Tensor(data: [2.0, 1.0, 0.5])
+    let samples = weights.unsqueeze(axis: 0).repeating(axis: 0, count: 10000).multinomial(
+      sampleCount: 2, replacement: false
+    ).flatten()
+    let counts = Tensor(ones: samples.shape).scatter(axis: 0, count: 3, indices: samples)
+    let expectedProbs = Tensor(data: [0.4474, 0.3570, 0.1956])
+    let actualProbs = counts.cast(.float32) / counts.sum().cast(.float32)
+    try await assertClose(expectedProbs, actualProbs, atol: 0.03, rtol: 0.03)
+  }
+
   func testCheckpointSimple() async throws {
     let xData = Tensor(data: [1.0, 2.0, 3.0])
     var xGrad: Tensor?

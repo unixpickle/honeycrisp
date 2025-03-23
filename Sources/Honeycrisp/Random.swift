@@ -217,4 +217,35 @@ extension Tensor {
     self.init(
       dataTask: dataTask, shape: shape, dtype: .int64, function: function, file: file, line: line)
   }
+
+  @recordCaller
+  private func _multinomial(
+    sampleCount: Int, replacement: Bool = false, generator: RandomGenerator? = nil
+  ) -> Tensor {
+    #alwaysAssert(
+      (shape.count == 1 || shape.count == 2) && shape.last! > 0,
+      "cannot use tensor of shape \(shape) as multinomial weights")
+    #alwaysAssert(
+      replacement || sampleCount <= shape.last!,
+      "cannot sample \(sampleCount) indices from only \(shape.last!) possible values without replacement"
+    )
+    #alwaysAssert(dtype.isFloat, "cannot use dtype \(dtype) as multinomial weights")
+    if shape.count == 1 {
+      return unsqueeze(axis: 0).multinomial(
+        sampleCount: sampleCount, replacement: replacement, generator: generator
+      ).squeeze(axis: 0)
+    }
+    let ng = noGrad()
+    let probs = (ng / ng.sum(axis: 1, keepdims: true)).cast(.float32)
+    if replacement {
+      let cumProbs = probs.cast(.float32).cumulativeSum(axis: -1).unsqueeze(axis: 1)
+      let noise = Tensor(rand: [shape[0], sampleCount, 1])
+      return (cumProbs >= noise).argmax(axis: -1)
+    } else {
+      let logits = probs.clamp(min: 1e-8).log()
+      let gumbels = -(-Tensor(rand: [shape[0], shape[1]]).clamp(min: 1e-8).log()).log()
+      let indices = (logits + gumbels).argsort(axis: -1, descending: true)
+      return indices[..., ..<sampleCount]
+    }
+  }
 }
