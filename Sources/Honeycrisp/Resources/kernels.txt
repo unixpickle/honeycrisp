@@ -119,7 +119,8 @@ BROADCAST_KERNEL(long)
     BINARY_KERNELS(gt, x>y, type, char) \
     BINARY_KERNELS(le, x<=y, type, char) \
     BINARY_KERNELS(ge, x>=y, type, char) \
-    BINARY_KERNELS(eq, x==y, type, char)
+    BINARY_KERNELS(eq, x==y, type, char) \
+    BINARY_KERNELS(ne, x!=y, type, char)
 
 ALL_BINARY_KERNELS_FOR_IN_TYPE(half)
 ALL_BINARY_KERNELS_FOR_IN_TYPE(float)
@@ -304,32 +305,71 @@ DEFINE_NORMALIZE(float)
 DEFINE_ADAMW(half)
 DEFINE_ADAMW(float)
 
-#define DEFINE_CLAMP(type, minMaxType) \
-    kernel void clamp_##type( \
+#define DEFINE_CLAMP(type) \
+    kernel void clamp_min_##type( \
         device const type* a [[buffer(0)]], \
-        device type* output [[buffer(1)]], \
-        device minMaxType& min [[buffer(2)]], \
-        device minMaxType& max [[buffer(3)]], \
-        device uint& hasMin [[buffer(4)]], \
-        device uint& hasMax [[buffer(5)]], \
-        constant uint &N [[buffer(6)]], \
+        device const type* minValues [[buffer(1)]], \
+        device type* output [[buffer(2)]], \
+        constant struct bcast_strides &aStrides [[buffer(3)]], \
+        constant struct bcast_strides &minStrides [[buffer(4)]], \
+        constant uint &N [[buffer(5)]], \
         uint id [[thread_position_in_grid]] \
     ) { \
         if (id < N) { \
-            float input = a[id]; \
-            if (hasMin && input < (type)min) { \
-                input = (type)min; \
+            type input = a[bcast_strides_index(aStrides, id)]; \
+            type min = minValues[bcast_strides_index(minStrides, id)]; \
+            if (input < min) { \
+                input = min; \
             } \
-            if (hasMax && input > (type)max) { \
-                input = (type)max; \
+            output[id] = input; \
+        } \
+    } \
+    kernel void clamp_max_##type( \
+        device const type* a [[buffer(0)]], \
+        device const type* maxValues [[buffer(1)]], \
+        device type* output [[buffer(2)]], \
+        constant struct bcast_strides &aStrides [[buffer(3)]], \
+        constant struct bcast_strides &maxStrides [[buffer(4)]], \
+        constant uint &N [[buffer(5)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            type input = a[bcast_strides_index(aStrides, id)]; \
+            type max = maxValues[bcast_strides_index(maxStrides, id)]; \
+            if (input > max) { \
+                input = max; \
+            } \
+            output[id] = input; \
+        } \
+    } \
+    kernel void clamp_min_max_##type( \
+        device const type* a [[buffer(0)]], \
+        device const type* minValues [[buffer(1)]], \
+        device const type* maxValues [[buffer(2)]], \
+        device type* output [[buffer(3)]], \
+        constant struct bcast_strides &aStrides [[buffer(4)]], \
+        constant struct bcast_strides &minStrides [[buffer(5)]], \
+        constant struct bcast_strides &maxStrides [[buffer(6)]], \
+        constant uint &N [[buffer(7)]], \
+        uint id [[thread_position_in_grid]] \
+    ) { \
+        if (id < N) { \
+            type input = a[bcast_strides_index(aStrides, id)]; \
+            type min = minValues[bcast_strides_index(minStrides, id)]; \
+            type max = maxValues[bcast_strides_index(maxStrides, id)]; \
+            if (input < min) { \
+                input = min; \
+            } \
+            if (input > max) { \
+                input = max; \
             } \
             output[id] = input; \
         } \
     }
 
-DEFINE_CLAMP(float, float)
-DEFINE_CLAMP(long, long)
-DEFINE_CLAMP(half, float)
+DEFINE_CLAMP(float)
+DEFINE_CLAMP(long)
+DEFINE_CLAMP(half)
 
 #define DEFINE_WHEN(type) \
     struct when_args_##type { \

@@ -190,12 +190,12 @@ open class BackendWrapper: Backend, @unchecked Sendable {
   }
 
   override open func clamp<T: NumericTensorElement>(
-    _ a: Tensor.Data, min: T?, max: T?, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData,  _: T.Type, min: TensorOrScalar<T>?, max: TensorOrScalar<T>?, dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
-    try await wrapped.clamp(a, min: min, max: max, count: count, dtype: dtype)
+    try await wrapped.clamp(a, T.self, min: min, max: max, dtype: dtype)
   }
 
   override open func reduce(

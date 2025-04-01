@@ -217,6 +217,12 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testClamp() async throws {
+    try await runInBackends {
+      try await BackendTests.testClamp()
+    }
+  }
+
   func testMinMax() async throws {
     try await runInBackends {
       try await BackendTests.testMinMax()

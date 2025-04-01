@@ -26,7 +26,7 @@ public enum BackendError: Error {
 /// the global ``Backend/defaultBackend`` will be used.
 open class Backend: @unchecked Sendable {
 
-  public enum TensorOrScalar<T: TensorElement> {
+  public enum TensorOrScalar<T: TensorElement>: Sendable {
     case tensor(BroadcastData)
     case scalar(T, [Int])
 
@@ -509,7 +509,8 @@ open class Backend: @unchecked Sendable {
   ///
   /// If `min` or `max` are nil, then this serves as a pure max or min operation.
   open func clamp<T: NumericTensorElement>(
-    _ a: Tensor.Data, min: T?, max: T?, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _: T.Type, min: TensorOrScalar<T>?, max: TensorOrScalar<T>?,
+    dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data

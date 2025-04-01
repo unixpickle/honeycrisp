@@ -1232,6 +1232,96 @@ open class BackendTests {
     }
   }
 
+  public static func testClamp() async throws {
+    // Broadcast across all there tensor arguments
+    for dtype: Tensor.DType in [.int64, .float16, .float32] {
+      let dim1 = Tensor(data: [1, 3, 5, 7, 9], shape: [5, 1, 1], dtype: dtype)
+      let dim2 = Tensor(data: [2, 3, 4, 5], shape: [1, 4, 1], dtype: dtype)
+      let dim3 = Tensor(data: [6, 7, 8, 9, 10, 11], shape: [1, 1, 6], dtype: dtype)
+      let dim1Param: Trainable.Param<Tensor> = Trainable.Param()
+      let dim2Param: Trainable.Param<Tensor> = Trainable.Param()
+      let dim3Param: Trainable.Param<Tensor> = Trainable.Param()
+      let dim1Var = dtype.supportsGrad ? dim1.onGrad { dim1Param.addGrad($0) } : dim1
+      let dim2Var = dtype.supportsGrad ? dim2.onGrad { dim2Param.addGrad($0) } : dim2
+      let dim3Var = dtype.supportsGrad ? dim3.onGrad { dim3Param.addGrad($0) } : dim3
+      let clamped = dim1Var.clamp(min: dim2Var, max: dim3Var)
+      XCTAssertEqual(clamped.shape, [5, 4, 6])
+      try await assertDataEqual(
+        clamped,
+        [
+          2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0,
+          5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
+          4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0,
+          5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0,
+          6.0, 7.0, 7.0, 7.0, 7.0, 7.0, 6.0, 7.0, 7.0, 7.0, 7.0, 7.0, 6.0, 7.0, 7.0, 7.0, 7.0, 7.0,
+          6.0, 7.0, 7.0, 7.0, 7.0, 7.0, 6.0, 7.0, 8.0, 9.0, 9.0, 9.0, 6.0, 7.0, 8.0, 9.0, 9.0, 9.0,
+          6.0, 7.0, 8.0, 9.0, 9.0, 9.0, 6.0, 7.0, 8.0, 9.0, 9.0, 9.0,
+        ])
+      if dtype.supportsGrad {
+        let outGrad = Tensor(randInt: clamped.shape, in: (-5)..<5).cast(dtype)
+        clamped.backward(outGrad)
+        try await assertClose(
+          dim1Param.grad!,
+          ((clamped == dim1) & (clamped != dim3)).when(isTrue: outGrad, isFalse: 0).sum(
+            axis: 2, keepdims: true
+          ).sum(
+            axis: 1, keepdims: true))
+        try await assertClose(
+          dim2Param.grad!,
+          ((clamped == dim2) & (clamped != dim1)).when(isTrue: outGrad, isFalse: 0).sum(
+            axis: 2, keepdims: true
+          )
+          .sum(axis: 0, keepdims: true))
+        try await assertClose(
+          dim3Param.grad!,
+          ((clamped == dim3)).when(isTrue: outGrad, isFalse: 0).sum(
+            axis: 1, keepdims: true
+          )
+          .sum(axis: 0, keepdims: true))
+      }
+    }
+
+    // Tensor and floating point argument
+    for dtype: Tensor.DType in [.int64, .float16, .float32] {
+      let dim1 = Tensor(data: [1, 2, 3, 4, 5], shape: [5, 1], dtype: dtype)
+      let dim2 = Tensor(data: [1, 2, 3], shape: [1, 3], dtype: dtype)
+      let dim1Param: Trainable.Param<Tensor> = Trainable.Param()
+      let dim2Param: Trainable.Param<Tensor> = Trainable.Param()
+      let dim1Var = dtype.supportsGrad ? dim1.onGrad { dim1Param.addGrad($0) } : dim1
+      let dim2Var = dtype.supportsGrad ? dim2.onGrad { dim2Param.addGrad($0) } : dim2
+      let clamped = dim1Var.clamp(min: dim2Var, max: 4)
+      try await assertClose(clamped, [1, 2, 3, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4])
+      if dtype.supportsGrad {
+        let outGrad = Tensor(randInt: clamped.shape, in: (-5)..<5).cast(dtype)
+        clamped.backward(outGrad)
+        try await assertClose(
+          dim1Param.grad!,
+          ((clamped == dim1) & (clamped != 4.0)).when(isTrue: outGrad, isFalse: 0).sum(
+            axis: 1, keepdims: true))
+        try await assertClose(
+          dim2Param.grad!,
+          ((clamped == dim2) & (clamped != dim1)).when(isTrue: outGrad, isFalse: 0).sum(
+            axis: 0, keepdims: true
+          ))
+      }
+    }
+
+    // Test behavior when min > max
+    let x = Tensor(data: [1.0, 2.0, 3.0])
+    let xParam = Trainable.Param<Tensor>()
+    try await assertDataEqual(x.clamp(min: 10, max: -3), [-3, -3, -3])
+    x.onGrad { xParam.addGrad($0) }.clamp(min: 10, max: -3).sum().backward()
+    try await assertDataEqual(xParam.grad!, [0, 0, 0])
+
+    let y = Tensor(constant: -3.0, shape: [3])
+    let yParam = Trainable.Param<Tensor>()
+    try await assertDataEqual(x.clamp(min: 10, max: y), [-3, -3, -3])
+    x.onGrad { xParam.addGrad($0) }.clamp(min: 10, max: y.onGrad { yParam.addGrad($0) }).sum()
+      .backward()
+    try await assertDataEqual(xParam.grad!, [0, 0, 0])
+    try await assertDataEqual(yParam.grad!, [1, 1, 1])
+  }
+
   public static func testMinMax() async throws {
     let input = Tensor(data: [1, 10, 2, 7, 8, 9, 6, 4, 5], shape: [3, 3], dtype: .float32)
     var gradA: Tensor?

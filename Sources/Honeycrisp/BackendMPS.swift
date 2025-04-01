@@ -436,7 +436,7 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
         names.append("\(op)_\(type)")
       }
     }
-    for op in ["add", "sub", "mul", "div", "mod", "lt", "gt", "le", "ge", "eq"] {
+    for op in ["add", "sub", "mul", "div", "mod", "lt", "gt", "le", "ge", "eq", "ne"] {
       for type in ["half", "float", "long"] {
         for args in ["vv", "sv", "vs"] {
           names.append("\(op)_\(args)_\(type)")
@@ -446,7 +446,9 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
     for t1 in ["half", "float", "long"] {
       names.append("add_mul_\(t1)")
       names.append("mul_add_\(t1)")
-      names.append("clamp_\(t1)")
+      names.append("clamp_min_\(t1)")
+      names.append("clamp_max_\(t1)")
+      names.append("clamp_min_max_\(t1)")
       for t2 in ["half", "float", "long"] {
         if t1 == t2 {
           continue
@@ -908,6 +910,8 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
       "ge"
     case .equal:
       "eq"
+    case .notEqual:
+      "ne"
     }
   }
 
@@ -1321,37 +1325,70 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
   }
 
   override open func clamp<T: NumericTensorElement>(
-    _ a: Tensor.Data, min: T?, max: T?, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _: T.Type, min: TensorOrScalar<T>?, max: TensorOrScalar<T>?,
+    dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     guard let typeName = MPSBackend.CastTypes[dtype] else {
-      return try await super.clamp(a, min: min, max: max, count: count, dtype: dtype)
+      return try await super.clamp(a, T.self, min: min, max: max, dtype: dtype)
     }
+    let count = a.strides.shape.product()
     #alwaysAssert(count <= UInt32.max, "cannot apply clamp() to \(count) values")
 
-    let functionName = "clamp_\(typeName)"
+    let clampName =
+      if min != nil && max != nil {
+        "min_max"
+      } else if min != nil {
+        "min"
+      } else {
+        "max"
+      }
 
-    let (aBuf, aCb) = try await gpuBuffer(a)
+    let functionName = "clamp_\(clampName)_\(typeName)"
+
+    let (aBuf, aCb) = try await gpuBuffer(a.data)
     let (output, outputCb) = try await allocateBuf(count * dtype.byteSize)
+
+    let (minBuf, minCb): (MTLBuffer?, Deallocator?) =
+      if let min = min { try await tensorOrScalarBuffer(min, dtype) } else { (nil, nil) }
+    let (maxBuf, maxCb): (MTLBuffer?, Deallocator?) =
+      if let max = max { try await tensorOrScalarBuffer(max, dtype) } else { (nil, nil) }
+
+    let aStrides = try MPSBackend.createStrides(a.strides)
+    let minStrides: Strides? =
+      if let min = min { try MPSBackend.createStrides(min.strides) } else { nil }
+    let maxStrides: Strides? =
+      if let max = max { try MPSBackend.createStrides(max.strides) } else { nil }
+    let deallocators: [Deallocator] =
+      [aCb] + (minCb == nil ? [] : [minCb!]) + (maxCb == nil ? [] : [maxCb!])
 
     return try await serialize { [self] in
       let completion = try completionBufferAndEncoder(
-        label: "clamp", deallocators: [aCb]
+        label: "clamp", deallocators: deallocators
       ) { buf, enc in
         let state = try getFunction(name: functionName)
-        if dtype == .int64 {
+        if let minBuf = minBuf, let minStrides = minStrides, let maxBuf = maxBuf,
+          let maxStrides = maxStrides
+        {
           try setArguments(
-            enc, .buffer(aBuf), .buffer(output), .int64(min?.toInt64() ?? 0),
-            .int64(max?.toInt64() ?? 0), .uint(UInt32(min != nil ? 1 : 0)),
-            .uint(UInt32(max != nil ? 1 : 1)),
+            enc, .buffer(aBuf), .buffer(minBuf), .buffer(maxBuf), .buffer(output),
+            .opaque(aStrides),
+            .opaque(minStrides),
+            .opaque(maxStrides),
             .uint(UInt32(count)))
-        } else {
+        } else if let minBuf = minBuf, let minStrides = minStrides {
           try setArguments(
-            enc, .buffer(aBuf), .buffer(output), .float(min?.toFloat() ?? 0),
-            .float(max?.toFloat() ?? 0), .uint(UInt32(min != nil ? 1 : 0)),
-            .uint(UInt32(max != nil ? 1 : 0)),
+            enc, .buffer(aBuf), .buffer(minBuf), .buffer(output),
+            .opaque(aStrides),
+            .opaque(minStrides),
+            .uint(UInt32(count)))
+        } else if let maxBuf = maxBuf, let maxStrides = maxStrides {
+          try setArguments(
+            enc, .buffer(aBuf), .buffer(maxBuf), .buffer(output),
+            .opaque(aStrides),
+            .opaque(maxStrides),
             .uint(UInt32(count)))
         }
         dispatch1D(enc, state: state, threadCount: count)

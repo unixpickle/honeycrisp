@@ -1142,26 +1142,6 @@ public final class Tensor: Sendable {
   }
 
   @recordCaller
-  private func _clamp<T: NumericTensorElement>(min: T? = nil, max: T? = nil) -> Tensor {
-    #alwaysAssert(dtype.isNumeric, "cannot use clamp() with dtype \(dtype)")
-    #alwaysAssert(min != nil || max != nil, "cannot use clamp() without bounds")
-    let backend = Backend.current
-    let newData = createDataTask { t in
-      try await backend.clamp(
-        try await t.data, min: min, max: max, count: t.shape.product(), dtype: t.dtype)
-    }
-    if !needsGrad || !Tensor.isGradEnabled {
-      return Tensor(dataTask: newData, shape: shape, dtype: dtype)
-    } else {
-      let handle = saveForBackward()
-      let rawResult = Tensor(dataTask: newData, shape: shape, dtype: dtype)
-      return rawResult.onGrad { grad in
-        handle.backward(backend) { (rawResult == self).when(isTrue: grad, isFalse: 0) }
-      }
-    }
-  }
-
-  @recordCaller
   private func _backward(_ grad: Tensor? = nil) {
     #alwaysAssert(needsGrad, "backward called on Tensor that does not need grad")
     let grad =

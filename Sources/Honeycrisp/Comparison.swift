@@ -3,6 +3,7 @@ import HCBacktrace
 /// A comparison operator which can be performed between ``Tensor``s.
 public enum ComparisonOp: Sendable {
   case equal
+  case notEqual
   case less
   case lessEqual
   case greater
@@ -12,6 +13,8 @@ public enum ComparisonOp: Sendable {
     switch self {
     case .equal:
       a == b
+    case .notEqual:
+      a != b
     case .less:
       a < b
     case .lessEqual:
@@ -70,6 +73,7 @@ extension Tensor {
   /*
   for op, name in [
     ("==", "equal"),
+    ("!=", "notEqual"),
     ("<", "less"),
     (">", "greater"),
     ("<=", "lessEqual"),
@@ -102,6 +106,18 @@ extension Tensor {
 
   public static func == (lhs: Tensor, rhs: Tensor) -> Tensor {
     compare(lhs: lhs, rhs: rhs, op: .equal)
+  }
+
+  public static func != <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {
+    compare(lhs: lhs, rhs: rhs, op: .notEqual)
+  }
+
+  public static func != <T: TensorElement>(lhs: T, rhs: Tensor) -> Tensor {
+    compare(lhs: lhs, rhs: rhs, op: .notEqual)
+  }
+
+  public static func != (lhs: Tensor, rhs: Tensor) -> Tensor {
+    compare(lhs: lhs, rhs: rhs, op: .notEqual)
   }
 
   public static func < <T: TensorElement>(lhs: Tensor, rhs: T) -> Tensor {

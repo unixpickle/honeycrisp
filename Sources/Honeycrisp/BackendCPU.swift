@@ -702,33 +702,71 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
   }
 
   override open func clamp<T: NumericTensorElement>(
-    _ a: Tensor.Data, min: T?, max: T?, count: Int, dtype: Tensor.DType
+    _ a: BroadcastData, _: T.Type, min: TensorOrScalar<T>?, max: TensorOrScalar<T>?,
+    dtype: Tensor.DType
   )
     async throws
     -> Tensor.Data
   {
     #alwaysAssert(min != nil || max != nil, "cannot use clamp() without bounds")
 
-    return try await withBuffers(count * dtype.byteSize, a) { buffer, aBuf in
-      func apply<T1: NumericTensorElement>(_ min: T1?, _ max: T1?) async throws {
+    let count = a.strides.shape.product()
+
+    let minData: Tensor.Data? =
+      if let min = min { try await tensorOrScalarData(min, dtype) } else { nil }
+    let maxData: Tensor.Data? =
+      if let max = max { try await tensorOrScalarData(max, dtype) } else { nil }
+
+    return try await withBuffers(
+      outputSizes: [count * dtype.byteSize],
+      inputs: Array(
+        [a.data] + (minData == nil ? [] : [minData!]) + (maxData == nil ? [] : [maxData!]))
+    ) { outputs, inputs in
+      var inputs = inputs
+      let buffer = outputs[0]
+      let aBuf = inputs.remove(at: 0)
+      let minBuf: SendableRawPointer? =
+        if minData != nil {
+          inputs.remove(at: 0)
+        } else {
+          nil
+        }
+      let maxBuf: SendableRawPointer? =
+        if maxData != nil {
+          inputs.remove(at: 0)
+        } else {
+          nil
+        }
+      func apply<T1: NumericTensorElement>(_: T1.Type) async throws {
         try await serialize {
-          try readBuffer(T1.self, aBuf, count: count, dtype: dtype) { arr in
+          try readBuffer(T1.self, aBuf, count: a.dataCount, dtype: dtype) { arr in
             try writeBuffer(T1.self, buffer, count: count, dtype: dtype) { out in
-              if let max = max, let min = min {
-                for (i, x) in arr.enumerated() {
-                  out[i] = Swift.max(min, Swift.min(max, x))
-                }
-              } else if let max = max {
-                for (i, x) in arr.enumerated() {
-                  out[i] = Swift.min(max, x)
-                }
-              } else if let min = min {
-                for (i, x) in arr.enumerated() {
-                  out[i] = Swift.max(min, x)
-                }
-              } else {
-                for (i, x) in arr.enumerated() {
-                  out[i] = x
+              try maybeReadBuffer(T1.self, minBuf, count: min?.strides.dataCount ?? 0, dtype: dtype)
+              { minArr in
+                try maybeReadBuffer(
+                  T1.self, maxBuf, count: max?.strides.dataCount ?? 0, dtype: dtype
+                ) { maxArr in
+                  if let max = max, let min = min, let maxArr = maxArr, let minArr = minArr {
+                    let minStrides = min.strides
+                    let maxStrides = max.strides
+                    let aStrides = a.strides
+                    for i in 0..<count {
+                      out[i] = Swift.min(
+                        maxArr[maxStrides(i)], Swift.max(minArr[minStrides(i)], arr[aStrides(i)]))
+                    }
+                  } else if let max = max, let maxArr = maxArr {
+                    let maxStrides = max.strides
+                    let aStrides = a.strides
+                    for i in 0..<count {
+                      out[i] = Swift.min(maxArr[maxStrides(i)], arr[aStrides(i)])
+                    }
+                  } else if let min = min, let minArr = minArr {
+                    let minStrides = min.strides
+                    let aStrides = a.strides
+                    for i in 0..<count {
+                      out[i] = Swift.max(minArr[minStrides(i)], arr[aStrides(i)])
+                    }
+                  }
                 }
               }
             }
@@ -736,11 +774,11 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
         }
       }
       if dtype == .int64 {
-        try await apply(min?.toInt64(), max?.toInt64())
+        try await apply(Int64.self)
       } else {
-        try await apply(min?.toFloat(), max?.toFloat())
+        try await apply(Float.self)
       }
-    }
+    }[0]
   }
 
   override open func reduce(
@@ -1333,7 +1371,8 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
       let rSize = batch * rRows * n
       let rBytes = rSize * dtype.byteSize
 
-      let qAndR = try await withBuffers([qBytes, rBytes], [a]) { outBufs, inBufs in
+      let qAndR = try await withBuffers(outputSizes: [qBytes, rBytes], inputs: [a]) {
+        outBufs, inBufs in
         let qBuf = outBufs[0]
         let rBuf = outBufs[1]
         let inBuf = inBufs[0]
@@ -1461,7 +1500,8 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
 
       let sBytes = batch * k * dtype.byteSize
 
-      let results = try await withBuffers([uBytes, sBytes, vtBytes], [a]) { outBufs, inBufs in
+      let results = try await withBuffers(outputSizes: [uBytes, sBytes, vtBytes], inputs: [a]) {
+        outBufs, inBufs in
         let uBuf = outBufs[0]
         let sBuf = outBufs[1]
         let vtBuf = outBufs[2]
@@ -1733,7 +1773,9 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
   {
     #alwaysAssert(inputs.count == innerCounts.count)
     let totalInner = innerCounts.sum()
-    return try await withBuffers([outerCount * totalInner * dtype.byteSize], inputs) {
+    return try await withBuffers(
+      outputSizes: [outerCount * totalInner * dtype.byteSize], inputs: inputs
+    ) {
       outBufs, inBufs in
       let buffer = outBufs[0]
       return try await serialize {
@@ -1927,7 +1969,7 @@ open class CPUBackend: Backend, DataAllocator, @unchecked Sendable {
   }
 
   func withBuffers(
-    _ outputSizes: [Int], _ ins: [Tensor.Data],
+    outputSizes: [Int], inputs ins: [Tensor.Data],
     _ fn: ([SendableMutableRawPointer], [SendableRawPointer]) async throws -> Void
   ) async throws -> [Tensor.Data] {
     func readFunc(_ ins: [Tensor.Data], _ fn: ([SendableRawPointer]) async throws -> [Tensor.Data])
