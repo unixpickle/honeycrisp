@@ -367,6 +367,7 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
   internal var allocBucketsLock = NSLock()
   internal var allocBuckets: [Int: [MTLBuffer]]? = nil
   internal var heap: MTLHeap? = nil
+
   internal var argumentHeap: MTLHeap? = nil
 
   public init(
@@ -555,12 +556,30 @@ open class MPSBackend: CPUBackend, @unchecked Sendable {
   }
 
   internal func allocateArgument(_ byteCount: Int) throws -> MTLBuffer {
-    if let heap = argumentHeap,
-      let result = heap.makeBuffer(length: max(1, byteCount), options: [.storageModeShared])
-    {
+    guard let heap = argumentHeap else {
+      throw BackendError.allocationFailedForArgument(byteCount)
+    }
+
+    if let result = heap.makeBuffer(length: max(1, byteCount), options: [.storageModeShared]) {
       return result
     }
-    throw BackendError.allocationFailed(byteCount)
+
+    let argDesc = MTLHeapDescriptor()
+    argDesc.size = heap.size * 2
+    argDesc.hazardTrackingMode = .tracked
+    argDesc.storageMode = .shared
+    guard let argHeap = device.makeHeap(descriptor: argDesc) else {
+      throw BackendError.allocationFailedForArgument(byteCount)
+    }
+    argumentHeap = argHeap
+
+    // The new heap should certainly have room for one more small,
+    // constant-sized argument.
+    if let result = argHeap.makeBuffer(length: max(1, byteCount), options: [.storageModeShared]) {
+      return result
+    } else {
+      throw BackendError.allocationFailedForArgument(byteCount)
+    }
   }
 
   @recordCaller

@@ -53,9 +53,13 @@ extension Tensor {
     var bcastTensors = [self]
     if let mt = minTensor {
       bcastTensors.append(mt)
+      #alwaysAssert(
+        dtype == mt.dtype, "mismatched dtype of self (\(dtype)) and min tensor (\(mt.dtype))")
     }
     if let mt = maxTensor {
       bcastTensors.append(mt)
+      #alwaysAssert(
+        dtype == mt.dtype, "mismatched dtype of self (\(dtype)) and max tensor (\(mt.dtype))")
     }
     let (bcastShape, stridesImmutable) = Tensor.lazyBroadcast(bcastTensors)
     var strides = stridesImmutable

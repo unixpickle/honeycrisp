@@ -9,6 +9,7 @@ public enum BackendError: Error {
   case failedToCreateMTLBuffer
   case failedToCreateCommandQueue
   case allocationFailed(Int)
+  case allocationFailedForArgument(Int)
   case kernelFailed(String)
   case failedToLoadKernels(String)
   case lapackError(String)
