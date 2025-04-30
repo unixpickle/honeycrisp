@@ -578,6 +578,15 @@ final class HoneycrispTests: XCTestCase {
     try await assertClose(expectedProbs, actualProbs, atol: 0.03, rtol: 0.03)
   }
 
+  func testRandPerm() async throws {
+    let n = 10000
+    let k = 4
+    let perms = Tensor(randPerm: [n, k, 3], axis: 1)[..., ..., 1]
+    let counts = Tensor(ones: [n, k]).scatter(axis: 0, count: k, indices: perms)
+    let probs = counts.cast(.float32) / n
+    try await assertClose(probs, Tensor(onesLike: probs) / k, atol: 0.05, rtol: 0.05)
+  }
+
   func testCheckpointSimple() async throws {
     let xData = Tensor(data: [1.0, 2.0, 3.0])
     var xGrad: Tensor?

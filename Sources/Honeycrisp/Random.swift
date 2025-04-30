@@ -171,6 +171,22 @@ extension Tensor {
     self.init(dataTask: dataTask, shape: shape, dtype: dtype)
   }
 
+  public convenience init(
+    randPerm shape: [Int],
+    axis: Int = -1,
+    generator: RandomGenerator? = nil,
+    function: StaticString = #function,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let dataTask = Backtrace.record(function: function, file: file, line: line) {
+      let values = Tensor(
+        randInt: shape, in: -0x8000_0000_0000_0000..<0x7fff_ffff_ffff_ffff, generator: generator)
+      return values.argsort(axis: axis, stable: true).dataTask
+    }
+    self.init(dataTask: dataTask, shape: shape, dtype: .int64)
+  }
+
   /// Sample values from the Normal distribution with the shape and dtype of a given `Tensor`.
   public convenience init(
     randnLike other: Tensor,
