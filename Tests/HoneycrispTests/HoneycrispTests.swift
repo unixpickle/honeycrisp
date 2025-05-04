@@ -854,4 +854,22 @@ final class HoneycrispTests: XCTestCase {
     try await assertDataEqual(param.grad!, Tensor(onesLike: x) * 100)
   }
 
+  func testEmptyRange() {
+    let x = Tensor(ones: [3, 7])
+    let y = x[2, 1..<1]
+    XCTAssertEqual(y.shape, [0])
+    let z = x[2..<2, 1..<1]
+    XCTAssertEqual(z.shape, [0, 0])
+    let w = x[2..<2]
+    XCTAssertEqual(w.shape, [0, 7])
+    let v = x[2..<2, 1]
+    XCTAssertEqual(v.shape, [0])
+  }
+
+  func testEmptyBroadcast() {
+    let x = Tensor(ones: [0, 3, 1])
+    let y = Tensor(ones: [0, 1, 3])
+    XCTAssertEqual((x + y).shape, [0, 3, 3])
+  }
+
 }

@@ -292,8 +292,12 @@ extension Array: TensorIndex where Element == any TensorIndex {
         } else {
           let innerCount = axesShape.product()
           // We must explicitly represent the gather dimension.
-          indices = innerCount * indices!.unsqueeze(axis: 1)
-          indices = (indices! + Tensor(data: 0..<innerCount)).flatten()
+          if innerCount != 0 && indices!.shape[0] != 0 {
+            indices = innerCount * indices!.unsqueeze(axis: 1)
+            indices = (indices! + Tensor(data: 0..<innerCount)).flatten()
+          } else {
+            indices = Tensor(zeros: [0], dtype: indices!.dtype)
+          }
           gatherShape += axesShape
           gatherInSize *= innerCount
         }
@@ -314,9 +318,13 @@ extension Array: TensorIndex where Element == any TensorIndex {
           if indices == nil {
             indices = newIndices
           } else {
-            let axisSize = result.reshape[result.gatherAxis]
-            indices = axisSize * indices!.unsqueeze(axis: 1)
-            indices = (indices! + newIndices).flatten()
+            if newIndices.shape[0] != 0 && indices!.shape[0] != 0 {
+              let axisSize = result.reshape[result.gatherAxis]
+              indices = axisSize * indices!.unsqueeze(axis: 1)
+              indices = (indices! + newIndices).flatten()
+            } else {
+              indices = Tensor(zeros: [0], dtype: indices!.dtype)
+            }
           }
           gatherShape += result.gatherReshape ?? [newIndices.shape[0]]
           gatherInSize *= result.reshape[result.gatherAxis]
