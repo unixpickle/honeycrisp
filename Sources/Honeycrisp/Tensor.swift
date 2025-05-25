@@ -582,37 +582,36 @@ public final class Tensor: Sendable {
   }
 
   @recordCaller
-  private func _floats() async throws -> [Float] {
-    var out = [Float](repeating: 0, count: shape.product())
+  private func _elements<T: TensorElement>(_ type: T.Type) async throws -> [T] {
+    var out = [T](repeating: T(Int64(0)), count: shape.product())
     try await copyToArray(&out)
     return out
+  }
+
+  @recordCaller
+  private func _floats() async throws -> [Float] {
+    try await elements(Float.self)
   }
 
   @recordCaller
   private func _ints() async throws -> [Int] {
-    var out = [Int](repeating: 0, count: shape.product())
-    try await copyToArray(&out)
-    return out
+    try await elements(Int.self)
   }
 
   @recordCaller
   private func _int64s() async throws -> [Int64] {
-    var out = [Int64](repeating: 0, count: shape.product())
-    try await copyToArray(&out)
-    return out
+    try await elements(Int64.self)
   }
 
   @recordCaller
   private func _bools() async throws -> [Bool] {
-    var out = [Bool](repeating: false, count: shape.product())
-    try await copyToArray(&out)
-    return out
+    try await elements(Bool.self)
   }
 
   @recordCaller
-  private func _item() async throws -> Float {
+  private func _item<T: TensorElement>(_ t: T.Type = Float.self) async throws -> T {
     #alwaysAssert(shape.product() == 1, "cannot call item() on Tensor of shape \(shape)")
-    let data = try await floats()
+    let data = try await elements(t)
     return data[0]
   }
 
