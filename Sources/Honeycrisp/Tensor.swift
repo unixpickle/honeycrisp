@@ -449,18 +449,54 @@ public final class Tensor: Sendable {
   ) where C: Collection<T>, C: Sendable {
     let shape = shape ?? [data.count]
     let dtype = dtype ?? T.dtype
+    #alwaysAssert(
+      dtype.canUseScalarType(T.self),
+      "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
     let dataTask = Backtrace.record(function: function, file: file, line: line) {
       if !dtype.supportsGrad {
         #alwaysAssert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
       }
       #alwaysAssert(
         data.count == shape.product(), "data count \(data.count) does not match shape \(shape)")
-      #alwaysAssert(
-        dtype.canUseScalarType(T.self),
-        "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
       let backend = Backend.current
       return Tensor.createDataTask {
         try await backend.collection(data, reverse: reverse, dtype: dtype)
+      }
+    }
+    self.init(dataTask: dataTask, shape: shape, dtype: dtype, backwardImpl: backwardImpl)
+  }
+
+  /// Create a 2-D `Tensor` with the elements of a collection.
+  ///
+  /// The `reverse` argument may be used to flip the order of the flattened collection.
+  convenience public init<T: TensorElement, C1, C2>(
+    data: C1,
+    dtype: DType? = nil,
+    reverse: Bool = false,
+    backwardImpl: (@Sendable (Tensor) -> Void)? = nil,
+    function: StaticString = #function,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) where C1: Collection<C2>, C2: Collection<T>, C1: Sendable, C2: Sendable {
+    let dtype = dtype ?? T.dtype
+    #alwaysAssert(
+      dtype.canUseScalarType(T.self),
+      "cannot create Tensor with dtype \(dtype) with scalar type \(T.self)")
+
+    let counts = data.map { $0.count }
+    #alwaysAssert(
+      counts.allSatisfy { x in x == counts[0] },
+      "counts of all sub-sequences must be equal"
+    )
+    let shape = [data.count, counts.first ?? 0]
+
+    let dataTask = Backtrace.record(function: function, file: file, line: line) {
+      if !dtype.supportsGrad {
+        #alwaysAssert(backwardImpl == nil, "cannot specify gradient for dtype \(dtype)")
+      }
+      let backend = Backend.current
+      return Tensor.createDataTask {
+        try await backend.collection(data.flatMap { x in x }, reverse: reverse, dtype: dtype)
       }
     }
     self.init(dataTask: dataTask, shape: shape, dtype: dtype, backwardImpl: backwardImpl)

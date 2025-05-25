@@ -319,6 +319,22 @@ final class HoneycrispTests: XCTestCase {
     }
   }
 
+  func testData2D() async throws {
+    let x = Tensor(data: [[1, 2, 3, 4], [5, 6, 7, 8]])
+    XCTAssertEqual(x.shape, [2, 4])
+    try await assertDataEqual(x, [1, 2, 3, 4, 5, 6, 7, 8])
+
+    var empty: [[Float]] = []
+    XCTAssertEqual(Tensor(data: empty).shape, [0, 0])
+    empty.append([])
+    empty.append([])
+    XCTAssertEqual(Tensor(data: empty).shape, [2, 0])
+
+    let y = Tensor(data: [0..<3, 1..<4])
+    XCTAssertEqual(y.shape, [2, 3])
+    try await assertDataEqual(y, [0, 1, 2, 1, 2, 3])
+  }
+
   func testReshape() async throws {
     let x = Tensor(ones: [3, 5, 8])
     XCTAssertEqual(x.reshape([5, 3, 8]).shape, [5, 3, 8])
