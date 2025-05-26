@@ -251,9 +251,15 @@ extension Tensor {
         sampleCount: sampleCount, replacement: replacement, generator: generator
       ).squeeze(axis: 0)
     }
+    if !replacement {
+      #alwaysAssert(
+        shape[1] >= sampleCount,
+        "cannot sample \(sampleCount) elements from only \(shape[1]) options without replacement"
+      )
+    }
     let ng = noGrad()
     let probs = (ng / ng.sum(axis: 1, keepdims: true)).cast(.float32)
-    if replacement {
+    if replacement || sampleCount == 1 {
       let cumProbs = probs.cast(.float32).cumulativeSum(axis: -1).unsqueeze(axis: 1)
       let noise = Tensor(rand: [shape[0], sampleCount, 1])
       return (cumProbs >= noise).argmax(axis: -1)
